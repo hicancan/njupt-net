@@ -4,73 +4,89 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/hicancan/njupt-net-cli/internal/core"
 	"github.com/hicancan/njupt-net-cli/internal/httpx"
+	"github.com/hicancan/njupt-net-cli/internal/kernel"
 	"github.com/hicancan/njupt-net-cli/internal/selfservice"
 )
 
-const defaultSelfBaseURL = "http://10.10.244.240:8080"
+// MigrateResult captures the source clear and target bind evidence chain.
+type MigrateResult struct {
+	SourceClear *kernel.OperationResult[kernel.WriteBackResult] `json:"sourceClear,omitempty"`
+	TargetBind  *kernel.OperationResult[kernel.WriteBackResult] `json:"targetBind,omitempty"`
+}
 
-// MigrateBroadband performs a guarded multi-step migration workflow:
-// 1) login source account
-// 2) clear source binding with empty FLDEXTRA values
-// 3) create a fresh isolated session client
-// 4) login target account
-// 5) bind target account with desired fields
-//
-// The function fails fast and returns immediately when any step errors.
+var newSessionClient = func(selfBaseURL string) (kernel.SessionClient, error) {
+	return httpx.NewSessionClient(httpx.Options{BaseURL: selfBaseURL})
+}
+
+// MigrateBroadband performs a guarded multi-step migration workflow.
 func MigrateBroadband(
 	ctx context.Context,
-	session core.SessionClient,
+	selfBaseURL string,
 	fromUser,
 	fromPwd,
 	toUser,
 	toPwd string,
 	targetFields map[string]string,
-) error {
-	if session == nil {
-		return fmt.Errorf("workflow migrate: source session is nil: %w", core.ErrAuth)
-	}
+) (*kernel.OperationResult[MigrateResult], error) {
 	if fromUser == "" || fromPwd == "" || toUser == "" || toPwd == "" {
-		return fmt.Errorf("workflow migrate: from/to credentials are required")
+		return nil, &kernel.OpError{Op: "workflow.migrate", Message: "from/to credentials are required", Err: kernel.ErrBusinessFailed}
 	}
 	if len(targetFields) == 0 {
-		return fmt.Errorf("workflow migrate: target fields are required: %w", core.ErrBusinessFailed)
+		return nil, &kernel.OpError{Op: "workflow.migrate", Message: "target fields are required", Err: kernel.ErrBusinessFailed}
 	}
 
-	// Step 1: login source account in the provided session.
-	srcClient := selfservice.NewClient(session)
-	if err := srcClient.Login(ctx, fromUser, fromPwd); err != nil {
-		return fmt.Errorf("workflow migrate: source login failed: %w", err)
+	srcSession, err := newSessionClient(selfBaseURL)
+	if err != nil {
+		return nil, &kernel.OpError{Op: "workflow.migrate", Message: "create source session failed", Err: err}
+	}
+	srcClient := selfservice.NewClient(srcSession)
+	if _, err := srcClient.Login(ctx, fromUser, fromPwd); err != nil {
+		return nil, &kernel.OpError{Op: "workflow.migrate", Message: "source login failed", Err: err}
 	}
 
-	// Step 2: clear source-side bindings with explicit empty values.
 	clearFields := map[string]string{
 		"FLDEXTRA1": "",
 		"FLDEXTRA2": "",
 		"FLDEXTRA3": "",
 		"FLDEXTRA4": "",
 	}
-	if err := srcClient.BindOperator(ctx, clearFields); err != nil {
-		return fmt.Errorf("workflow migrate: source unbind failed: %w", err)
-	}
-
-	// Step 3: isolate JSESSIONID by creating a fresh transport session.
-	freshSession, err := httpx.NewDefaultSessionClient(defaultSelfBaseURL)
+	sourceClear, err := srcClient.BindOperator(ctx, clearFields, true, false)
 	if err != nil {
-		return fmt.Errorf("workflow migrate: create fresh session failed: %w", err)
+		return &kernel.OperationResult[MigrateResult]{
+			Level:   kernel.EvidenceConfirmed,
+			Success: false,
+			Message: "source clear failed",
+			Data:    &MigrateResult{SourceClear: sourceClear},
+		}, err
 	}
 
-	// Step 4: login target account in the fresh session.
-	dstClient := selfservice.NewClient(freshSession)
-	if err := dstClient.Login(ctx, toUser, toPwd); err != nil {
-		return fmt.Errorf("workflow migrate: target login failed: %w", err)
+	dstSession, err := newSessionClient(selfBaseURL)
+	if err != nil {
+		return nil, &kernel.OpError{Op: "workflow.migrate", Message: "create target session failed", Err: err}
+	}
+	dstClient := selfservice.NewClient(dstSession)
+	if _, err := dstClient.Login(ctx, toUser, toPwd); err != nil {
+		return nil, &kernel.OpError{Op: "workflow.migrate", Message: "target login failed", Err: err}
 	}
 
-	// Step 5: bind target fields to destination account.
-	if err := dstClient.BindOperator(ctx, targetFields); err != nil {
-		return fmt.Errorf("workflow migrate: target bind failed: %w", err)
+	targetBind, err := dstClient.BindOperator(ctx, targetFields, true, false)
+	if err != nil {
+		return &kernel.OperationResult[MigrateResult]{
+			Level:   kernel.EvidenceConfirmed,
+			Success: false,
+			Message: "target bind failed",
+			Data:    &MigrateResult{SourceClear: sourceClear, TargetBind: targetBind},
+		}, err
 	}
 
-	return nil
+	return &kernel.OperationResult[MigrateResult]{
+		Level:   kernel.EvidenceConfirmed,
+		Success: true,
+		Message: fmt.Sprintf("migration completed from %s to %s", fromUser, toUser),
+		Data: &MigrateResult{
+			SourceClear: sourceClear,
+			TargetBind:  targetBind,
+		},
+	}, nil
 }

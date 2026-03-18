@@ -11,51 +11,64 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hicancan/njupt-net-cli/internal/core"
+	"github.com/hicancan/njupt-net-cli/internal/kernel"
 )
 
-// DefaultSessionClient is the baseline implementation for core.SessionClient.
-//
-// Design notes aligned with FINAL-SSOT:
-// 1) Cookie jar is always enabled to keep session cookies like JSESSIONID automatically.
-// 2) TLS verification is disabled by default to tolerate Portal 802 certificate issues.
-// 3) Redirects are blocked by default so callers can inspect original 302 status and Location.
-type DefaultSessionClient struct {
+// Options configure the transport session in a deterministic way.
+type Options struct {
+	BaseURL     string
+	Timeout     time.Duration
+	InsecureTLS bool
+	UserAgent   string
+}
+
+// SessionClient is the default kernel.SessionClient implementation.
+type SessionClient struct {
 	baseURL string
 	http    *http.Client
 }
 
-// NewDefaultSessionClient creates a client with SSOT-safe defaults.
-func NewDefaultSessionClient(baseURL string) (*DefaultSessionClient, error) {
+// NewSessionClient creates a cookie-aware, redirect-inspecting HTTP session.
+func NewSessionClient(opts Options) (*SessionClient, error) {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, fmt.Errorf("create cookie jar: %w", err)
 	}
 
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
 	}
 
-	httpClient := &http.Client{
-		Jar:       jar,
-		Transport: transport,
-		Timeout:   30 * time.Second,
+	client := &http.Client{
+		Jar: jar,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: opts.InsecureTLS},
+		},
+		Timeout: timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			_ = req
 			_ = via
-			// Keep the original redirect response for protocol-level business judgment.
 			return http.ErrUseLastResponse
 		},
 	}
 
-	return &DefaultSessionClient{
-		baseURL: strings.TrimSpace(baseURL),
-		http:    httpClient,
+	return &SessionClient{
+		baseURL: strings.TrimSpace(opts.BaseURL),
+		http:    client,
 	}, nil
 }
 
-// Get sends a GET request and returns a normalized core.SessionResponse.
-func (c *DefaultSessionClient) Get(ctx context.Context, path string, opts core.RequestOptions) (*core.SessionResponse, error) {
+// NewDefaultSessionClient is kept as a compatibility wrapper for older code paths.
+func NewDefaultSessionClient(baseURL string) (*SessionClient, error) {
+	return NewSessionClient(Options{
+		BaseURL:     baseURL,
+		Timeout:     30 * time.Second,
+		InsecureTLS: true,
+	})
+}
+
+func (c *SessionClient) Get(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
 	reqURL, err := c.buildURL(path, opts.Query)
 	if err != nil {
 		return nil, fmt.Errorf("build get url: %w", err)
@@ -76,8 +89,7 @@ func (c *DefaultSessionClient) Get(ctx context.Context, path string, opts core.R
 	return adaptResponse(resp)
 }
 
-// PostForm sends an x-www-form-urlencoded POST request and returns a normalized response.
-func (c *DefaultSessionClient) PostForm(ctx context.Context, path string, opts core.RequestOptions) (*core.SessionResponse, error) {
+func (c *SessionClient) PostForm(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
 	reqURL, err := c.buildURL(path, opts.Query)
 	if err != nil {
 		return nil, fmt.Errorf("build post url: %w", err)
@@ -104,42 +116,42 @@ func (c *DefaultSessionClient) PostForm(ctx context.Context, path string, opts c
 	return adaptResponse(resp)
 }
 
-func (c *DefaultSessionClient) buildURL(path string, query map[string]string) (string, error) {
+func (c *SessionClient) buildURL(path string, query map[string]string) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", fmt.Errorf("path is empty")
 	}
 
-	var u *url.URL
-	var err error
-
-	if parsed, parseErr := url.Parse(path); parseErr == nil && parsed.Scheme != "" && parsed.Host != "" {
-		u = parsed
+	var target *url.URL
+	if parsed, err := url.Parse(path); err == nil && parsed.Scheme != "" && parsed.Host != "" {
+		target = parsed
 	} else {
 		if strings.TrimSpace(c.baseURL) == "" {
-			return "", fmt.Errorf("relative path requires non-empty baseURL")
+			return "", fmt.Errorf("relative path requires a baseURL")
 		}
-		base, baseErr := url.Parse(c.baseURL)
-		if baseErr != nil {
-			return "", fmt.Errorf("parse baseURL: %w", baseErr)
+		base, err := url.Parse(c.baseURL)
+		if err != nil {
+			return "", fmt.Errorf("parse baseURL: %w", err)
 		}
-		rel, relErr := url.Parse(path)
-		if relErr != nil {
-			return "", fmt.Errorf("parse path: %w", relErr)
+		rel, err := url.Parse(path)
+		if err != nil {
+			return "", fmt.Errorf("parse relative path: %w", err)
 		}
-		u = base.ResolveReference(rel)
+		target = base.ResolveReference(rel)
 	}
 
-	q := u.Query()
+	q := target.Query()
 	for k, v := range query {
 		q.Set(k, v)
 	}
-	u.RawQuery = q.Encode()
-
-	return u.String(), err
+	target.RawQuery = q.Encode()
+	return target.String(), nil
 }
 
 func applyHeaders(req *http.Request, headers map[string]string) {
+	if headers == nil {
+		return
+	}
 	for k, v := range headers {
 		if strings.TrimSpace(k) == "" {
 			continue
@@ -148,39 +160,35 @@ func applyHeaders(req *http.Request, headers map[string]string) {
 	}
 }
 
-// adaptResponse converts stdlib response objects into core.SessionResponse.
-// FinalURL selection rule:
-// - Prefer resolved Location header when present (critical for intercepted redirects).
-// - Fallback to response request URL when Location does not exist.
-func adaptResponse(resp *http.Response) (*core.SessionResponse, error) {
+func adaptResponse(resp *http.Response) (*kernel.SessionResponse, error) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read response body: %w", err)
 	}
 
 	finalURL := ""
-	if loc := resp.Header.Get("Location"); strings.TrimSpace(loc) != "" {
-		if parsed, parseErr := url.Parse(loc); parseErr == nil {
+	if location := strings.TrimSpace(resp.Header.Get("Location")); location != "" {
+		if parsed, err := url.Parse(location); err == nil {
 			if resp.Request != nil && resp.Request.URL != nil {
 				finalURL = resp.Request.URL.ResolveReference(parsed).String()
 			} else {
 				finalURL = parsed.String()
 			}
 		} else {
-			finalURL = loc
+			finalURL = location
 		}
 	} else if resp.Request != nil && resp.Request.URL != nil {
 		finalURL = resp.Request.URL.String()
 	}
 
 	headers := make(map[string][]string, len(resp.Header))
-	for k, v := range resp.Header {
-		copied := make([]string, len(v))
-		copy(copied, v)
+	for k, values := range resp.Header {
+		copied := make([]string, len(values))
+		copy(copied, values)
 		headers[k] = copied
 	}
 
-	return &core.SessionResponse{
+	return &kernel.SessionResponse{
 		StatusCode: resp.StatusCode,
 		Headers:    headers,
 		Body:       body,

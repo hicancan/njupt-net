@@ -1,66 +1,47 @@
-# njupt-net-cli
+# njupt-net
 
-`njupt-net-cli` is the Go CLI kernel project for NJUPT network access workflows.
+`njupt-net` is a Go terminal system for NJUPT Self-Service and Portal workflows.
 
-## Repository purpose
+The repository name is still `njupt-net-cli`, but the shipped product surface is the `njupt-net` command and its typed protocol kernel.
 
-This repository exists to implement the **CLI kernel** for the NJUPT network stack based on the finalized reverse-engineering specification.
+## Source Of Truth
 
-It is **not** the place for:
-- historical reverse-engineering notes
-- exploratory scripts
-- browser automation experiments
-- GUI code
-- daemon/service orchestration
-- platform-specific Wi-Fi automation
+Protocol truth and behavior constraints come from:
 
-## Source of truth
+- [doc/FINAL-SSOT.md](doc/FINAL-SSOT.md)
+- [doc/IMPLEMENTATION-TASK.md](doc/IMPLEMENTATION-TASK.md)
 
-The only protocol and behavior source of truth is:
+Project-level architecture and capability tracking live in:
 
-- `docs/Final-SSOT.md`
+- [doc/ARCHITECTURE-REVIEW.md](doc/ARCHITECTURE-REVIEW.md)
+- [doc/CAPABILITY-MATRIX.md](doc/CAPABILITY-MATRIX.md)
 
-Implementation task constraints are defined in:
+## Architecture
 
-- `docs/IMPLEMENTATION-TASK.md`
+The repository is intentionally single-repo and Go-first.
 
-If any older note, script, experiment, or memory conflicts with `docs/Final-SSOT.md`, the SSOT wins.
+- `cmd/njupt-net`: CLI entrypoint and command wiring
+- `internal/kernel`: evidence model, typed results, diagnostics, transport contract
+- `internal/selfservice`: Self-Service protocol implementation
+- `internal/portal`: Portal 802 primary flow and 801 guarded fallback
+- `internal/workflow`: higher-level repair and migration workflows
+- `internal/app`: config, output, and explicit app context
+- `scripts/`: supported build and smoke-test helpers
+- `legacy/experimental/`: historical reverse-engineering and guard tooling
 
-## Design principle
+Historical Python guard scripts remain under `legacy/experimental/` only as behavior references. They are not part of the formal release surface.
 
-This project should follow a **kernel + outer layer** architecture.
+## Command Tree
 
-### Kernel
-The kernel contains:
-- protocol/domain primitives
-- state models
-- endpoint semantics
-- write-operation verification rules
-- error/capability classification
-- SelfService and Portal protocol logic
+The command surface is organized around stable domains:
 
-### Outer layer
-The outer layer contains:
-- CLI command wiring
-- config loading
-- output formatting
-- workflow orchestration
-- safe confirmations
-- optional future integrations
-
-The kernel must remain stable even if the CLI surface evolves.
-
-## Implementation status model
-
-The code should preserve the certainty model from the SSOT:
-
-- `confirmed` — behavior is established and can be implemented directly
-- `guarded` — implementable, but must use conservative handling
-- `blocked` — not fully proven; do not pretend success semantics are known
-
-## Development goal
-
-The objective is to build a complete, maintainable, production-oriented Go CLI for the confirmed and safely implementable guarded behavior in the SSOT.
+- `njupt-net self`
+- `njupt-net dashboard`
+- `njupt-net service`
+- `njupt-net setting`
+- `njupt-net bill`
+- `njupt-net portal`
+- `njupt-net raw`
 
 ## Build
 
@@ -70,41 +51,51 @@ Quick compile check:
 go build ./...
 ```
 
-Scripted cross-build:
+Cross-build release targets:
 
 ```bash
-# Linux/macOS
-./scripts/build.sh
-
-# Full release targets (windows/amd64, linux/amd64, linux/arm64, darwin/arm64)
 ./scripts/build.sh all
 ```
 
 ```powershell
-# Windows PowerShell
-.\scripts\build.ps1
-
-# Full release targets
 .\scripts\build.ps1 -Mode all
 ```
 
-## Local smoke test
+## Quality Gates
 
-Run one-click local CLI checks (reads `credentials.json`):
+Local verification:
+
+```bash
+go test ./...
+go test -cover ./...
+go vet ./...
+```
+
+The GitHub Actions release workflow also enforces:
+
+- `gofmt`
+- `go test -cover ./...`
+- `go vet ./...`
+- `staticcheck ./...`
+- cross-platform release builds
+
+## Local Smoke Test
+
+The smoke script reads `credentials.json` and exercises the new command tree:
 
 ```powershell
 .\scripts\test-local.ps1
 ```
 
-Include side-effecting write operations:
+Include side-effecting writes:
 
 ```powershell
 .\scripts\test-local.ps1 -IncludeWriteOps
 ```
 
-## Notes for implementers
+## Design Rules
 
-- Do not infer protocol truth from historical scripts unless already incorporated into the SSOT.
-- Do not collapse guarded or blocked behaviors into confirmed success paths.
-- Do not let CLI/UI concerns leak into kernel protocol logic.
-- Prefer explicit diagnostics over hidden assumptions.
+- Protocol truth belongs in the kernel and protocol packages, not in CLI formatting code.
+- `confirmed`, `guarded`, and `blocked` semantics must stay explicit.
+- Write operations use readback verification and optional restore.
+- Dead experimental code should not stay on the main path.

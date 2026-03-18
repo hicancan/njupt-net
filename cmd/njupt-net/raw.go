@@ -2,82 +2,106 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
-	"github.com/hicancan/njupt-net-cli/internal/core"
 	"github.com/spf13/cobra"
 )
 
 func newRawCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "raw",
-		Short: "Raw probe commands",
+		Short: "Low-level Self GET/POST probes",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
 	}
-
 	cmd.AddCommand(newRawGetCmd())
 	cmd.AddCommand(newRawPostCmd())
-
 	return cmd
 }
 
 func newRawGetCmd() *cobra.Command {
+	var flags authFlags
+	var login bool
 	cmd := &cobra.Command{
 		Use:   "get <path>",
 		Short: "Send a raw GET request and print status/body",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if globalSession == nil {
-				return fmt.Errorf("raw get: session not initialized")
-			}
-
-			resp, err := globalSession.Get(cmd.Context(), args[0], core.RequestOptions{})
+			client, err := newSelfClient(cmd)
 			if err != nil {
-				return fmt.Errorf("raw get failed: %w", err)
+				return err
 			}
-
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Status: %d\n", resp.StatusCode)
-			_, _ = cmd.OutOrStdout().Write(resp.Body)
-			_, _ = fmt.Fprintln(cmd.OutOrStdout())
-			return nil
+			if login {
+				account, err := resolveAccount(cmd, flags)
+				if err != nil {
+					return err
+				}
+				if _, err := client.Login(cmd.Context(), account.Username, account.Password); err != nil {
+					return err
+				}
+			}
+			result, opErr := client.RawGet(cmd.Context(), args[0])
+			if err := render(cmd, result, func(w io.Writer) error {
+				if result.Raw == nil {
+					return printKV(w, result.Message)
+				}
+				_, err := fmt.Fprintf(w, "Status: %d\nFinalURL: %s\n%s\n", result.Raw.Status, result.Raw.FinalURL, result.Raw.Body)
+				return err
+			}); err != nil {
+				return err
+			}
+			return opErr
 		},
 	}
-
+	bindAuthFlags(cmd, &flags)
+	cmd.Flags().BoolVar(&login, "login", false, "Perform authoritative Self login before sending the raw request")
 	return cmd
 }
 
 func newRawPostCmd() *cobra.Command {
+	var flags authFlags
 	var formPairs []string
-
+	var login bool
 	cmd := &cobra.Command{
 		Use:   "post <path>",
 		Short: "Send a raw form POST request and print status/body",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if globalSession == nil {
-				return fmt.Errorf("raw post: session not initialized")
+			client, err := newSelfClient(cmd)
+			if err != nil {
+				return err
 			}
-
+			if login {
+				account, err := resolveAccount(cmd, flags)
+				if err != nil {
+					return err
+				}
+				if _, err := client.Login(cmd.Context(), account.Username, account.Password); err != nil {
+					return err
+				}
+			}
 			form, err := parseFormPairs(formPairs)
 			if err != nil {
 				return err
 			}
-
-			resp, err := globalSession.PostForm(cmd.Context(), args[0], core.RequestOptions{Form: form})
-			if err != nil {
-				return fmt.Errorf("raw post failed: %w", err)
+			result, opErr := client.RawPost(cmd.Context(), args[0], form)
+			if err := render(cmd, result, func(w io.Writer) error {
+				if result.Raw == nil {
+					return printKV(w, result.Message)
+				}
+				_, err := fmt.Fprintf(w, "Status: %d\nFinalURL: %s\n%s\n", result.Raw.Status, result.Raw.FinalURL, result.Raw.Body)
+				return err
+			}); err != nil {
+				return err
 			}
-
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Status: %d\n", resp.StatusCode)
-			_, _ = cmd.OutOrStdout().Write(resp.Body)
-			_, _ = fmt.Fprintln(cmd.OutOrStdout())
-			return nil
+			return opErr
 		},
 	}
-
+	bindAuthFlags(cmd, &flags)
 	cmd.Flags().StringArrayVarP(&formPairs, "form", "f", nil, "Form field pair in key=value format; can be repeated")
+	cmd.Flags().BoolVar(&login, "login", false, "Perform authoritative Self login before sending the raw request")
 	return cmd
 }
 

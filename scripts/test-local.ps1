@@ -2,7 +2,9 @@ param(
     [string]$ExePath = "./dist/njupt-net-windows-amd64.exe",
     [string]$CredentialsPath = "./credentials.json",
     [string]$IP = "",
-    [switch]$IncludeWriteOps
+    [switch]$IncludeWriteOps,
+    [switch]$ReadOnly,
+    [switch]$SkipPortal
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,23 +47,41 @@ function Require-File {
 }
 
 function Detect-WifiIPv4 {
-    $candidate = (
-        Get-NetIPAddress -AddressFamily IPv4 |
-        Where-Object {
-            $_.IPAddress -notlike "169.*" -and
-            $_.IPAddress -ne "127.0.0.1" -and
-            $_.InterfaceAlias -match "Wi-Fi|WLAN|无线|wlan"
+    $defaultRoutes = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix "0.0.0.0/0" |
+        Sort-Object RouteMetric, InterfaceMetric
+
+    foreach ($route in $defaultRoutes) {
+        $ips = Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $route.InterfaceIndex -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.AddressState -eq "Preferred" -and
+                $_.IPAddress -notlike "127.*" -and
+                $_.IPAddress -notlike "169.254.*" -and
+                $_.IPAddress -ne "192.168.137.1"
+            }
+        foreach ($ip in $ips) {
+            if ($ip.IPAddress -like "10.*") {
+                return $ip.IPAddress
+            }
+        }
+    }
+
+    return ($defaultRoutes |
+        ForEach-Object {
+            Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $_.InterfaceIndex -ErrorAction SilentlyContinue
         } |
-        Select-Object -First 1 -ExpandProperty IPAddress
-    )
-    return $candidate
+        Where-Object {
+            $_.AddressState -eq "Preferred" -and
+            $_.IPAddress -notlike "127.*" -and
+            $_.IPAddress -notlike "169.254.*"
+        } |
+        Select-Object -First 1 -ExpandProperty IPAddress)
 }
 
 function Exec-Cli {
-    param([string[]]$Args)
-    & $script:Exe @Args
+    param([string[]]$CliArgs)
+    & $script:Exe @CliArgs
     if ($LASTEXITCODE -ne 0) {
-        throw "Command failed with exit code $LASTEXITCODE: $script:Exe $($Args -join ' ')"
+        throw "Command failed with exit code ${LASTEXITCODE}: ${script:Exe} $($CliArgs -join ' ')"
     }
 }
 
@@ -72,67 +92,120 @@ Require-File $CredentialsPath
 $script:Exe = (Resolve-Path $ExePath).Path
 $cred = Get-Content $CredentialsPath -Raw | ConvertFrom-Json
 
-$WUser = $cred.accounts.W.username
-$WPwd = $cred.accounts.W.password
-$BUser = $cred.accounts.B.username
-$BPwd = $cred.accounts.B.password
-$CmccUser = $cred.cmcc.account
-$CmccPwd = $cred.cmcc.password
-
 if ([string]::IsNullOrWhiteSpace($IP)) {
     $IP = Detect-WifiIPv4
 }
-if ([string]::IsNullOrWhiteSpace($IP)) {
-    throw "Cannot auto-detect Wi-Fi IPv4. Please pass -IP explicitly."
+if ([string]::IsNullOrWhiteSpace($IP) -and -not $SkipPortal) {
+    throw "Cannot auto-detect Wi-Fi IPv4. Please pass -IP explicitly or use -SkipPortal."
 }
 
 Write-Host "Executable: $script:Exe"
 Write-Host "Using IP: $IP"
 Write-Host "IncludeWriteOps: $IncludeWriteOps"
+Write-Host "ReadOnly: $ReadOnly"
+Write-Host "SkipPortal: $SkipPortal"
 
-Write-Section "Smoke"
-Invoke-Step "root help" { Exec-Cli @("--help") }
-Invoke-Step "service help" { Exec-Cli @("service", "--help") }
-Invoke-Step "portal help" { Exec-Cli @("portal", "--help") }
-Invoke-Step "raw help" { Exec-Cli @("raw", "--help") }
+Write-Section "Help"
+Invoke-Step "root help" { Exec-Cli -CliArgs @("--help") }
+Invoke-Step "self help" { Exec-Cli -CliArgs @("self", "--help") }
+Invoke-Step "dashboard help" { Exec-Cli -CliArgs @("dashboard", "--help") }
+Invoke-Step "service help" { Exec-Cli -CliArgs @("service", "--help") }
+Invoke-Step "setting help" { Exec-Cli -CliArgs @("setting", "--help") }
+Invoke-Step "bill help" { Exec-Cli -CliArgs @("bill", "--help") }
+Invoke-Step "portal help" { Exec-Cli -CliArgs @("portal", "--help") }
+Invoke-Step "raw help" { Exec-Cli -CliArgs @("raw", "--help") }
 
-Write-Section "Core Read/Auth"
-Invoke-Step "service login (W)" {
-    Exec-Cli @("service", "login", "-u", $WUser, "-p", $WPwd)
+Write-Section "Self"
+Invoke-Step "self login (W)" {
+    Exec-Cli -CliArgs @("--config", $CredentialsPath, "self", "login", "--profile", "W")
 }
-Invoke-Step "portal login (W, mobile)" {
-    Exec-Cli @("portal", "login", "-u", $WUser, "-p", $WPwd, "-i", $IP, "--isp", "mobile")
+Invoke-Step "self status (W)" {
+    Exec-Cli -CliArgs @("--config", $CredentialsPath, "self", "status", "--profile", "W")
+}
+Invoke-Step "self doctor (W)" {
+    Exec-Cli -CliArgs @("--config", $CredentialsPath, "self", "doctor", "--profile", "W")
 }
 
-Write-Section "Raw Probe"
+Write-Section "Dashboard"
+Invoke-Step "dashboard online-list (W)" {
+    Exec-Cli -CliArgs @("--config", $CredentialsPath, "dashboard", "online-list", "--profile", "W")
+}
+Invoke-Step "dashboard login-history (W)" {
+    Exec-Cli -CliArgs @("--config", $CredentialsPath, "dashboard", "login-history", "--profile", "W")
+}
+Invoke-Step "dashboard mauth get (W)" {
+    Exec-Cli -CliArgs @("--config", $CredentialsPath, "dashboard", "mauth", "get", "--profile", "W")
+}
+
+Write-Section "Service"
+Invoke-Step "service binding get (W)" {
+    Exec-Cli -CliArgs @("--config", $CredentialsPath, "service", "binding", "get", "--profile", "W")
+}
+Invoke-Step "service consume get (W)" {
+    Exec-Cli -CliArgs @("--config", $CredentialsPath, "service", "consume", "get", "--profile", "W")
+}
+Invoke-Step "service mac list (W)" {
+    Exec-Cli -CliArgs @("--config", $CredentialsPath, "service", "mac", "list", "--profile", "W")
+}
+
+Write-Section "Bill"
+Invoke-Step "bill online-log (W)" {
+    Exec-Cli -CliArgs @("--config", $CredentialsPath, "bill", "online-log", "--profile", "W")
+}
+
+Write-Section "Setting"
+Invoke-Step "setting person get (W)" {
+    Exec-Cli -CliArgs @("--config", $CredentialsPath, "setting", "person", "get", "--profile", "W")
+}
+
+Write-Section "Raw"
 Invoke-Step "raw get login page" {
-    Exec-Cli @("raw", "get", "/Self/login/?302=LI")
+    Exec-Cli -CliArgs @("--config", $CredentialsPath, "raw", "get", "/Self/login/?302=LI")
 }
-Invoke-Step "raw get public help page" {
-    Exec-Cli @("raw", "get", "/Self/unlogin/help")
-}
-Invoke-Step "raw portal logout probe" {
-    Exec-Cli @("raw", "get", "https://10.10.244.11:802/eportal/portal/logout?callback=dr1003&login_method=1&wlan_user_ip=$IP")
+Invoke-Step "raw get dashboard with login" {
+    Exec-Cli -CliArgs @("--config", $CredentialsPath, "raw", "get", "/Self/dashboard", "--profile", "W", "--login")
 }
 
-if ($IncludeWriteOps) {
-    Write-Section "Write Ops (Side Effects)"
+if (-not $ReadOnly -and -not $SkipPortal) {
+    Write-Section "Portal"
+    Invoke-Step "portal login (W, mobile)" {
+        Exec-Cli -CliArgs @("--config", $CredentialsPath, "portal", "login", "--profile", "W", "--ip", $IP, "--isp", "mobile")
+    }
+}
+elseif (-not $SkipPortal) {
+    Write-Host "[SKIP] portal login skipped by ReadOnly" -ForegroundColor DarkYellow
+}
+else {
+    Write-Host "[SKIP] portal login skipped by SkipPortal" -ForegroundColor DarkYellow
+}
 
-    Invoke-Step "service bind (cmcc to current account)" {
-        Exec-Cli @("service", "bind", "--fld3", $CmccUser, "--fld4", $CmccPwd)
+if ($IncludeWriteOps -and -not $ReadOnly) {
+    Write-Section "Write Ops"
+    Invoke-Step "service binding set (W mobile fields)" {
+        Exec-Cli -CliArgs @(
+            "--config", $CredentialsPath,
+            "--yes",
+            "service", "binding", "set",
+            "--profile", "W",
+            "--mobile-account", $cred.cmcc.account,
+            "--mobile-password", $cred.cmcc.password
+        )
     }
 
     Invoke-Step "service migrate (W -> B)" {
-        Exec-Cli @(
+        Exec-Cli -CliArgs @(
+            "--config", $CredentialsPath,
+            "--yes",
             "service", "migrate",
-            "--from-user", $WUser,
-            "--from-password", $WPwd,
-            "--to-user", $BUser,
-            "--to-password", $BPwd,
-            "--fld3", $CmccUser,
-            "--fld4", $CmccPwd
+            "--from-profile", "W",
+            "--to-profile", "B",
+            "--mobile-account", $cred.cmcc.account,
+            "--mobile-password", $cred.cmcc.password
         )
     }
+}
+elseif ($IncludeWriteOps -and $ReadOnly) {
+    Write-Host "[SKIP] write operations disabled because ReadOnly is enabled" -ForegroundColor DarkYellow
 }
 
 Write-Section "Summary"

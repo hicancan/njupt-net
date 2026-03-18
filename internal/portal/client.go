@@ -5,41 +5,70 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
-	"github.com/hicancan/njupt-net-cli/internal/core"
+	"github.com/hicancan/njupt-net-cli/internal/kernel"
 )
 
 const (
-	portal802LoginURL  = "https://10.10.244.11:802/eportal/portal/login"
-	portal802LogoutURL = "https://10.10.244.11:802/eportal/portal/logout"
-	jsonpCallback      = "dr1003"
+	default802BaseURL = "https://10.10.244.11:802/eportal/portal"
+	default801BaseURL = "http://p.njupt.edu.cn:801/eportal/"
+	jsonpCallback     = "dr1003"
 )
 
-// PortalResponse captures Portal 802 JSONP payload fields.
-// Result and RetCode stay dynamic because upstream can return number or string.
-type PortalResponse struct {
-	Result  any    `json:"result"`
-	Msg     string `json:"msg"`
-	RetCode any    `json:"ret_code"`
-}
-
-// Client is the Portal 802 protocol client.
+// Client implements Portal 802 as primary and 801 as guarded fallback.
 type Client struct {
-	session core.SessionClient
+	session            kernel.SessionClient
+	baseURL802         string
+	fallbackBaseURL802 string
+	baseURL801         string
 }
 
-func NewClient(session core.SessionClient) *Client {
-	return &Client{session: session}
+func NewClient(session kernel.SessionClient, baseURL802, fallbackBaseURL802 string) *Client {
+	if strings.TrimSpace(baseURL802) == "" {
+		baseURL802 = default802BaseURL
+	}
+	if strings.TrimSpace(fallbackBaseURL802) == "" {
+		fallbackBaseURL802 = "https://p.njupt.edu.cn:802/eportal/portal"
+	}
+	return &Client{
+		session:            session,
+		baseURL802:         strings.TrimRight(baseURL802, "/"),
+		fallbackBaseURL802: strings.TrimRight(fallbackBaseURL802, "/"),
+		baseURL801:         strings.TrimRight(default801BaseURL, "/"),
+	}
 }
 
-// Logout sends a best-effort portal logout call for gateway-side cleanup.
-// It only requires transport success and intentionally ignores the JSONP business body.
-func (c *Client) Logout(ctx context.Context, ip string) error {
-	if c.session == nil {
-		return fmt.Errorf("portal logout: session client is nil: %w", core.ErrPortal)
+// Login802 performs one 802 login attempt, retrying on transport failure via the fallback host.
+func (c *Client) Login802(ctx context.Context, account, password, ip, isp string) (*kernel.OperationResult[kernel.Portal802Response], error) {
+	if c == nil || c.session == nil {
+		return nil, &kernel.OpError{Op: "portal.login802", Message: "session client is nil", Err: kernel.ErrPortal}
+	}
+	endpoints := []string{c.baseURL802}
+	if c.fallbackBaseURL802 != "" && c.fallbackBaseURL802 != c.baseURL802 {
+		endpoints = append(endpoints, c.fallbackBaseURL802)
 	}
 
-	_, err := c.session.Get(ctx, portal802LogoutURL, core.RequestOptions{
+	var lastErr error
+	for _, endpoint := range endpoints {
+		result, err := c.login802Once(ctx, endpoint, account, password, ip, isp)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		if result != nil && result.Raw != nil {
+			return result, err
+		}
+	}
+	return nil, lastErr
+}
+
+// Logout802 sends the 802 logout call and treats transport success as success.
+func (c *Client) Logout802(ctx context.Context, ip string) (*kernel.OperationResult[kernel.Portal802Response], error) {
+	if c == nil || c.session == nil {
+		return nil, &kernel.OpError{Op: "portal.logout802", Message: "session client is nil", Err: kernel.ErrPortal}
+	}
+	resp, err := c.session.Get(ctx, c.baseURL802+"/logout", kernel.RequestOptions{
 		Query: map[string]string{
 			"callback":     jsonpCallback,
 			"login_method": "1",
@@ -47,59 +76,165 @@ func (c *Client) Logout(ctx context.Context, ip string) error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("portal logout request failed: %w", err)
+		return nil, &kernel.OpError{Op: "portal.logout802", Message: "request failed", Err: err}
 	}
-
-	return nil
+	data := &kernel.Portal802Response{
+		Endpoint:   c.baseURL802 + "/logout",
+		RawPayload: string(resp.Body),
+	}
+	return &kernel.OperationResult[kernel.Portal802Response]{
+		Level:   kernel.EvidenceConfirmed,
+		Success: true,
+		Message: "portal 802 logout request completed",
+		Data:    data,
+		Raw:     rawCapture(resp),
+	}, nil
 }
 
-// Login performs Portal 802 login with one retry after passive cleanup.
-// On first business failure, it calls Logout once to clean possible stale gateway state,
-// then retries exactly once to avoid infinite loops.
-func (c *Client) Login(ctx context.Context, account, password, ip, isp string) error {
-	return c.login(ctx, account, password, ip, isp, false)
+// Login801 performs a guarded raw fallback attempt.
+func (c *Client) Login801(ctx context.Context, account, password, ip, ipv6 string) (*kernel.OperationResult[map[string]any], error) {
+	if c == nil || c.session == nil {
+		return nil, &kernel.OpError{Op: "portal.login801", Message: "session client is nil", Err: kernel.ErrPortal}
+	}
+	query := map[string]string{
+		"c":     "ACSetting",
+		"a":     "Login",
+		"DDDDD": account,
+		"upass": password,
+		"mip":   ip,
+		"v6ip":  ipv6,
+		"timet": fmt.Sprintf("%d", time.Now().Unix()),
+	}
+	resp, err := c.session.Get(ctx, c.baseURL801, kernel.RequestOptions{Query: query})
+	if err != nil {
+		return nil, &kernel.OpError{Op: "portal.login801", Message: "request failed", Err: err}
+	}
+	data := map[string]any{"endpoint": c.baseURL801, "bodyLength": len(resp.Body)}
+	return &kernel.OperationResult[map[string]any]{
+		Level:   kernel.EvidenceGuarded,
+		Success: false,
+		Message: "portal 801 fallback completed as raw guarded probe",
+		Data:    &data,
+		Raw:     rawCapture(resp),
+	}, &kernel.OpError{Op: "portal.login801", Message: "801 cannot determine success semantics from body", Err: kernel.ErrPortalFallbackRequired}
 }
 
-func (c *Client) login(ctx context.Context, account, password, ip, isp string, isRetry bool) error {
-	if c.session == nil {
-		return fmt.Errorf("portal login: session client is nil: %w", core.ErrPortal)
+// Logout801 performs a guarded raw fallback logout.
+func (c *Client) Logout801(ctx context.Context, ip string) (*kernel.OperationResult[map[string]any], error) {
+	if c == nil || c.session == nil {
+		return nil, &kernel.OpError{Op: "portal.logout801", Message: "session client is nil", Err: kernel.ErrPortal}
 	}
+	resp, err := c.session.Get(ctx, c.baseURL801, kernel.RequestOptions{
+		Query: map[string]string{
+			"c":   "ACSetting",
+			"a":   "Logout",
+			"mip": ip,
+		},
+	})
+	if err != nil {
+		return nil, &kernel.OpError{Op: "portal.logout801", Message: "request failed", Err: err}
+	}
+	data := map[string]any{"endpoint": c.baseURL801, "bodyLength": len(resp.Body)}
+	return &kernel.OperationResult[map[string]any]{
+		Level:   kernel.EvidenceGuarded,
+		Success: false,
+		Message: "portal 801 logout completed as raw guarded probe",
+		Data:    &data,
+		Raw:     rawCapture(resp),
+	}, &kernel.OpError{Op: "portal.logout801", Message: "801 cannot determine success semantics from body", Err: kernel.ErrPortalFallbackRequired}
+}
 
-	userAccount := ",0," + strings.TrimSpace(account) + ispSuffix(isp)
-
-	resp, err := c.session.Get(ctx, portal802LoginURL, core.RequestOptions{
+func (c *Client) login802Once(ctx context.Context, endpoint, account, password, ip, isp string) (*kernel.OperationResult[kernel.Portal802Response], error) {
+	resp, err := c.session.Get(ctx, endpoint+"/login", kernel.RequestOptions{
 		Query: map[string]string{
 			"callback":      jsonpCallback,
 			"login_method":  "1",
-			"user_account":  userAccount,
+			"user_account":  ",0," + strings.TrimSpace(account) + ispSuffix(isp),
 			"user_password": password,
 			"wlan_user_ip":  ip,
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("portal login request failed: %w", err)
+		return nil, &kernel.OpError{Op: "portal.login802", Message: fmt.Sprintf("transport failed for %s", endpoint), Err: err}
 	}
 
-	payload, err := parseJSONPPayload(string(resp.Body), jsonpCallback)
-	if err != nil {
-		return fmt.Errorf("portal login parse response failed: %w", err)
+	payload, parseErr := parseJSONPPayload(string(resp.Body))
+	if parseErr != nil {
+		return &kernel.OperationResult[kernel.Portal802Response]{
+			Level:   kernel.EvidenceGuarded,
+			Success: false,
+			Message: "invalid portal 802 JSONP payload",
+			Raw:     rawCapture(resp),
+		}, &kernel.OpError{Op: "portal.login802", Message: "invalid jsonp payload", Err: parseErr}
 	}
 
-	if isSuccessResult(payload.Result) {
-		return nil
+	result := &kernel.Portal802Response{
+		Result:     toString(payload["result"]),
+		RetCode:    toString(payload["ret_code"]),
+		Msg:        toString(payload["msg"]),
+		Endpoint:   endpoint + "/login",
+		RawPayload: string(resp.Body),
+	}
+	opResult := &kernel.OperationResult[kernel.Portal802Response]{
+		Data: result,
+		Raw:  rawCapture(resp),
 	}
 
-	if !isRetry {
-		_ = c.Logout(ctx, ip)
-		return c.login(ctx, account, password, ip, isp, true)
+	if result.Result == "1" {
+		opResult.Level = kernel.EvidenceConfirmed
+		opResult.Success = true
+		opResult.Message = "portal 802 login succeeded"
+		return opResult, nil
 	}
 
-	return fmt.Errorf(
-		"portal login failed ret_code=%v msg=%q: %w",
-		payload.RetCode,
-		strings.TrimSpace(payload.Msg),
-		core.ErrPortal,
-	)
+	level, sentinel := classifyRetCode(result.RetCode)
+	opResult.Level = level
+	opResult.Success = false
+	opResult.Message = fmt.Sprintf("portal 802 login failed ret_code=%s msg=%s", result.RetCode, result.Msg)
+	return opResult, &kernel.OpError{
+		Op:      "portal.login802",
+		Message: opResult.Message,
+		Err:     sentinel,
+		Diagnostics: map[string]any{
+			"retCode":  result.RetCode,
+			"msg":      result.Msg,
+			"result":   result.Result,
+			"endpoint": result.Endpoint,
+		},
+	}
+}
+
+func classifyRetCode(retCode string) (kernel.EvidenceLevel, error) {
+	switch strings.TrimSpace(retCode) {
+	case "1":
+		return kernel.EvidenceGuarded, kernel.ErrPortalRetCode1
+	case "3":
+		return kernel.EvidenceBlocked, kernel.ErrPortalRetCode3
+	case "8":
+		return kernel.EvidenceBlocked, kernel.ErrPortalRetCode8
+	case "":
+		return kernel.EvidenceGuarded, kernel.ErrPortal
+	default:
+		return kernel.EvidenceGuarded, kernel.ErrPortalUnknownCode
+	}
+}
+
+func parseJSONPPayload(raw string) (map[string]any, error) {
+	body := strings.TrimSpace(raw)
+	prefix := jsonpCallback + "("
+	if !strings.HasPrefix(body, prefix) {
+		return nil, fmt.Errorf("invalid jsonp prefix")
+	}
+	body = strings.TrimPrefix(body, prefix)
+	body = strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(body, ");"), ")"))
+	if body == "" {
+		return nil, fmt.Errorf("empty jsonp payload")
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
 }
 
 func ispSuffix(isp string) string {
@@ -115,53 +250,23 @@ func ispSuffix(isp string) string {
 	}
 }
 
-func parseJSONPPayload(raw string, callback string) (*PortalResponse, error) {
-	body := strings.TrimSpace(raw)
-	prefix := strings.TrimSpace(callback) + "("
-
-	if !strings.HasPrefix(body, prefix) {
-		return nil, fmt.Errorf("invalid jsonp prefix")
+func rawCapture(resp *kernel.SessionResponse) *kernel.RawCapture {
+	if resp == nil {
+		return nil
 	}
-
-	body = strings.TrimPrefix(body, prefix)
-	body = strings.TrimSpace(body)
-	body = strings.TrimSuffix(body, ");")
-	body = strings.TrimSuffix(body, ")")
-	body = strings.TrimSpace(body)
-
-	if body == "" {
-		return nil, fmt.Errorf("empty jsonp payload")
+	return &kernel.RawCapture{
+		Status:   resp.StatusCode,
+		Headers:  resp.Headers,
+		Body:     string(resp.Body),
+		FinalURL: resp.FinalURL,
 	}
-
-	var out PortalResponse
-	if err := json.Unmarshal([]byte(body), &out); err != nil {
-		return nil, fmt.Errorf("unmarshal jsonp payload: %w", err)
-	}
-
-	return &out, nil
 }
 
-func isSuccessResult(v any) bool {
+func toString(v any) string {
 	switch val := v.(type) {
 	case string:
-		return strings.TrimSpace(val) == "1"
-	case float64:
-		return val == 1
-	case float32:
-		return val == 1
-	case int:
-		return val == 1
-	case int64:
-		return val == 1
-	case int32:
-		return val == 1
-	case uint:
-		return val == 1
-	case uint64:
-		return val == 1
-	case uint32:
-		return val == 1
+		return strings.TrimSpace(val)
 	default:
-		return false
+		return strings.TrimSpace(fmt.Sprint(val))
 	}
 }

@@ -2,14 +2,14 @@
 
 ## Goal
 
-Implement a complete Go project for the `njupt-net-cli` **CLI kernel** based only on `docs/Final-SSOT.md`.
+Implement a complete Go project for the `njupt-net-cli` **CLI kernel** based only on `doc/FINAL-SSOT.md`.
 
 This repository is for the **CLI kernel only**.  
 Do not implement GUI, daemon/background service, browser extension, or OS-specific Wi-Fi automation unless `Final-SSOT.md` explicitly requires a minimal adapter abstraction.
 
 ## Source of truth
 
-`docs/Final-SSOT.md` is the **only protocol and behavior source of truth**.
+`doc/FINAL-SSOT.md` is the **only protocol and behavior source of truth**.
 
 Rules:
 
@@ -27,7 +27,7 @@ Implement the full Go CLI kernel with these characteristics:
 Use a clean Go layout oriented around **kernel + outer layer**:
 
 - `cmd/`
-- `internal/core/` or equivalent kernel domain package(s)
+- `internal/kernel/` or equivalent kernel domain package(s)
 - `internal/selfservice/`
 - `internal/portal/`
 - `internal/workflow/`
@@ -166,7 +166,7 @@ Produce a complete buildable Go project that:
 
 When implementation choices are ambiguous, prefer:
 
-1. fidelity to `docs/Final-SSOT.md`
+1. fidelity to `doc/FINAL-SSOT.md`
 2. conservative runtime behavior
 3. explicit diagnostics
 4. strict kernel/outer-layer separation

@@ -3,84 +3,47 @@ package selfservice
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
 
-	"github.com/hicancan/njupt-net-cli/internal/core"
+	"github.com/hicancan/njupt-net-cli/internal/kernel"
 )
 
-var (
-	// ErrCheckcodeTokenMissing marks the preflight token extraction failure.
-	ErrCheckcodeTokenMissing = errors.New("checkcode token missing")
-)
-
-// Login executes the strict Self login chain defined by FINAL-SSOT.
-//
-// Sequence:
-// 1) Preflight: GET login page and extract checkcode token from HTML.
-// 2) Bypass: GET randomCode endpoint to trigger server-side captcha state machine.
-// 3) Verify: POST login form with honeypot fields and judge success by redirect target.
-func (c *Client) Login(ctx context.Context, account, password string) error {
-	if c == nil || c.session == nil {
-		return fmt.Errorf("selfservice login: session client is nil: %w", core.ErrAuth)
+// Login executes the SSOT-authenticated login chain and verifies protected readability.
+func (c *Client) Login(ctx context.Context, account, password string) (*kernel.OperationResult[kernel.SelfLoginResult], error) {
+	if err := c.ensureSession("self.login"); err != nil {
+		return nil, err
 	}
 
-	checkcode, err := c.preflightCheckcode(ctx)
+	result := &kernel.SelfLoginResult{}
+
+	doc, loginResp, err := c.readDocument(ctx, loginPath, kernel.RequestOptions{}, "self.login.preflight")
 	if err != nil {
-		return err
+		return nil, err
+	}
+	checkcode := extractInputValue(doc, "checkcode")
+	result.CheckcodeFetched = checkcode != ""
+	if checkcode == "" {
+		return &kernel.OperationResult[kernel.SelfLoginResult]{
+			Level:   kernel.EvidenceConfirmed,
+			Success: false,
+			Message: "missing checkcode token",
+			Data:    result,
+			Raw:     rawCapture(loginResp),
+		}, &kernel.OpError{Op: "self.login.preflight", Message: "missing checkcode token", Err: kernel.ErrNeedFreshLoginPage}
 	}
 
-	if err := c.bypassRandomCode(ctx); err != nil {
-		// Network/transport errors are returned as-is with context.
-		return err
+	if _, err := c.session.Get(ctx, randomCodePath, kernel.RequestOptions{
+		Query: map[string]string{"t": fmt.Sprintf("%d", time.Now().UnixMilli())},
+	}); err != nil {
+		return nil, &kernel.OpError{Op: "self.login.randomCode", Message: "randomCode request failed", Err: err}
 	}
+	result.RandomCodeCalled = true
 
-	return c.verifyLogin(ctx, account, password, checkcode)
-}
-
-func (c *Client) preflightCheckcode(ctx context.Context) (string, error) {
-	resp, err := c.session.Get(ctx, "/Self/login/?302=LI", core.RequestOptions{})
-	if err != nil {
-		return "", fmt.Errorf("selfservice login preflight request failed: %w", err)
-	}
-
-	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(resp.Body))
-	if err != nil {
-		return "", fmt.Errorf("selfservice login preflight parse failed: %w", err)
-	}
-
-	checkcode, ok := doc.Find("input[name='checkcode']").First().Attr("value")
-	checkcode = strings.TrimSpace(checkcode)
-	if !ok || checkcode == "" {
-		return "", &core.AuthError{
-			Op:  "selfservice.login.preflight",
-			Msg: "failed to extract checkcode token from login page",
-			Err: fmt.Errorf("%w: %w", core.ErrAuth, ErrCheckcodeTokenMissing),
-		}
-	}
-
-	return checkcode, nil
-}
-
-func (c *Client) bypassRandomCode(ctx context.Context) error {
-	_, err := c.session.Get(ctx, "/Self/login/randomCode", core.RequestOptions{
-		Query: map[string]string{
-			"t": strconv.FormatInt(time.Now().UnixMilli(), 10),
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("selfservice login randomCode request failed: %w", err)
-	}
-	return nil
-}
-
-func (c *Client) verifyLogin(ctx context.Context, account, password, checkcode string) error {
-	resp, err := c.session.PostForm(ctx, "/Self/login/verify", core.RequestOptions{
+	verifyResp, err := c.session.PostForm(ctx, verifyPath, kernel.RequestOptions{
 		Form: map[string]string{
 			"account":   account,
 			"password":  password,
@@ -91,27 +54,99 @@ func (c *Client) verifyLogin(ctx context.Context, account, password, checkcode s
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("selfservice login verify request failed: %w", err)
+		return nil, &kernel.OpError{Op: "self.login.verify", Message: "verify request failed", Err: err}
 	}
 
-	if strings.Contains(resp.FinalURL, "/Self/dashboard") {
-		return nil
+	result.VerifyStatus = verifyResp.StatusCode
+	result.VerifyLocation = verifyResp.FinalURL
+
+	status, err := c.Status(ctx)
+	if err == nil && status != nil && status.Data != nil {
+		result.DashboardReadable = status.Data.DashboardReadable
+		result.SessionAlive = status.Data.LoggedIn
 	}
 
-	if strings.Contains(resp.FinalURL, "/Self/login/") {
-		msg := extractLoginErrorMessage(resp.Body)
-		return &core.AuthError{
-			Op:  "selfservice.login.verify",
-			Msg: msg,
-			Err: core.ErrAuth,
-		}
+	opResult := &kernel.OperationResult[kernel.SelfLoginResult]{
+		Level:   kernel.EvidenceConfirmed,
+		Success: result.DashboardReadable && result.SessionAlive,
+		Message: "self login succeeded",
+		Data:    result,
+		Raw:     rawCapture(verifyResp),
+	}
+	if opResult.Success {
+		return opResult, nil
 	}
 
-	return &core.AuthError{
-		Op:  "selfservice.login.verify",
-		Msg: fmt.Sprintf("unexpected login redirect target: %s", strings.TrimSpace(resp.FinalURL)),
-		Err: core.ErrAuth,
+	message := "login failed"
+	if strings.Contains(verifyResp.FinalURL, "/Self/login") || looksLikeLoginPage(verifyResp.Body) {
+		message = extractLoginErrorMessage(verifyResp.Body)
 	}
+	opResult.Message = message
+	return opResult, &kernel.OpError{Op: "self.login", Message: message, Err: kernel.ErrAuth}
+}
+
+// Logout invalidates the current session and verifies protected pages are no longer readable.
+func (c *Client) Logout(ctx context.Context) (*kernel.OperationResult[kernel.SelfStatus], error) {
+	if err := c.ensureSession("self.logout"); err != nil {
+		return nil, err
+	}
+	resp, err := c.session.Get(ctx, logoutPath, kernel.RequestOptions{})
+	if err != nil {
+		return nil, &kernel.OpError{Op: "self.logout", Message: "logout request failed", Err: err}
+	}
+
+	status, statusErr := c.Status(ctx)
+	if statusErr == nil && status != nil && status.Data != nil && !status.Data.LoggedIn {
+		status.Message = "self logout succeeded"
+		status.Raw = rawCapture(resp)
+		return status, nil
+	}
+
+	result := &kernel.OperationResult[kernel.SelfStatus]{
+		Level:   kernel.EvidenceConfirmed,
+		Success: false,
+		Message: "logout could not be verified",
+		Raw:     rawCapture(resp),
+	}
+	if status != nil {
+		result.Data = status.Data
+	}
+	return result, &kernel.OpError{Op: "self.logout", Message: result.Message, Err: kernel.ErrBusinessFailed}
+}
+
+// Status checks protected readability without mutating server state.
+func (c *Client) Status(ctx context.Context) (*kernel.OperationResult[kernel.SelfStatus], error) {
+	if err := c.ensureSession("self.status"); err != nil {
+		return nil, err
+	}
+
+	dashboardResp, err := c.session.Get(ctx, dashboardPath, kernel.RequestOptions{})
+	if err != nil {
+		return nil, &kernel.OpError{Op: "self.status.dashboard", Message: "dashboard request failed", Err: err}
+	}
+	serviceResp, err := c.session.Get(ctx, servicePath, kernel.RequestOptions{})
+	if err != nil {
+		return nil, &kernel.OpError{Op: "self.status.service", Message: "service request failed", Err: err}
+	}
+
+	status := &kernel.SelfStatus{
+		DashboardReadable: !looksLikeLoginPage(dashboardResp.Body),
+		ServiceReadable:   !looksLikeLoginPage(serviceResp.Body),
+	}
+	status.LoggedIn = status.DashboardReadable || status.ServiceReadable
+	if status.LoggedIn {
+		status.Reason = "protected pages readable"
+	} else {
+		status.Reason = "protected pages redirected to login"
+	}
+
+	return &kernel.OperationResult[kernel.SelfStatus]{
+		Level:   kernel.EvidenceConfirmed,
+		Success: true,
+		Message: status.Reason,
+		Data:    status,
+		Raw:     rawCapture(dashboardResp),
+	}, nil
 }
 
 func extractLoginErrorMessage(body []byte) string {
@@ -120,57 +155,29 @@ func extractLoginErrorMessage(body []byte) string {
 		return "login failed"
 	}
 
-	candidates := []string{
-		".alert-danger",
-		".alert",
-		"div.error",
-		"span.error",
-		"#error",
-		".swal2-content",
-		".swal-content",
+	if text := extractText(doc, ".alert-danger", ".alert", "div.error", "span.error", "#error", ".swal2-content", ".swal-content"); text != "" {
+		return text
 	}
 
-	for _, selector := range candidates {
-		text := normalizeText(doc.Find(selector).First().Text())
-		if text != "" {
-			return text
-		}
-	}
-
-	// Fallback: scan common message-bearing nodes and return the first meaningful line.
 	fallback := ""
-	doc.Find("div,span,p,li").EachWithBreak(func(i int, s *goquery.Selection) bool {
-		_ = i
+	doc.Find("div,span,p,li").EachWithBreak(func(_ int, s *goquery.Selection) bool {
 		text := normalizeText(s.Text())
-		if text == "" {
-			return true
-		}
 		if looksLikeErrorMessage(text) {
 			fallback = text
 			return false
 		}
 		return true
 	})
-
 	if fallback != "" {
 		return fallback
 	}
-
 	return "login failed"
 }
 
-func normalizeText(s string) string {
-	return strings.TrimSpace(strings.Join(strings.Fields(s), " "))
-}
-
 func looksLikeErrorMessage(s string) bool {
-	t := strings.ToLower(strings.TrimSpace(s))
-	if t == "" {
-		return false
-	}
-	keywords := []string{"失败", "错误", "invalid", "error", "fail", "not valid", "登录"}
-	for _, kw := range keywords {
-		if strings.Contains(t, kw) {
+	lowered := strings.ToLower(strings.TrimSpace(s))
+	for _, keyword := range []string{"失败", "错误", "invalid", "error", "fail", "not valid", "登录"} {
+		if strings.Contains(lowered, keyword) {
 			return true
 		}
 	}
