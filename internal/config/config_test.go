@@ -46,6 +46,12 @@ func TestLoad_UsesEnvAndDefaults(t *testing.T) {
 	if len(cfg.Portal.FallbackBaseURLs) == 0 {
 		t.Fatal("expected default portal fallback")
 	}
+	if cfg.Guard.StateDir != filepath.Join("dist", "guard") {
+		t.Fatalf("expected default guard state dir, got %q", cfg.Guard.StateDir)
+	}
+	if cfg.Guard.Schedule.DayProfile != "B" || cfg.Guard.Schedule.NightProfile != "W" {
+		t.Fatalf("unexpected default guard profiles: %#v", cfg.Guard.Schedule)
+	}
 }
 
 func TestResolveAccount(t *testing.T) {
@@ -100,5 +106,24 @@ func TestLoad_AllowsAccountlessConfig(t *testing.T) {
 	_, err = cfg.ResolveAccount("", "", "")
 	if err == nil || !strings.Contains(err.Error(), "no configured accounts") {
 		t.Fatalf("expected account resolution failure, got %v", err)
+	}
+}
+
+func TestResolveBroadband(t *testing.T) {
+	cfg := &Config{
+		CMCC: BroadbandConfig{Account: "broadband-user", Password: "broadband-pass"},
+	}
+
+	broadband, err := cfg.ResolveBroadband()
+	if err != nil {
+		t.Fatalf("resolve broadband: %v", err)
+	}
+	if broadband.Account != "broadband-user" || broadband.Password != "broadband-pass" {
+		t.Fatalf("unexpected broadband: %#v", broadband)
+	}
+
+	cfg.CMCC = BroadbandConfig{}
+	if _, err := cfg.ResolveBroadband(); err == nil || !strings.Contains(err.Error(), "cmcc") {
+		t.Fatalf("expected cmcc validation error, got %v", err)
 	}
 }

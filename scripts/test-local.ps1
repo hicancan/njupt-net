@@ -3,6 +3,7 @@ param(
     [string]$CredentialsPath = "./credentials.json",
     [string]$IP = "",
     [switch]$IncludeWriteOps,
+    [switch]$IncludeGuardOps,
     [switch]$ReadOnly,
     [switch]$SkipPortal
 )
@@ -114,6 +115,7 @@ Invoke-Step "setting help" { Exec-Cli -CliArgs @("setting", "--help") }
 Invoke-Step "bill help" { Exec-Cli -CliArgs @("bill", "--help") }
 Invoke-Step "portal help" { Exec-Cli -CliArgs @("portal", "--help") }
 Invoke-Step "raw help" { Exec-Cli -CliArgs @("raw", "--help") }
+Invoke-Step "guard help" { Exec-Cli -CliArgs @("guard", "--help") }
 
 Write-Section "Self"
 Invoke-Step "self login (W)" {
@@ -206,6 +208,26 @@ if ($IncludeWriteOps -and -not $ReadOnly) {
 }
 elseif ($IncludeWriteOps -and $ReadOnly) {
     Write-Host "[SKIP] write operations disabled because ReadOnly is enabled" -ForegroundColor DarkYellow
+}
+
+if ($IncludeGuardOps -and -not $ReadOnly) {
+    Write-Section "Guard"
+    Invoke-Step "guard once" {
+        Exec-Cli -CliArgs @("--config", $CredentialsPath, "--yes", "guard", "once")
+    }
+    Invoke-Step "guard start --replace" {
+        Exec-Cli -CliArgs @("--config", $CredentialsPath, "--yes", "guard", "start", "--replace")
+    }
+    Start-Sleep -Seconds 2
+    Invoke-Step "guard status" {
+        Exec-Cli -CliArgs @("--config", $CredentialsPath, "guard", "status")
+    }
+    Invoke-Step "guard stop" {
+        Exec-Cli -CliArgs @("--config", $CredentialsPath, "--yes", "guard", "stop")
+    }
+}
+elseif ($IncludeGuardOps -and $ReadOnly) {
+    Write-Host "[SKIP] guard operations disabled because ReadOnly is enabled" -ForegroundColor DarkYellow
 }
 
 Write-Section "Summary"
