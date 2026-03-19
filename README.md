@@ -5,62 +5,62 @@
 [![Verify](https://github.com/hicancan/njupt-net/actions/workflows/release.yml/badge.svg)](https://github.com/hicancan/njupt-net/actions/workflows/release.yml)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/hicancan/njupt-net)](https://github.com/hicancan/njupt-net/blob/main/go.mod)
 [![Latest Release](https://img.shields.io/github/v/release/hicancan/njupt-net)](https://github.com/hicancan/njupt-net/releases)
+[![License](https://img.shields.io/github/license/hicancan/njupt-net)](https://github.com/hicancan/njupt-net/blob/main/LICENSE)
 [![Repo Stars](https://img.shields.io/github/stars/hicancan/njupt-net?style=social)](https://github.com/hicancan/njupt-net/stargazers)
 
-`njupt-net` 是一个面向 NJUPT 校园网环境的 Go 终端系统。
+> 把 NJUPT 校园网里最麻烦的事情，收进一个可脚本化、可守护、可部署到路由器的 Go 二进制。
 
-它把 Self 自助服务、Portal 网关、宽带绑定、消费保护、诊断、守护恢复、路由器部署和稳定 JSON 输出收进了一个单仓库、单二进制里。
+`njupt-net` 是一个面向 NJUPT 校园网环境的 Go 终端系统。  
+它不是一个只会“点一下登录”的薄封装 CLI，而是一套完整的 typed kernel + workflow + guard runtime。
 
-如果你需要的是下面这些能力，这个项目就是为它们设计的：
+你可以用它做这些事：
 
-- 本地终端里稳定登录 Self 和 Portal
-- 脚本化查询在线状态、账单、MAC、登录历史
-- 安全地做宽带绑定、消费保护、mauth 切换，并且有 readback 验证
+- 在终端里稳定登录 Self 和 Portal
+- 查询在线状态、登录历史、账单、MAC 与宽带绑定信息
+- 安全地修改宽带绑定、消费保护、mauth，并且默认带 readback 验证
 - 在桌面或路由器上长期守护，白天守 `B`，夜间守 `W`
-- 用 `--output json` 接进自己的脚本、自动化或监控
+- 用 `--output json` 接入脚本、自动化、监控或你自己的工具链
 
-## 目录
+## 为什么会有这个项目
 
-- [项目亮点](#项目亮点)
-- [适用场景](#适用场景)
-- [架构总览](#架构总览)
-- [守护恢复流程](#守护恢复流程)
-- [命令一览](#命令一览)
-- [快速开始](#快速开始)
-- [Router / ImmortalWrt 部署](#router--immortalwrt-部署)
-- [机器可读契约](#机器可读契约)
-- [证据级别模型](#证据级别模型)
-- [质量保证](#质量保证)
-- [项目结构](#项目结构)
-- [相关文档](#相关文档)
+校园网最烦的从来不是“不会点网页登录”，而是这些边角问题：
+
+- Self 和 Portal 是两套不同语义的系统
+- 一些能力能做，但成功语义并不总是稳定
+- 写操作如果没有 readback，很难知道到底有没有真正生效
+- 守护一旦只是脚本拼装，状态、日志、恢复链就会越来越混乱
+- 路由器部署如果没有统一 runtime，桌面和 OpenWrt 会变成两套世界
+
+`njupt-net` 的目标，就是把这些问题变成一套清晰、可测试、可维护、可自动化的终端系统。
 
 ## 项目亮点
 
-- **不是薄封装 CLI，而是 typed kernel**
-  - Self、Portal、workflow、guard 都有清晰边界，不靠命令层拼字符串猜状态。
-- **把逆向确定性变成运行时语义**
-  - `confirmed / guarded / blocked` 不是文档描述，而是结果模型和命令行为的一部分。
-- **写操作默认走 readback-first**
-  - 宽带绑定、消费保护、mauth 等修改都统一成 `pre-state -> submit -> readback -> compare -> optional restore`。
-- **JSON 输出是正式接口**
-  - `OperationResult`、`problem.code + details`、`guard status`、`guard events` 都是稳定机器契约。
-- **守护是 Go runtime，不是脚本拼装**
-  - 同一套代码可在桌面和路由器上运行，统一状态、日志、事件、PID、自恢复策略。
+- **不是“网页登录脚本”，而是 typed kernel**
+  - 协议真相、错误模型、证据级别、写操作语义都在 Go 类型里，而不是散落在命令层字符串判断里。
+- **逆向确定性会体现在运行时**
+  - `confirmed / guarded / blocked` 不是文档注释，而是结果模型和命令行为的一部分。
+- **写操作默认 readback-first**
+  - 宽带绑定、消费保护、mauth 等修改统一走 `pre-state -> submit -> readback -> compare -> optional restore`。
+- **守护是正式 runtime，不是脚本循环**
+  - 桌面和路由器共用同一套调度、恢复链、状态文件、事件日志和 PID 管理。
+- **JSON 输出是长期支持接口**
+  - `OperationResult`、`problems[].code + details`、`guard status`、`guard events` 都是正式契约，不是调试副产物。
 
-## 适用场景
+## 你大概会怎么用它
 
-| 场景 | 你会用到的命令 |
+| 场景 | 最常用的命令 |
 | --- | --- |
-| 在终端里做稳定登录与诊断 | `self login` `self status` `self doctor` |
-| 查询当前在线设备与历史登录 | `dashboard online-list` `dashboard login-history` |
+| 登录与诊断 | `self login` `self status` `self doctor` |
+| 查看在线设备和历史记录 | `dashboard online-list` `dashboard login-history` |
 | 管理宽带绑定、消费保护、MAC | `service binding` `service consume` `service mac` |
-| 查询账单和在线记录 | `bill month-pay` `bill online-log` `bill operator-log` |
-| 排查 Portal 或 Self 的低层问题 | `portal login` `portal logout` `raw get` `raw post` |
-| 桌面或路由器长期守护 | `guard start` `guard status` `guard once` |
+| 查询账单与在线日志 | `bill month-pay` `bill online-log` `bill operator-log` |
+| 排查 Portal / Self 的低层问题 | `portal login` `portal logout` `raw get` `raw post` |
+| 在桌面或路由器上长期守护 | `guard start` `guard status` `guard once` |
 
-## 架构总览
+## 架构一眼看懂
 
-项目采用克制的模块化单体架构。它不拆多仓，不引入插件系统，也不把 Cobra 再包成一层框架。
+项目采用克制的模块化单体架构。  
+不拆多仓，不引入插件系统，也不把 Cobra 再包成一层自己的框架。
 
 ```mermaid
 flowchart LR
@@ -88,9 +88,9 @@ flowchart LR
 - `internal/workflow`
   - 只负责 use-case 组合，不直接构造 transport
 - `internal/runtime/guard`
-  - 负责守护的状态机、调度、探测、状态文件、事件日志和后台运行
+  - 负责守护状态机、调度、探测、状态文件、事件日志和后台运行
 
-## 守护恢复流程
+## 守护恢复链
 
 `guard` 的目标不是“安静挂着”，而是“快速发现、快速恢复、状态可观测”。
 
@@ -115,7 +115,7 @@ flowchart TD
   N -- "否" --> O["Degraded cycle"]
 ```
 
-守护默认策略：
+默认守护策略：
 
 - 白天守 `B`
 - 夜间守 `W`
@@ -123,7 +123,7 @@ flowchart TD
 - 连通性失败后立即恢复
 - `stop` 先优雅退出，再超时强停
 
-## 命令一览
+## 功能清单
 
 当前 CLI 共有 **8 个功能域，32 个叶子命令**。
 
@@ -204,10 +204,10 @@ njupt-net
 
 ### 1. 获取二进制
 
-你有两种方式：
+你可以：
 
 - 从 [Releases](https://github.com/hicancan/njupt-net/releases) 下载预编译二进制
-- 本地直接编译
+- 或者本地直接编译
 
 ```bash
 go build ./...
@@ -296,13 +296,13 @@ njupt-net guard status --output json
 
 ## Router / ImmortalWrt 部署
 
-`scripts/install-immortalwrt.ps1` 已经是正式支持路径。
+如果你想把守护跑在路由器上，`scripts/install-immortalwrt.ps1` 已经是正式支持路径。
 
 部署模型：
 
 - 本机 PowerShell 脚本负责上传与安装
 - 路由器侧使用 `procd + guard run`
-- 守护状态目录默认走 `/tmp`，避免高频写闪存
+- 状态目录默认走 `/tmp`，避免高频写闪存
 
 最低要求：
 

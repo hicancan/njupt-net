@@ -5,49 +5,49 @@
 [![Verify](https://github.com/hicancan/njupt-net/actions/workflows/release.yml/badge.svg)](https://github.com/hicancan/njupt-net/actions/workflows/release.yml)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/hicancan/njupt-net)](https://github.com/hicancan/njupt-net/blob/main/go.mod)
 [![Latest Release](https://img.shields.io/github/v/release/hicancan/njupt-net)](https://github.com/hicancan/njupt-net/releases)
+[![License](https://img.shields.io/github/license/hicancan/njupt-net)](https://github.com/hicancan/njupt-net/blob/main/LICENSE)
 [![Repo Stars](https://img.shields.io/github/stars/hicancan/njupt-net?style=social)](https://github.com/hicancan/njupt-net/stargazers)
 
-`njupt-net` is a Go terminal system for the NJUPT networking environment.
+> One Go binary for the messy parts of NJUPT campus networking: login, diagnosis, repair, automation, and always-on guarding.
 
-It brings Self-Service workflows, Portal authentication, broadband binding, diagnostics, daemon recovery, router deployment, and stable JSON output into one repository and one binary.
+`njupt-net` is a Go terminal system for the NJUPT networking environment.  
+It is not just a thin wrapper over existing web pages. It is a typed kernel, a workflow layer, and a real guard runtime packaged into one repository and one binary.
 
-Use this project when you want to:
+Use it when you want to:
 
 - log in to Self and Portal reliably from a terminal
-- script online-state, billing, MAC, and login-history queries
-- update broadband binding, consume-protect, or mauth with readback verification
-- run a long-lived guard on a desktop or router that keeps `B` during the day and `W` at night
-- integrate campus networking behavior into automation via `--output json`
+- query online state, billing, MAC addresses, broadband binding, and login history
+- perform controlled writes such as binding changes, consume-protect updates, and mauth toggles with readback verification
+- keep a long-running day/night guard on a desktop or a router
+- integrate campus networking behavior into your own scripts with stable `--output json`
 
-## Table Of Contents
+## Why This Exists
 
-- [Highlights](#highlights)
-- [Use Cases](#use-cases)
-- [Architecture](#architecture)
-- [Guard Recovery Flow](#guard-recovery-flow)
-- [Command Surface](#command-surface)
-- [Quick Start](#quick-start)
-- [Router / ImmortalWrt Deployment](#router--immortalwrt-deployment)
-- [Machine-Readable Contract](#machine-readable-contract)
-- [Evidence Model](#evidence-model)
-- [Quality Gates](#quality-gates)
-- [Project Layout](#project-layout)
-- [Documentation](#documentation)
+Campus networking problems are rarely about “clicking the login button.”  
+They are about everything around it:
+
+- Self and Portal are different systems with different semantics
+- some reverse-engineered paths exist, but their success criteria are not equally trustworthy
+- writes are dangerous if you cannot verify them after submission
+- daemon logic becomes fragile quickly when it is only a pile of scripts
+- router deployment gets messy if desktop and OpenWrt paths drift apart
+
+`njupt-net` exists to turn that mess into a system that is explicit, typed, testable, and automatable.
 
 ## Highlights
 
-- **Not a thin CLI wrapper, but a typed kernel**
-  - protocol truth lives in typed Go packages instead of command-layer string guessing
+- **A typed kernel, not a throwaway CLI wrapper**
+  - protocol truth, evidence levels, error families, and write semantics live in Go types rather than command-layer heuristics
 - **Reverse-engineered certainty is explicit**
-  - `confirmed / guarded / blocked` are runtime semantics, not just documentation notes
-- **Writes are readback-first**
-  - broadband binding, consume-protect, and mauth toggles all follow the same verified write pattern
-- **JSON output is a supported interface**
-  - `OperationResult`, `problem.code + details`, `guard status`, and guard events are treated as stable machine contracts
-- **The daemon is a Go runtime**
-  - desktop and router deployments share the same scheduler, recovery logic, status model, and event model
+  - `confirmed / guarded / blocked` are runtime semantics, not just notes in documentation
+- **Writes are readback-first by default**
+  - broadband binding, consume-protect, and mauth updates all follow the same verified write pipeline
+- **The guard is a real runtime**
+  - desktop and router deployments share one scheduler, one recovery model, one status model, and one event model
+- **JSON output is treated as a supported interface**
+  - `OperationResult`, `problems[].code + details`, `guard status`, and `guard events` are designed for automation, not just debugging
 
-## Use Cases
+## Common Use Cases
 
 | Use case | Commands you will likely use |
 | --- | --- |
@@ -58,9 +58,10 @@ Use this project when you want to:
 | low-level Self/Portal debugging | `portal login` `portal logout` `raw get` `raw post` |
 | long-running day/night guard | `guard start` `guard status` `guard once` |
 
-## Architecture
+## Architecture At A Glance
 
-The project is intentionally a disciplined modular monolith. No multi-repo split, no plugin framework, no extra layer on top of Cobra.
+The project is intentionally a disciplined modular monolith.  
+No multi-repo split, no plugin framework, no extra abstraction layer on top of Cobra.
 
 ```mermaid
 flowchart LR
@@ -84,11 +85,11 @@ flowchart LR
 - `internal/selfservice`
   - Self requests, parsing, and typed model mapping
 - `internal/portal`
-  - Portal request building, JSONP parsing, `ret_code` classification, typed model mapping
+  - Portal request building, JSONP parsing, `ret_code` classification, and typed mapping
 - `internal/workflow`
   - pure use-cases, no concrete transport construction
 - `internal/runtime/guard`
-  - daemon state machine, scheduling, probing, status files, events, background execution
+  - daemon state machine, scheduling, probing, status files, events, and background execution
 
 ## Guard Recovery Flow
 
@@ -115,12 +116,12 @@ flowchart TD
   N -- "No" --> O["Degraded cycle"]
 ```
 
-Default runtime behavior:
+Default guard behavior:
 
 - day profile: `B`
 - night profile: `W`
 - no proactive `logout`
-- immediate recovery after failed connectivity checks
+- immediate recovery when connectivity fails
 - graceful stop request before forced kill
 
 ## Command Surface
@@ -204,10 +205,10 @@ njupt-net
 
 ### 1. Get a binary
 
-You can either:
+You can:
 
 - download a prebuilt artifact from [Releases](https://github.com/hicancan/njupt-net/releases)
-- build locally
+- or build locally
 
 ```bash
 go build ./...
@@ -296,7 +297,7 @@ Read-only smoke:
 
 ## Router / ImmortalWrt Deployment
 
-`scripts/install-immortalwrt.ps1` is an officially supported deployment path.
+If you want to run the guard on a router, `scripts/install-immortalwrt.ps1` is now an officially supported deployment path.
 
 Deployment model:
 
