@@ -250,9 +250,6 @@ Minimal example:
   },
   "portal": {
     "baseURL": "https://10.10.244.11:802/eportal/portal",
-    "fallbackBaseURLs": [
-      "https://p.njupt.edu.cn:802/eportal/portal"
-    ],
     "isp": "mobile",
     "timeoutSeconds": 8,
     "insecureTLS": true
@@ -271,6 +268,8 @@ Minimal example:
   }
 }
 ```
+
+If you need an additional 802 fallback, configure `portal.fallbackBaseURLs` explicitly. Router deployments now default to the direct IP endpoint and no longer inject a domain fallback implicitly.
 
 ### 3. Common commands
 
@@ -325,7 +324,7 @@ Useful commands on the router after deployment:
 /etc/init.d/njupt-net status
 /etc/init.d/njupt-net restart
 /etc/init.d/njupt-net stop
-/usr/bin/njupt-net --config /etc/njupt-net/credentials.json --output json guard status --state-dir /tmp/njupt-net-guard
+/usr/bin/njupt-net --config /root/credentials.json --output json guard status --state-dir /tmp/njupt-net-guard
 logread -e njupt-net
 cat /tmp/njupt-net-guard/status.json
 ```
@@ -347,6 +346,7 @@ cat /tmp/njupt-net-guard/status.json
 - `message`
 - terminal-oriented human output
 - explanatory prose in the README
+- raw HTML from standard `setting person` results; sensitive page payloads are only exposed through controlled raw/debug paths
 
 ### Operation envelope
 

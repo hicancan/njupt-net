@@ -168,6 +168,15 @@ func TestForceOfflineRequiresSessionPresence(t *testing.T) {
 }
 
 func TestForceOfflineSuccess(t *testing.T) {
+	previousPause := offlineReadbackPause
+	previousAttempts := offlineReadbackAttempts
+	offlineReadbackPause = 0
+	offlineReadbackAttempts = 3
+	t.Cleanup(func() {
+		offlineReadbackPause = previousPause
+		offlineReadbackAttempts = previousAttempts
+	})
+
 	onlineReads := 0
 	client := NewClient(&mockSessionClient{
 		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
@@ -197,5 +206,73 @@ func TestForceOfflineSuccess(t *testing.T) {
 	}
 	if result == nil || !result.Success {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestForceOfflineTreatsReplacementSessionAsSuccess(t *testing.T) {
+	previousPause := offlineReadbackPause
+	previousAttempts := offlineReadbackAttempts
+	offlineReadbackPause = 0
+	offlineReadbackAttempts = 3
+	t.Cleanup(func() {
+		offlineReadbackPause = previousPause
+		offlineReadbackAttempts = previousAttempts
+	})
+
+	onlineReads := 0
+	client := NewClient(&mockSessionClient{
+		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
+			_ = ctx
+			switch path {
+			case "/Self/dashboard/getOnlineList":
+				onlineReads++
+				switch onlineReads {
+				case 1:
+					return &kernel.SessionResponse{StatusCode: 200, Body: []byte(`[{"sessionId":"sid-1"}]`)}, nil
+				case 2:
+					return &kernel.SessionResponse{StatusCode: 200, Body: []byte(`[{"sessionId":"sid-1"},{"sessionId":"sid-2"}]`)}, nil
+				default:
+					return &kernel.SessionResponse{StatusCode: 200, Body: []byte(`[{"sessionId":"sid-2"}]`)}, nil
+				}
+			case "/Self/dashboard/tooffline":
+				return &kernel.SessionResponse{StatusCode: 200, Body: []byte(`{"success":true}`)}, nil
+			default:
+				t.Fatalf("unexpected path: %s", path)
+				return nil, nil
+			}
+		},
+	})
+
+	result, err := client.ForceOffline(context.Background(), "sid-1")
+	if err != nil {
+		t.Fatalf("force offline replacement: %v", err)
+	}
+	if result == nil || !result.Success || result.Data == nil {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if detected, ok := (*result.Data)["replacementSessionDetected"].(bool); !ok || !detected {
+		t.Fatalf("expected replacement session marker, got %#v", result.Data)
+	}
+}
+
+func TestOfflineSessionState(t *testing.T) {
+	rows := []kernel.OnlineSession{
+		{SessionID: "sid-1"},
+		{SessionID: "sid-2"},
+	}
+	stillExists, replacementDetected := offlineSessionState(&rows, "sid-1")
+	if !stillExists || !replacementDetected {
+		t.Fatalf("unexpected state: still=%v replacement=%v", stillExists, replacementDetected)
+	}
+
+	rows = []kernel.OnlineSession{{SessionID: "sid-2"}}
+	stillExists, replacementDetected = offlineSessionState(&rows, "sid-1")
+	if stillExists || !replacementDetected {
+		t.Fatalf("unexpected replacement-only state: still=%v replacement=%v", stillExists, replacementDetected)
+	}
+
+	stillExists, replacementDetected = offlineSessionState(nil, "sid-1")
+	if stillExists || replacementDetected {
+		t.Fatalf("unexpected empty state: still=%v replacement=%v", stillExists, replacementDetected)
 	}
 }

@@ -32,3 +32,18 @@ func toString(v any) string {
 		return strings.TrimSpace(fmt.Sprint(val))
 	}
 }
+
+func isPortal802AlreadyOnline(retCode, msg string) bool {
+	return strings.TrimSpace(retCode) == "2" && strings.EqualFold(strings.TrimSpace(msg), "AC999")
+}
+
+func logout801Succeeded(body string) bool {
+	return strings.Contains(strings.ToLower(body), "logout succeed")
+}
+
+func login801LooksLikeGenericShell(body string) bool {
+	normalized := strings.ToLower(body)
+	return strings.Contains(normalized, `<div id=app`) &&
+		strings.Contains(normalized, "/eportal/public/static/js/app") &&
+		strings.Contains(normalized, "<title>eportal</title>")
+}

@@ -2,8 +2,10 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/hicancan/njupt-net-cli/internal/kernel"
 )
@@ -58,6 +60,28 @@ type BindingRepairResult struct {
 	Action        string `json:"action"`
 }
 
+// GuardTraceKind captures internal action ordering for one guard cycle.
+type GuardTraceKind string
+
+const (
+	GuardTraceBindingAudit  GuardTraceKind = "binding-audit"
+	GuardTraceBindingRepair GuardTraceKind = "binding-repair"
+	GuardTracePortalLogin   GuardTraceKind = "portal-login"
+)
+
+// GuardTraceEvent records one internal guard action in occurrence order.
+type GuardTraceEvent struct {
+	Kind          GuardTraceKind
+	Message       string
+	BindingOK     bool
+	InternetOK    bool
+	PortalLoginOK bool
+	RecoveryStep  string
+	Action        string
+	HolderProfile string
+	TargetProfile string
+}
+
 // EnsureOnlineResult summarizes one aggressive ensure-online chain.
 type EnsureOnlineResult struct {
 	DesiredProfile         string                    `json:"desiredProfile"`
@@ -75,6 +99,7 @@ type EnsureOnlineResult struct {
 	InternetOK             bool                      `json:"internetOk"`
 	InternetMessage        string                    `json:"internetMessage,omitempty"`
 	RecoveryStep           string                    `json:"recoveryStep"`
+	Trace                  []GuardTraceEvent         `json:"-"`
 }
 
 // GuardCycleInput is the runtime-to-workflow control surface for one cycle.
@@ -104,16 +129,20 @@ type GuardCycleResult struct {
 	RetryProbe         *LocalIPSelection    `json:"retryProbe,omitempty"`
 	BindingRepair      *BindingRepairResult `json:"bindingRepair,omitempty"`
 	EnsureOnline       *EnsureOnlineResult  `json:"ensureOnline,omitempty"`
+	Trace              []GuardTraceEvent    `json:"-"`
 }
 
 // GuardEnvironment contains the dependencies needed for guard workflows.
 type GuardEnvironment struct {
-	Accounts  map[string]Credentials
-	Broadband BroadbandCredentials
-	PortalISP string
-	Factory   GuardClientFactory
-	Prober    GuardProber
+	Accounts    map[string]Credentials
+	Broadband   BroadbandCredentials
+	PortalISP   string
+	Factory     GuardClientFactory
+	Prober      GuardProber
+	AfterRepair func(context.Context) error
 }
+
+const repairSettleDelay = time.Second
 
 // RepairBinding ensures the desired profile owns the configured mobile broadband credentials.
 func RepairBinding(ctx context.Context, env GuardEnvironment, targetProfile string) (*kernel.OperationResult[BindingRepairResult], error) {
@@ -257,19 +286,31 @@ func EnsureOnline(ctx context.Context, env GuardEnvironment, targetProfile strin
 		result.FirstPortalLoginMsg = first.Message
 		result.PortalPayload = first.Data
 	}
-	if firstErr == nil {
-		internetOK, internetMessage := env.Prober.CheckConnectivity(ctx)
-		result.InternetOK = internetOK
-		result.InternetMessage = internetMessage
-		if internetOK {
-			result.RecoveryStep = "portal-login"
-			return &kernel.OperationResult[EnsureOnlineResult]{
-				Level:   kernel.EvidenceConfirmed,
-				Success: true,
-				Message: "portal login restored connectivity",
-				Data:    result,
-			}, nil
+	if strings.TrimSpace(result.FirstPortalLoginMsg) == "" && firstErr != nil {
+		result.FirstPortalLoginMsg = portalErrorMessage(firstErr)
+	}
+	internetOK, internetMessage := env.Prober.CheckConnectivity(ctx)
+	result.InternetOK = internetOK
+	result.InternetMessage = internetMessage
+	result.Trace = append(result.Trace, GuardTraceEvent{
+		Kind:          GuardTracePortalLogin,
+		Message:       firstPortalTraceMessage(result),
+		InternetOK:    internetOK,
+		PortalLoginOK: result.FirstPortalLoginOK,
+		RecoveryStep:  "portal-login",
+	})
+	if internetOK {
+		result.RecoveryStep = "portal-login"
+		message := "portal login restored connectivity"
+		if firstErr != nil {
+			message = "connectivity available after portal attempt"
 		}
+		return &kernel.OperationResult[EnsureOnlineResult]{
+			Level:   kernel.EvidenceConfirmed,
+			Success: true,
+			Message: message,
+			Data:    result,
+		}, nil
 	}
 
 	repair, repairErr := RepairBinding(ctx, env, targetProfile)
@@ -278,6 +319,7 @@ func EnsureOnline(ctx context.Context, env GuardEnvironment, targetProfile strin
 		result.BindingRepairOK = repair.Success
 		result.BindingRepairMessage = repair.Message
 		result.BindingRepair = repair.Data
+		result.Trace = append(result.Trace, bindingTraceEvent(repair))
 	}
 	if repairErr != nil {
 		result.RecoveryStep = "binding-repair-failed"
@@ -287,6 +329,16 @@ func EnsureOnline(ctx context.Context, env GuardEnvironment, targetProfile strin
 			Message: "binding repair failed before retry login",
 			Data:    result,
 		}, repairErr
+	}
+
+	if err := waitAfterRepair(ctx, env.AfterRepair); err != nil {
+		result.RecoveryStep = "binding-repair-settle-failed"
+		return &kernel.OperationResult[EnsureOnlineResult]{
+			Level:   kernel.EvidenceConfirmed,
+			Success: false,
+			Message: "binding repair completed but settle wait failed before retry login",
+			Data:    result,
+		}, err
 	}
 
 	retryProbe, err := env.Prober.DetectLocalIPv4(ctx)
@@ -300,10 +352,20 @@ func EnsureOnline(ctx context.Context, env GuardEnvironment, targetProfile strin
 		result.SecondPortalLoginMsg = second.Message
 		result.PortalPayload = second.Data
 	}
-	internetOK, internetMessage := env.Prober.CheckConnectivity(ctx)
+	if strings.TrimSpace(result.SecondPortalLoginMsg) == "" && secondErr != nil {
+		result.SecondPortalLoginMsg = portalErrorMessage(secondErr)
+	}
+	internetOK, internetMessage = env.Prober.CheckConnectivity(ctx)
 	result.InternetOK = internetOK
 	result.InternetMessage = internetMessage
 	result.RecoveryStep = "binding-repair-then-portal-login"
+	result.Trace = append(result.Trace, GuardTraceEvent{
+		Kind:          GuardTracePortalLogin,
+		Message:       secondPortalTraceMessage(result),
+		InternetOK:    internetOK,
+		PortalLoginOK: result.SecondPortalLoginOK,
+		RecoveryStep:  result.RecoveryStep,
+	})
 	if internetOK {
 		return &kernel.OperationResult[EnsureOnlineResult]{
 			Level:   kernel.EvidenceConfirmed,
@@ -340,6 +402,7 @@ func GuardCycle(ctx context.Context, env GuardEnvironment, input GuardCycleInput
 			result.BindingOK = repair.Success
 			result.BindingMessage = repair.Message
 			result.BindingRepair = repair.Data
+			result.Trace = append(result.Trace, forceSwitchTraceEvent(repair, "portal-login"))
 		}
 		if err != nil {
 			result.BindingOK = false
@@ -365,10 +428,20 @@ func GuardCycle(ctx context.Context, env GuardEnvironment, input GuardCycleInput
 			result.BindingOK = repair.Success
 			result.BindingMessage = repair.Message
 			result.BindingRepair = repair.Data
+			result.Trace = append(result.Trace, GuardTraceEvent{
+				Kind:         GuardTraceBindingAudit,
+				Message:      repair.Message,
+				BindingOK:    repair.Success,
+				RecoveryStep: "healthy",
+			})
+			if trace := bindingRepairTraceEvent(repair, "healthy"); trace != nil {
+				result.Trace = append(result.Trace, *trace)
+			}
 		}
 		if err != nil {
 			result.BindingOK = false
 			result.RecoveryStep = "degraded-binding-repair"
+			updateLastTraceRecoveryStep(result.Trace, result.RecoveryStep)
 		}
 	}
 
@@ -400,6 +473,7 @@ func applyEnsureOnline(dst *GuardCycleResult, src *EnsureOnlineResult) {
 	dst.InternetMessage = src.InternetMessage
 	dst.PortalLoginMessage = portalMessageFromEnsure(src)
 	dst.RecoveryStep = src.RecoveryStep
+	dst.Trace = append(dst.Trace, src.Trace...)
 	if src.BindingRepairAttempted {
 		dst.BindingOK = src.BindingRepairOK
 		dst.BindingMessage = src.BindingRepairMessage
@@ -430,4 +504,104 @@ func portalMessageFromEnsure(src *EnsureOnlineResult) string {
 	default:
 		return "portal login not needed"
 	}
+}
+
+func portalErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	var opErr *kernel.OpError
+	if errors.As(err, &opErr) && strings.TrimSpace(opErr.Message) != "" {
+		return opErr.Message
+	}
+	return err.Error()
+}
+
+func waitAfterRepair(ctx context.Context, waitFn func(context.Context) error) error {
+	if waitFn != nil {
+		return waitFn(ctx)
+	}
+	timer := time.NewTimer(repairSettleDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func firstPortalTraceMessage(result *EnsureOnlineResult) string {
+	if result == nil {
+		return ""
+	}
+	if strings.TrimSpace(result.FirstPortalLoginMsg) != "" {
+		return result.FirstPortalLoginMsg
+	}
+	return result.InternetMessage
+}
+
+func secondPortalTraceMessage(result *EnsureOnlineResult) string {
+	if result == nil {
+		return ""
+	}
+	if strings.TrimSpace(result.SecondPortalLoginMsg) != "" {
+		return result.SecondPortalLoginMsg
+	}
+	return result.InternetMessage
+}
+
+func bindingTraceEvent(repair *kernel.OperationResult[BindingRepairResult]) GuardTraceEvent {
+	if repair == nil {
+		return GuardTraceEvent{}
+	}
+	if trace := bindingRepairTraceEvent(repair, "binding-repair-then-portal-login"); trace != nil {
+		return *trace
+	}
+	return GuardTraceEvent{
+		Kind:         GuardTraceBindingAudit,
+		Message:      repair.Message,
+		BindingOK:    repair.Success,
+		RecoveryStep: "binding-repair-then-portal-login",
+	}
+}
+
+func forceSwitchTraceEvent(repair *kernel.OperationResult[BindingRepairResult], recoveryStep string) GuardTraceEvent {
+	if repair == nil {
+		return GuardTraceEvent{}
+	}
+	if trace := bindingRepairTraceEvent(repair, recoveryStep); trace != nil {
+		return *trace
+	}
+	return GuardTraceEvent{
+		Kind:         GuardTraceBindingAudit,
+		Message:      repair.Message,
+		BindingOK:    repair.Success,
+		RecoveryStep: recoveryStep,
+	}
+}
+
+func bindingRepairTraceEvent(repair *kernel.OperationResult[BindingRepairResult], recoveryStep string) *GuardTraceEvent {
+	if repair == nil || repair.Data == nil {
+		return nil
+	}
+	if strings.TrimSpace(repair.Data.Action) == "" || repair.Data.Action == "already-correct" {
+		return nil
+	}
+	return &GuardTraceEvent{
+		Kind:          GuardTraceBindingRepair,
+		Message:       repair.Message,
+		BindingOK:     repair.Success,
+		RecoveryStep:  recoveryStep,
+		Action:        repair.Data.Action,
+		HolderProfile: repair.Data.HolderProfile,
+		TargetProfile: repair.Data.TargetProfile,
+	}
+}
+
+func updateLastTraceRecoveryStep(trace []GuardTraceEvent, recoveryStep string) {
+	if len(trace) == 0 {
+		return
+	}
+	trace[len(trace)-1].RecoveryStep = recoveryStep
 }

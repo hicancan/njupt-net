@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/hicancan/njupt-net-cli/internal/kernel"
@@ -139,9 +140,10 @@ func baseGuardEnv(factory GuardClientFactory, prober GuardProber) GuardEnvironme
 			Account:  "cmcc-user",
 			Password: "cmcc-pass",
 		},
-		PortalISP: "mobile",
-		Factory:   factory,
-		Prober:    prober,
+		PortalISP:   "mobile",
+		Factory:     factory,
+		Prober:      prober,
+		AfterRepair: func(context.Context) error { return nil },
 	}
 }
 
@@ -229,6 +231,9 @@ func TestGuardCycleForceSwitchImmediatelyRestoresTarget(t *testing.T) {
 	if !result.PortalLoginOK || !result.InternetOK || result.RecoveryStep != "portal-login" {
 		t.Fatalf("unexpected force-switch cycle: %#v", result)
 	}
+	if got, want := traceKinds(result.Trace), []GuardTraceKind{GuardTraceBindingAudit, GuardTracePortalLogin}; !equalTraceKinds(got, want) {
+		t.Fatalf("unexpected force-switch trace order: got %v want %v", got, want)
+	}
 }
 
 func TestGuardCyclePortalFailureTriggersRepairAndRetry(t *testing.T) {
@@ -243,6 +248,7 @@ func TestGuardCyclePortalFailureTriggersRepairAndRetry(t *testing.T) {
 	prober := &fakeProber{
 		checks: []probeResult{
 			{ok: false, message: "offline"},
+			{ok: false, message: "still offline after first portal attempt"},
 			{ok: true, message: "internet ok after retry"},
 		},
 		ips: []LocalIPSelection{
@@ -267,6 +273,9 @@ func TestGuardCyclePortalFailureTriggersRepairAndRetry(t *testing.T) {
 	}
 	if result.BindingRepair == nil || result.BindingRepair.Action != "attached" {
 		t.Fatalf("expected binding repair evidence: %#v", result.BindingRepair)
+	}
+	if got, want := traceKinds(result.Trace), []GuardTraceKind{GuardTracePortalLogin, GuardTraceBindingRepair, GuardTracePortalLogin}; !equalTraceKinds(got, want) {
+		t.Fatalf("unexpected repair trace order: got %v want %v", got, want)
 	}
 }
 
@@ -355,4 +364,167 @@ func TestGuardCycleBindingRepairFailureDegradesButContinues(t *testing.T) {
 	if result.BindingOK || !result.InternetOK || result.RecoveryStep != "degraded-binding-repair" {
 		t.Fatalf("unexpected degraded cycle: %#v", result)
 	}
+}
+
+func TestGuardCyclePreservesPortalErrorMessageWhenRetryFails(t *testing.T) {
+	target := &fakeSelfClient{binding: &kernel.OperatorBinding{}}
+	portalClient := &fakePortalClient{
+		results: []*kernel.OperationResult[kernel.Portal802Response]{
+			nil,
+			nil,
+		},
+		errs: []error{
+			&kernel.OpError{Op: "portal.login802", Message: "portal 802 transport attempts failed: https://10.10.244.11:802/eportal/portal/login -> dial failed", Err: kernel.ErrPortal},
+			&kernel.OpError{Op: "portal.login802", Message: "portal 802 transport attempts failed: https://10.10.244.11:802/eportal/portal/login -> dial failed", Err: kernel.ErrPortal},
+		},
+	}
+	prober := &fakeProber{
+		checks: []probeResult{
+			{ok: false, message: "captive portal response"},
+			{ok: false, message: "still captive"},
+		},
+		ips: []LocalIPSelection{
+			{SelectedIP: "10.1.2.3", RoutedIP: "10.1.2.3", SelectionReason: "routed-match"},
+			{SelectedIP: "10.1.2.3", RoutedIP: "10.1.2.3", SelectionReason: "routed-match"},
+		},
+	}
+	factory := &fakeFactory{
+		selfClients:   []GuardSelfClient{target},
+		portalClients: []GuardPortalClient{portalClient},
+	}
+
+	result, err := GuardCycle(context.Background(), baseGuardEnv(factory, prober), GuardCycleInput{
+		DesiredProfile: "B",
+		ScheduleWindow: "day",
+	})
+	if err == nil {
+		t.Fatal("expected degraded error")
+	}
+	if !strings.Contains(result.PortalLoginMessage, "portal 802 transport attempts failed") {
+		t.Fatalf("expected explicit portal transport message, got %#v", result)
+	}
+}
+
+func TestGuardCycleForceSwitchSkipsRepairWhenConnectivityRemainsHealthy(t *testing.T) {
+	target := &fakeSelfClient{binding: &kernel.OperatorBinding{MobileAccount: "cmcc-user", MobilePassword: "cmcc-pass"}}
+	portalClient := &fakePortalClient{
+		results: []*kernel.OperationResult[kernel.Portal802Response]{
+			{Level: kernel.EvidenceGuarded, Success: false, Message: "portal 802 login failed ret_code=2 msg=AC999"},
+		},
+		errs: []error{&kernel.OpError{Op: "portal.login802", Message: "portal 802 login failed ret_code=2 msg=AC999", Err: kernel.ErrPortal}},
+	}
+	prober := &fakeProber{
+		ips:    []LocalIPSelection{{SelectedIP: "10.1.2.3", RoutedIP: "10.1.2.3", SelectionReason: "routed-match"}},
+		checks: []probeResult{{ok: true, message: "internet still healthy"}},
+	}
+	factory := &fakeFactory{
+		selfClients:   []GuardSelfClient{target},
+		portalClients: []GuardPortalClient{portalClient},
+	}
+
+	result, err := GuardCycle(context.Background(), baseGuardEnv(factory, prober), GuardCycleInput{
+		DesiredProfile: "B",
+		ScheduleWindow: "day",
+		ForceSwitch:    true,
+	})
+	if err != nil {
+		t.Fatalf("expected healthy force switch, got %v", err)
+	}
+	if !result.InternetOK {
+		t.Fatalf("expected healthy connectivity, got %#v", result)
+	}
+	if result.BindingRepair == nil || result.BindingRepair.Action != "already-correct" {
+		t.Fatalf("expected force-switch binding verification evidence, got %#v", result.BindingRepair)
+	}
+	if got, want := traceKinds(result.Trace), []GuardTraceKind{GuardTraceBindingAudit, GuardTracePortalLogin}; !equalTraceKinds(got, want) {
+		t.Fatalf("unexpected force-switch trace order: got %v want %v", got, want)
+	}
+}
+
+func TestGuardCycleRepairSettlesAndRecoversWithinSameCycle(t *testing.T) {
+	target := &fakeSelfClient{binding: &kernel.OperatorBinding{}}
+	portalClient := &fakePortalClient{
+		results: []*kernel.OperationResult[kernel.Portal802Response]{
+			{Level: kernel.EvidenceGuarded, Success: false, Message: "portal 802 login failed ret_code=1 msg=未绑定运营商账号,请正确绑定运营商账号再试！"},
+			{Level: kernel.EvidenceConfirmed, Success: true, Message: "portal 802 login succeeded", Data: &kernel.Portal802Response{Result: "1"}},
+		},
+		errs: []error{
+			&kernel.OpError{Op: "portal.login802", Message: "portal 802 login failed ret_code=1 msg=未绑定运营商账号,请正确绑定运营商账号再试！", Err: kernel.ErrPortalRetCode1},
+			nil,
+		},
+	}
+	prober := &fakeProber{
+		checks: []probeResult{
+			{ok: false, message: "captive portal response"},
+			{ok: false, message: "still captive before settle retry"},
+			{ok: true, message: "internet restored after settle retry"},
+		},
+		ips: []LocalIPSelection{
+			{SelectedIP: "10.1.2.3", RoutedIP: "10.1.2.3", SelectionReason: "routed-match"},
+			{SelectedIP: "10.1.2.3", RoutedIP: "10.1.2.3", SelectionReason: "routed-match"},
+		},
+	}
+	factory := &fakeFactory{
+		selfClients:   []GuardSelfClient{target},
+		portalClients: []GuardPortalClient{portalClient},
+	}
+
+	result, err := GuardCycle(context.Background(), baseGuardEnv(factory, prober), GuardCycleInput{
+		DesiredProfile: "B",
+		ScheduleWindow: "day",
+	})
+	if err != nil {
+		t.Fatalf("expected same-cycle recovery, got %v", err)
+	}
+	if !result.InternetOK || !result.PortalLoginOK || result.RecoveryStep != "binding-repair-then-portal-login" {
+		t.Fatalf("expected same-cycle repair + retry success, got %#v", result)
+	}
+	if result.BindingRepair == nil || result.BindingRepair.Action != "attached" {
+		t.Fatalf("expected repair evidence, got %#v", result.BindingRepair)
+	}
+	if got, want := traceKinds(result.Trace), []GuardTraceKind{GuardTracePortalLogin, GuardTraceBindingRepair, GuardTracePortalLogin}; !equalTraceKinds(got, want) {
+		t.Fatalf("unexpected same-cycle trace order: got %v want %v", got, want)
+	}
+}
+
+func TestGuardCycleBindingAuditTracePrecedesRepairTrace(t *testing.T) {
+	target := &fakeSelfClient{binding: &kernel.OperatorBinding{}}
+	prober := &fakeProber{
+		checks: []probeResult{{ok: true, message: "internet ok"}},
+	}
+	factory := &fakeFactory{
+		selfClients: []GuardSelfClient{target},
+	}
+
+	result, err := GuardCycle(context.Background(), baseGuardEnv(factory, prober), GuardCycleInput{
+		DesiredProfile:    "W",
+		ScheduleWindow:    "night",
+		ForceBindingCheck: true,
+	})
+	if err != nil {
+		t.Fatalf("binding audit cycle: %v", err)
+	}
+	if got, want := traceKinds(result.Trace), []GuardTraceKind{GuardTraceBindingAudit, GuardTraceBindingRepair}; !equalTraceKinds(got, want) {
+		t.Fatalf("unexpected binding audit trace order: got %v want %v", got, want)
+	}
+}
+
+func traceKinds(trace []GuardTraceEvent) []GuardTraceKind {
+	out := make([]GuardTraceKind, 0, len(trace))
+	for _, event := range trace {
+		out = append(out, event.Kind)
+	}
+	return out
+}
+
+func equalTraceKinds(left, right []GuardTraceKind) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }

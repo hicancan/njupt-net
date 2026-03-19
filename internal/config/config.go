@@ -150,9 +150,6 @@ func (c *Config) applyDefaults() {
 	if c.Portal.ISP == "" {
 		c.Portal.ISP = "mobile"
 	}
-	if len(c.Portal.FallbackBaseURLs) == 0 {
-		c.Portal.FallbackBaseURLs = []string{"https://p.njupt.edu.cn:802/eportal/portal"}
-	}
 	if strings.TrimSpace(c.Guard.StateDir) == "" {
 		c.Guard.StateDir = filepath.Join("dist", "guard")
 	}

@@ -2,12 +2,14 @@ package guard
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/hicancan/njupt-net-cli/internal/kernel"
 	"github.com/hicancan/njupt-net-cli/internal/workflow"
 )
 
@@ -47,7 +49,7 @@ func NewRunner(settings Settings, store *StateStore, writer io.Writer) (*Runner,
 	return &Runner{
 		settings:   settings,
 		store:      store,
-		recorder:   NewRecorder(writer, eventWriter),
+		recorder:   NewRecorder(writer, eventWriter, settings.Location),
 		scheduler:  scheduler,
 		prober:     NewProbe(minDuration(settings.ProbeInterval, 1500*time.Millisecond)),
 		now:        time.Now,
@@ -228,7 +230,7 @@ func (r *Runner) executeCycle(ctx context.Context) (*Status, error) {
 	if !r.state.lastSwitchAt.IsZero() {
 		status.Cycle.LastSwitchAt = r.state.lastSwitchAt.Format(time.RFC3339)
 	}
-	r.recordCycle(decision, forceSwitch, forceBinding, cycle, status, err)
+	r.recordCycle(decision, forceSwitch, cycle, status, err)
 	return status, err
 }
 
@@ -262,7 +264,7 @@ func (r *Runner) emit(event Event) {
 	r.recorder.Emit(event)
 }
 
-func (r *Runner) recordCycle(decision Decision, forceSwitch, forceBinding bool, cycle *workflow.GuardCycleResult, status *Status, cycleErr error) {
+func (r *Runner) recordCycle(decision Decision, forceSwitch bool, cycle *workflow.GuardCycleResult, status *Status, cycleErr error) {
 	if status == nil {
 		return
 	}
@@ -271,6 +273,7 @@ func (r *Runner) recordCycle(decision Decision, forceSwitch, forceBinding bool, 
 		DesiredProfile: status.DesiredProfile,
 		ScheduleWindow: status.ScheduleWindow,
 	}
+	r.emitTraceEvents(base, forceSwitch, status, cycle)
 	if forceSwitch && status.Health == HealthHealthy {
 		event := base
 		event.Kind = EventScheduleSwitch
@@ -280,42 +283,6 @@ func (r *Runner) recordCycle(decision Decision, forceSwitch, forceBinding bool, 
 			InternetOK:    status.Connectivity.FinalOK,
 			PortalLoginOK: status.Portal.OK,
 			RecoveryStep:  status.Cycle.RecoveryStep,
-		}
-		r.emit(event)
-	}
-	if forceBinding {
-		event := base
-		event.Kind = EventBindingAudit
-		event.Message = status.Binding.Message
-		event.Details = BindingAuditEventDetails{
-			BindingOK:    status.Binding.OK,
-			RecoveryStep: status.Cycle.RecoveryStep,
-		}
-		r.emit(event)
-	}
-	if status.Portal.Attempted {
-		event := base
-		event.Kind = EventPortalLogin
-		event.Message = status.Portal.Message
-		event.Details = PortalLoginEventDetails{
-			InternetOK:    status.Connectivity.FinalOK,
-			PortalLoginOK: status.Portal.OK,
-			RecoveryStep:  status.Cycle.RecoveryStep,
-		}
-		r.emit(event)
-	}
-	if bindingRepairPerformed(cycle) {
-		event := base
-		event.Kind = EventBindingRepair
-		event.Message = status.Binding.Message
-		if cycle != nil && cycle.BindingRepair != nil {
-			event.Details = BindingRepairEventDetails{
-				Action:        cycle.BindingRepair.Action,
-				BindingOK:     status.Binding.OK,
-				HolderProfile: cycle.BindingRepair.HolderProfile,
-				RecoveryStep:  status.Cycle.RecoveryStep,
-				TargetProfile: cycle.BindingRepair.TargetProfile,
-			}
 		}
 		r.emit(event)
 	}
@@ -332,7 +299,7 @@ func (r *Runner) recordCycle(decision Decision, forceSwitch, forceBinding bool, 
 		if cycleErr != nil {
 			event.Details = DegradedEventDetails{
 				BindingOK:     status.Binding.OK,
-				Error:         cycleErr.Error(),
+				Error:         summarizeCycleError(cycleErr),
 				InternetOK:    status.Connectivity.FinalOK,
 				PortalLoginOK: status.Portal.OK,
 				RecoveryStep:  status.Cycle.RecoveryStep,
@@ -340,6 +307,81 @@ func (r *Runner) recordCycle(decision Decision, forceSwitch, forceBinding bool, 
 		}
 		r.emit(event)
 	}
+}
+
+func (r *Runner) emitTraceEvents(base Event, forceSwitch bool, status *Status, cycle *workflow.GuardCycleResult) {
+	if cycle == nil {
+		return
+	}
+	for _, trace := range cycle.Trace {
+		event, ok := traceToEvent(base, trace)
+		if !ok {
+			continue
+		}
+		if event.Kind == EventPortalLogin {
+			event.Message = portalTraceEventMessage(forceSwitch, status, trace)
+		}
+		r.emit(event)
+	}
+}
+
+func traceToEvent(base Event, trace workflow.GuardTraceEvent) (Event, bool) {
+	event := base
+	event.Message = trace.Message
+	switch trace.Kind {
+	case workflow.GuardTraceBindingAudit:
+		event.Kind = EventBindingAudit
+		event.Details = BindingAuditEventDetails{
+			BindingOK:    trace.BindingOK,
+			RecoveryStep: trace.RecoveryStep,
+		}
+		return event, true
+	case workflow.GuardTracePortalLogin:
+		event.Kind = EventPortalLogin
+		event.Details = PortalLoginEventDetails{
+			InternetOK:    trace.InternetOK,
+			PortalLoginOK: trace.PortalLoginOK,
+			RecoveryStep:  trace.RecoveryStep,
+		}
+		return event, true
+	case workflow.GuardTraceBindingRepair:
+		event.Kind = EventBindingRepair
+		event.Details = BindingRepairEventDetails{
+			Action:        trace.Action,
+			BindingOK:     trace.BindingOK,
+			HolderProfile: trace.HolderProfile,
+			RecoveryStep:  trace.RecoveryStep,
+			TargetProfile: trace.TargetProfile,
+		}
+		return event, true
+	default:
+		return Event{}, false
+	}
+}
+
+func portalTraceEventMessage(forceSwitch bool, status *Status, trace workflow.GuardTraceEvent) string {
+	if status == nil {
+		return ""
+	}
+	message := trace.Message
+	if !forceSwitch || status.Health != HealthHealthy || trace.PortalLoginOK || !status.Connectivity.FinalOK {
+		return message
+	}
+	if strings.TrimSpace(message) == "" {
+		return "proactive portal login did not complete, but connectivity remained healthy"
+	}
+	return "proactive portal login did not complete, but connectivity remained healthy: " + message
+}
+
+func summarizeCycleError(err error) string {
+	if err == nil {
+		return ""
+	}
+	var opErr *kernel.OpError
+	if errors.As(err, &opErr) && strings.TrimSpace(opErr.Message) != "" {
+		return opErr.Message
+	}
+	return err.Error()
 }
 
 func portalLoginAttemptedFromCycle(cycle *workflow.GuardCycleResult) bool {
@@ -362,14 +404,6 @@ func portalLoginAttemptedFromCycle(cycle *workflow.GuardCycleResult) bool {
 	default:
 		return true
 	}
-}
-
-func bindingRepairPerformed(cycle *workflow.GuardCycleResult) bool {
-	if cycle == nil || cycle.BindingRepair == nil {
-		return false
-	}
-	action := strings.TrimSpace(cycle.BindingRepair.Action)
-	return action != "" && action != "already-correct"
 }
 
 func deriveHealth(status *Status) Health {

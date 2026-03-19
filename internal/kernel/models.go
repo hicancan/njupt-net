@@ -54,10 +54,10 @@ const (
 
 // OperatorBinding models the four known binding fields.
 type OperatorBinding struct {
-	TelecomAccount  string `json:"telecomAccount,omitempty"`
-	TelecomPassword string `json:"telecomPassword,omitempty"`
-	MobileAccount   string `json:"mobileAccount,omitempty"`
-	MobilePassword  string `json:"mobilePassword,omitempty"`
+	TelecomAccount  string `json:"telecomAccount"`
+	TelecomPassword string `json:"telecomPassword"`
+	MobileAccount   string `json:"mobileAccount"`
+	MobilePassword  string `json:"mobilePassword"`
 }
 
 // ConsumeProtectState keeps the confirmed business truth fields for consume protect.
@@ -84,9 +84,9 @@ type PersonState struct {
 
 // BillListResult is shared by bill JSON list endpoints.
 type BillListResult struct {
-	Summary map[string]interface{}   `json:"summary,omitempty"`
-	Total   int                      `json:"total,omitempty"`
-	Rows    []map[string]interface{} `json:"rows,omitempty"`
+	Summary map[string]interface{}   `json:"summary"`
+	Total   int                      `json:"total"`
+	Rows    []map[string]interface{} `json:"rows"`
 }
 
 // Portal802Response captures the normalized 802 JSONP payload.

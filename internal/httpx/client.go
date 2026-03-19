@@ -68,6 +68,16 @@ func NewDefaultSessionClient(baseURL string) (*SessionClient, error) {
 	})
 }
 
+// ResetCookies drops the current cookie jar so follow-up requests observe a fresh session.
+func (c *SessionClient) ResetCookies() error {
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return fmt.Errorf("create cookie jar: %w", err)
+	}
+	c.http.Jar = jar
+	return nil
+}
+
 func (c *SessionClient) Get(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
 	reqURL, err := c.buildURL(path, opts.Query)
 	if err != nil {

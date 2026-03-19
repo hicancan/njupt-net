@@ -15,20 +15,18 @@ func (c *Client) GetPerson(ctx context.Context) (*kernel.OperationResult[kernel.
 	if err != nil {
 		return nil, err
 	}
-	if looksLikeLoginPage(resp.Body) {
+	if responseLooksLikeLogin(resp) {
 		return nil, &kernel.OpError{Op: "setting.person.get", Message: "personList returned login page", Err: kernel.ErrAuth}
 	}
 	state := &kernel.PersonState{
 		CSRFTOKEN: extractInputValue(doc, "csrftoken"),
-		Fields:    extractInputFields(doc),
-		RawHTML:   string(resp.Body),
+		Fields:    sanitizeSensitiveFields(extractInputFields(doc)),
 	}
 	return &kernel.OperationResult[kernel.PersonState]{
 		Level:   kernel.EvidenceGuarded,
 		Success: true,
 		Message: "personList loaded as guarded capability",
 		Data:    state,
-		Raw:     rawCapture(resp),
 	}, nil
 }
 
@@ -54,21 +52,19 @@ func (c *Client) UpdateUserSecurity(ctx context.Context, form map[string]string,
 	for k, v := range form {
 		payload[k] = v
 	}
-	resp, err := c.session.PostForm(ctx, updateUserSecurityPath, kernel.RequestOptions{Form: payload})
+	_, err = c.session.PostForm(ctx, updateUserSecurityPath, kernel.RequestOptions{Form: payload})
 	if err != nil {
 		return nil, &kernel.OpError{Op: "setting.person.update", Message: "submit failed", Err: err}
 	}
 
 	nextState := &kernel.PersonState{
 		CSRFTOKEN: state.Data.CSRFTOKEN,
-		Fields:    state.Data.Fields,
-		RawHTML:   string(resp.Body),
+		Fields:    sanitizeSensitiveFields(state.Data.Fields),
 	}
 	return &kernel.OperationResult[kernel.PersonState]{
 		Level:   kernel.EvidenceBlocked,
 		Success: false,
 		Message: "request submitted, but success semantics remain blocked by SSOT",
 		Data:    nextState,
-		Raw:     rawCapture(resp),
 	}, &kernel.OpError{Op: "setting.person.update", Message: "success path is blocked by SSOT", Err: kernel.ErrBlockedCapability, ProblemDetails: kernel.CapabilityProblemDetails{Capability: "setting.person.update", Reason: "success semantics blocked by SSOT"}}
 }

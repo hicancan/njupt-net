@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,6 +73,11 @@ func TestRunnerExecuteCycleEmitsStructuredEvents(t *testing.T) {
 			PortalLoginOK:      false,
 			PortalLoginMessage: "portal retry failed",
 			RecoveryStep:       "binding-repair-then-portal-login",
+			Trace: []workflow.GuardTraceEvent{
+				{Kind: workflow.GuardTraceBindingAudit, Message: "binding audit needed", BindingOK: false, RecoveryStep: "binding-repair-then-portal-login"},
+				{Kind: workflow.GuardTracePortalLogin, Message: "portal retry failed", InternetOK: false, PortalLoginOK: false, RecoveryStep: "binding-repair-then-portal-login"},
+				{Kind: workflow.GuardTraceBindingRepair, Message: "binding repair failed", BindingOK: false, RecoveryStep: "binding-repair-then-portal-login", Action: "target-bind-failed", TargetProfile: input.DesiredProfile},
+			},
 			BindingRepair: &workflow.BindingRepairResult{
 				TargetProfile: input.DesiredProfile,
 				Action:        "target-bind-failed",
@@ -96,11 +102,15 @@ func TestRunnerExecuteCycleEmitsStructuredEvents(t *testing.T) {
 		t.Fatalf("expected persisted probe selection, got %#v", status.Connectivity.Probe)
 	}
 
-	kinds := readEventKinds(t, store.CurrentEventPath())
+	events := readEvents(t, store.CurrentEventPath())
+	kinds := eventKinds(events)
 	for _, expected := range []EventKind{EventBindingAudit, EventPortalLogin, EventBindingRepair, EventDegraded} {
 		if !containsEventKind(kinds, expected) {
 			t.Fatalf("expected event kind %s in %v", expected, kinds)
 		}
+	}
+	if got, want := kinds, []EventKind{EventBindingAudit, EventPortalLogin, EventBindingRepair, EventDegraded}; !equalEventKinds(got, want) {
+		t.Fatalf("unexpected degraded event order: got %v want %v", got, want)
 	}
 	if containsEventKind(kinds, EventScheduleSwitch) {
 		t.Fatalf("did not expect completed schedule-switch event in degraded cycle: %v", kinds)
@@ -224,6 +234,81 @@ func TestRunnerHealthyCycleDoesNotEmitDegradedWhenPortalWasNotNeeded(t *testing.
 	}
 }
 
+func TestRunnerForceSwitchPortalFailureUsesNonDegradedEventMessage(t *testing.T) {
+	store, err := NewStateStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	logPath, err := store.NextLogPath()
+	if err != nil {
+		t.Fatalf("next log path: %v", err)
+	}
+	_ = logPath
+
+	runner, err := NewRunner(testGuardSettings(), store, io.Discard)
+	if err != nil {
+		t.Fatalf("new runner: %v", err)
+	}
+	defer runner.close()
+	runner.now = func() time.Time {
+		return time.Date(2026, 3, 19, 23, 45, 0, 0, time.FixedZone("CST", 8*3600))
+	}
+	runner.prober = fakeRunnerProber{
+		connectivityOK:  true,
+		connectivityMsg: "internet ok",
+		selection: workflow.LocalIPSelection{
+			SelectedIP:      "10.163.177.138",
+			RoutedIP:        "10.163.177.138",
+			SelectionReason: "matches-routed-ip,campus-ip,preferred-interface",
+		},
+	}
+	runner.guardCycle = func(ctx context.Context, env workflow.GuardEnvironment, input workflow.GuardCycleInput) (*workflow.GuardCycleResult, error) {
+		_ = ctx
+		_ = env
+		return &workflow.GuardCycleResult{
+			DesiredProfile:     input.DesiredProfile,
+			ScheduleWindow:     input.ScheduleWindow,
+			ForceSwitch:        input.ForceSwitch,
+			ForceBindingCheck:  input.ForceBindingCheck,
+			BindingOK:          true,
+			BindingMessage:     "target binding already correct",
+			InternetOK:         true,
+			InternetMessage:    "internet ok",
+			PortalLoginOK:      false,
+			PortalLoginMessage: "portal 802 login failed ret_code=2 msg=AC999",
+			RecoveryStep:       "portal-login",
+			Trace: []workflow.GuardTraceEvent{
+				{Kind: workflow.GuardTraceBindingAudit, Message: "target binding already correct", BindingOK: true, RecoveryStep: "portal-login"},
+				{Kind: workflow.GuardTracePortalLogin, Message: "portal 802 login failed ret_code=2 msg=AC999", InternetOK: true, PortalLoginOK: false, RecoveryStep: "portal-login"},
+			},
+		}, errors.New("portal noisy failure")
+	}
+
+	status, err := runner.executeCycle(context.Background())
+	if err == nil {
+		t.Fatal("expected cycle error")
+	}
+	if status.Health != HealthHealthy {
+		t.Fatalf("expected healthy status, got %#v", status.Health)
+	}
+
+	events := readEvents(t, store.CurrentEventPath())
+	kinds := eventKinds(events)
+	if got, want := kinds, []EventKind{EventBindingAudit, EventPortalLogin, EventScheduleSwitch}; !equalEventKinds(got, want) {
+		t.Fatalf("unexpected force-switch event order: got %v want %v", got, want)
+	}
+	for _, event := range events {
+		if event.Kind != EventPortalLogin {
+			continue
+		}
+		if !strings.Contains(event.Message, "connectivity remained healthy") {
+			t.Fatalf("unexpected portal event message: %#v", event)
+		}
+		return
+	}
+	t.Fatal("expected portal-login event")
+}
+
 func testGuardSettings() Settings {
 	location, _ := time.LoadLocation("Asia/Shanghai")
 	return Settings{
@@ -250,17 +335,30 @@ func testGuardSettings() Settings {
 
 func readEventKinds(t *testing.T, path string) []EventKind {
 	t.Helper()
+	return eventKinds(readEvents(t, path))
+}
+
+func readEvents(t *testing.T, path string) []Event {
+	t.Helper()
 	payload, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
 	lines := bytesToLines(payload)
-	kinds := make([]EventKind, 0, len(lines))
+	events := make([]Event, 0, len(lines))
 	for _, line := range lines {
 		var event Event
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			t.Fatalf("unmarshal event %q: %v", line, err)
 		}
+		events = append(events, event)
+	}
+	return events
+}
+
+func eventKinds(events []Event) []EventKind {
+	kinds := make([]EventKind, 0, len(events))
+	for _, event := range events {
 		kinds = append(kinds, event.Kind)
 	}
 	return kinds
@@ -291,4 +389,16 @@ func containsEventKind(kinds []EventKind, target EventKind) bool {
 		}
 	}
 	return false
+}
+
+func equalEventKinds(left, right []EventKind) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }

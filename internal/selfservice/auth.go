@@ -9,6 +9,10 @@ import (
 	"github.com/hicancan/njupt-net-cli/internal/kernel"
 )
 
+type sessionResetter interface {
+	ResetCookies() error
+}
+
 // Login executes the SSOT-authenticated login chain and verifies protected readability.
 func (c *Client) Login(ctx context.Context, account, password string) (*kernel.OperationResult[kernel.SelfLoginResult], error) {
 	if err := c.ensureSession("self.login"); err != nil {
@@ -75,7 +79,7 @@ func (c *Client) Login(ctx context.Context, account, password string) (*kernel.O
 	}
 
 	message := "login failed"
-	if strings.Contains(verifyResp.FinalURL, "/Self/login") || looksLikeLoginPage(verifyResp.Body) {
+	if responseLooksLikeLogin(verifyResp) {
 		message = extractLoginErrorMessage(verifyResp.Body)
 	}
 	opResult.Message = message
@@ -91,12 +95,29 @@ func (c *Client) Logout(ctx context.Context) (*kernel.OperationResult[kernel.Sel
 	if err != nil {
 		return nil, &kernel.OpError{Op: "self.logout", Message: "logout request failed", Err: err}
 	}
+	if resetter, ok := c.session.(sessionResetter); ok {
+		if resetErr := resetter.ResetCookies(); resetErr != nil {
+			return nil, &kernel.OpError{Op: "self.logout", Message: "reset session cookies failed", Err: resetErr}
+		}
+	}
 
 	status, statusErr := c.Status(ctx)
 	if statusErr == nil && status != nil && status.Data != nil && !status.Data.LoggedIn {
 		status.Message = "self logout succeeded"
 		status.Raw = rawCapture(resp)
 		return status, nil
+	}
+	if strings.Contains(strings.ToLower(strings.TrimSpace(resp.FinalURL)), "/self/") {
+		result := &kernel.OperationResult[kernel.SelfStatus]{
+			Level:   kernel.EvidenceGuarded,
+			Success: true,
+			Message: "self logout request completed; follow-up verification remained ambiguous",
+			Raw:     rawCapture(resp),
+		}
+		if status != nil {
+			result.Data = status.Data
+		}
+		return result, nil
 	}
 
 	result := &kernel.OperationResult[kernel.SelfStatus]{
@@ -127,8 +148,8 @@ func (c *Client) Status(ctx context.Context) (*kernel.OperationResult[kernel.Sel
 	}
 
 	status := &kernel.SelfStatus{
-		DashboardReadable: !looksLikeLoginPage(dashboardResp.Body),
-		ServiceReadable:   !looksLikeLoginPage(serviceResp.Body),
+		DashboardReadable: !responseLooksLikeLogin(dashboardResp),
+		ServiceReadable:   !responseLooksLikeLogin(serviceResp),
 	}
 	status.LoggedIn = status.DashboardReadable || status.ServiceReadable
 	if status.LoggedIn {

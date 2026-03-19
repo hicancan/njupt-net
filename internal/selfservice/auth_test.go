@@ -2,6 +2,7 @@ package selfservice
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -97,6 +98,7 @@ func TestStatusDetectsLoggedOutSession(t *testing.T) {
 
 func TestLogoutVerifiesLoggedOutState(t *testing.T) {
 	statusReads := 0
+	resetCalled := false
 	client := NewClient(&mockSessionClient{
 		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
 			_ = ctx
@@ -112,6 +114,10 @@ func TestLogoutVerifiesLoggedOutState(t *testing.T) {
 				return nil, nil
 			}
 		},
+		resetFn: func() error {
+			resetCalled = true
+			return nil
+		},
 	})
 
 	result, err := client.Logout(context.Background())
@@ -120,6 +126,9 @@ func TestLogoutVerifiesLoggedOutState(t *testing.T) {
 	}
 	if result == nil || result.Data == nil || result.Data.LoggedIn {
 		t.Fatalf("unexpected logout result: %#v", result)
+	}
+	if !resetCalled {
+		t.Fatal("expected session reset after logout")
 	}
 }
 
@@ -146,6 +155,59 @@ func TestLogoutVerificationFailure(t *testing.T) {
 	}
 	if result == nil || result.Success {
 		t.Fatalf("unexpected logout failure result: %#v", result)
+	}
+}
+
+func TestLogoutReturnsGuardedSuccessWhenRedirectSuggestsLogout(t *testing.T) {
+	client := NewClient(&mockSessionClient{
+		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
+			_ = ctx
+			_ = opts
+			switch path {
+			case logoutPath:
+				return &kernel.SessionResponse{StatusCode: 302, FinalURL: "http://10.10.244.240:8080/Self/"}, nil
+			case dashboardPath, servicePath:
+				return &kernel.SessionResponse{StatusCode: 200, Body: fixture(t, "dashboard_page.html")}, nil
+			default:
+				t.Fatalf("unexpected get path: %s", path)
+				return nil, nil
+			}
+		},
+	})
+
+	result, err := client.Logout(context.Background())
+	if err != nil {
+		t.Fatalf("expected guarded success, got %v", err)
+	}
+	if result == nil || !result.Success || result.Level != kernel.EvidenceGuarded {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestLogoutResetFailure(t *testing.T) {
+	client := NewClient(&mockSessionClient{
+		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
+			_ = ctx
+			_ = opts
+			if path != logoutPath {
+				t.Fatalf("unexpected get path: %s", path)
+			}
+			return &kernel.SessionResponse{StatusCode: 302, FinalURL: "/Self/"}, nil
+		},
+		resetFn: func() error {
+			return errors.New("jar reset failed")
+		},
+	})
+
+	result, err := client.Logout(context.Background())
+	if err == nil {
+		t.Fatal("expected reset failure")
+	}
+	if result != nil {
+		t.Fatalf("expected nil result, got %#v", result)
+	}
+	if !strings.Contains(err.Error(), "reset session cookies failed") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

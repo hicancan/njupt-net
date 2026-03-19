@@ -58,10 +58,30 @@ func (c *Client) BindOperator(ctx context.Context, target map[string]string, rea
 	if err != nil {
 		return nil, &kernel.OpError{Op: "service.binding.set", Message: "submit failed", Err: err}
 	}
+	submitMessage := extractBusinessMessage(resp.Body)
 
 	writeResult := &kernel.WriteBackResult{
 		PreState:    kernel.CloneStateMap(preState),
 		TargetState: kernel.CloneStateMap(target),
+	}
+	if submitMessage != "" && !readback {
+		return &kernel.OperationResult[kernel.WriteBackResult]{
+				Level:   kernel.EvidenceConfirmed,
+				Success: false,
+				Message: submitMessage,
+				Data:    writeResult,
+				Raw:     rawCapture(resp),
+				Problems: []kernel.Problem{kernel.NormalizeProblem(kernel.Problem{
+					Code:    kernel.ProblemBusinessFailed,
+					Message: submitMessage,
+					Details: kernel.StringProblemDetails{Value: submitMessage},
+				})},
+			}, &kernel.OpError{
+				Op:             "service.binding.set",
+				Message:        submitMessage,
+				Err:            kernel.ErrBusinessFailed,
+				ProblemDetails: kernel.StringProblemDetails{Value: submitMessage},
+			}
 	}
 
 	if readback {
@@ -72,6 +92,25 @@ func (c *Client) BindOperator(ctx context.Context, target map[string]string, rea
 		writeResult.PostState = kernel.CloneStateMap(postState)
 		for field, expected := range target {
 			if postState[field] != expected {
+				if submitMessage != "" {
+					return &kernel.OperationResult[kernel.WriteBackResult]{
+							Level:   kernel.EvidenceConfirmed,
+							Success: false,
+							Message: submitMessage,
+							Data:    writeResult,
+							Raw:     rawCapture(resp),
+							Problems: []kernel.Problem{kernel.NormalizeProblem(kernel.Problem{
+								Code:    kernel.ProblemBusinessFailed,
+								Message: submitMessage,
+								Details: kernel.StringProblemDetails{Value: submitMessage},
+							})},
+						}, &kernel.OpError{
+							Op:             "service.binding.set",
+							Message:        submitMessage,
+							Err:            kernel.ErrBusinessFailed,
+							ProblemDetails: kernel.StringProblemDetails{Value: submitMessage},
+						}
+				}
 				return &kernel.OperationResult[kernel.WriteBackResult]{
 						Level:   kernel.EvidenceConfirmed,
 						Success: false,
@@ -249,7 +288,7 @@ func (c *Client) GetMacList(ctx context.Context) (*kernel.OperationResult[kernel
 	if err != nil {
 		return nil, &kernel.OpError{Op: "service.mac.list", Message: "myMac preflight failed", Err: err}
 	}
-	if looksLikeLoginPage(preflight.Body) {
+	if responseLooksLikeLogin(preflight) {
 		return nil, &kernel.OpError{Op: "service.mac.list", Message: "myMac returned login page", Err: kernel.ErrAuth}
 	}
 	resp, err := c.session.Get(ctx, macListPath, kernel.RequestOptions{Query: map[string]string{
@@ -297,7 +336,7 @@ func (c *Client) getOperatorState(ctx context.Context) (string, map[string]strin
 	if err != nil {
 		return "", nil, nil, err
 	}
-	if looksLikeLoginPage(resp.Body) {
+	if responseLooksLikeLogin(resp) {
 		return "", nil, resp, &kernel.OpError{Op: "service.binding.state", Message: "operatorId returned login page", Err: kernel.ErrAuth}
 	}
 	token, state := parseOperatorState(doc)
@@ -312,7 +351,7 @@ func (c *Client) readConsumeProtect(ctx context.Context) (*kernel.ConsumeProtect
 	if err != nil {
 		return nil, nil, err
 	}
-	if looksLikeLoginPage(resp.Body) {
+	if responseLooksLikeLogin(resp) {
 		return nil, resp, &kernel.OpError{Op: "service.consume.state", Message: "consumeProtect returned login page", Err: kernel.ErrAuth}
 	}
 

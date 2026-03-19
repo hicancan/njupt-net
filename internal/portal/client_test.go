@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hicancan/njupt-net-cli/internal/kernel"
@@ -91,6 +92,77 @@ func TestLogin802RetCode1ReturnsGuardedError(t *testing.T) {
 	}
 }
 
+func TestLogin802AC999ReturnsGuardedSuccess(t *testing.T) {
+	client := NewClient(&mockSessionClient{
+		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
+			_ = ctx
+			_ = path
+			_ = opts
+			return &kernel.SessionResponse{StatusCode: 200, Body: []byte(`dr1003({"result":0,"msg":"AC999","ret_code":2});`)}, nil
+		},
+	}, "https://portal.example", "")
+
+	result, err := client.Login802(context.Background(), "user", "pass", "10.0.0.1", "mobile")
+	if err != nil {
+		t.Fatalf("expected guarded success, got %v", err)
+	}
+	if result == nil || !result.Success || result.Level != kernel.EvidenceGuarded {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if result.Message != "portal 802 reports already online (AC999)" {
+		t.Fatalf("unexpected message: %#v", result)
+	}
+}
+
+func TestLogin802AggregatesTransportFailuresAcrossEndpoints(t *testing.T) {
+	client := NewClient(&mockSessionClient{
+		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
+			_ = ctx
+			_ = opts
+			return nil, errors.New("dial failed")
+		},
+	}, "https://10.10.244.11:802/eportal/portal", "https://p.njupt.edu.cn:802/eportal/portal")
+
+	result, err := client.Login802(context.Background(), "user", "pass", "10.0.0.1", "mobile")
+	if err == nil {
+		t.Fatal("expected transport failure")
+	}
+	if result != nil {
+		t.Fatalf("expected nil result on transport aggregate failure, got %#v", result)
+	}
+	if !errors.Is(err, kernel.ErrPortal) {
+		t.Fatalf("expected ErrPortal classification, got %v", err)
+	}
+
+	problems := kernel.ProblemsFromError(err)
+	if len(problems) != 1 {
+		t.Fatalf("unexpected problems: %#v", problems)
+	}
+	if problems[0].Code != kernel.ProblemPortalRequestFailed {
+		t.Fatalf("unexpected problem code: %#v", problems[0])
+	}
+	details, ok := problems[0].Details.(kernel.PortalProblemDetails)
+	if !ok {
+		t.Fatalf("expected typed portal details, got %#v", problems[0].Details)
+	}
+	if len(details.Attempts) != 2 {
+		t.Fatalf("expected 2 attempted endpoints, got %#v", details)
+	}
+	if details.Attempts[0].Endpoint == "" || details.Attempts[1].Endpoint == "" {
+		t.Fatalf("expected endpoint list in details, got %#v", details)
+	}
+	if !strings.Contains(err.Error(), "portal 802 transport attempts failed") {
+		t.Fatalf("unexpected aggregate message: %v", err)
+	}
+}
+
+func TestNewClientLeavesFallbackEmptyWhenNotConfigured(t *testing.T) {
+	client := NewClient(&mockSessionClient{}, "https://10.10.244.11:802/eportal/portal", "")
+	if client.fallbackBaseURL802 != "" {
+		t.Fatalf("expected empty fallback endpoint, got %q", client.fallbackBaseURL802)
+	}
+}
+
 func TestLogout802Success(t *testing.T) {
 	client := NewClient(&mockSessionClient{
 		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
@@ -118,7 +190,7 @@ func TestLogin801ReturnsGuardedFallback(t *testing.T) {
 			_ = ctx
 			_ = path
 			_ = opts
-			return &kernel.SessionResponse{StatusCode: 200, Body: []byte("legacy body")}, nil
+			return &kernel.SessionResponse{StatusCode: 200, Body: []byte(`<!DOCTYPE html><html><head><title>EPortal</title></head><body><div id=app></div><script src=/eportal/public/static/js/app.bb55e182.js></script></body></html>`)}, nil
 		},
 	}, "https://portal.example", "")
 
@@ -132,9 +204,31 @@ func TestLogin801ReturnsGuardedFallback(t *testing.T) {
 	if result == nil || result.Level != kernel.EvidenceGuarded {
 		t.Fatalf("unexpected result: %#v", result)
 	}
+	if detected, ok := (*result.Data)["genericShellDetected"].(bool); !ok || !detected {
+		t.Fatalf("expected generic shell marker, got %#v", result.Data)
+	}
 }
 
-func TestLogout801ReturnsGuardedFallback(t *testing.T) {
+func TestLogout801ReturnsConfirmedSuccess(t *testing.T) {
+	client := NewClient(&mockSessionClient{
+		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
+			_ = ctx
+			_ = path
+			_ = opts
+			return &kernel.SessionResponse{StatusCode: 200, Body: []byte("<html><body>Logout succeed.</body></html>")}, nil
+		},
+	}, "https://portal.example", "")
+
+	result, err := client.Logout801(context.Background(), "10.0.0.1")
+	if err != nil {
+		t.Fatalf("expected confirmed success, got %v", err)
+	}
+	if result == nil || result.Level != kernel.EvidenceConfirmed || !result.Success {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestLogout801ReturnsGuardedFallbackWithoutSuccessMarker(t *testing.T) {
 	client := NewClient(&mockSessionClient{
 		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
 			_ = ctx

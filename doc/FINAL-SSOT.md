@@ -80,12 +80,14 @@
 3. `changeConsumeProtect` 存在真实成功写路径，且可恢复
 4. `oprateMauthAction` 为真 toggle
 5. `oprateMauthAction` 会话失效边界明确：登出后跳登录页 / `refreshMauthType` 返回登录页 HTML
-6. Portal 801 多参数变体同体征，机器可判定信号不足，**只能作为 fallback**
-7. `refreshaccount` 为正常空响应，不应依赖为结构化数据接口
+6. Portal 802 `ret_code=2 / AC999` 可稳定观察到“已在线 / 重复登录”语义，应作为 guarded success 而非未知错误
+7. Portal 801 注销页若 body 含 `Logout succeed.`，可作为稳定成功标记
+8. Portal 801 登录返回通用 EPortal 壳页面时，缺乏稳定机器可判定成功信号，只能作为 guarded fallback
+9. `refreshaccount` 为正常空响应，不应依赖为结构化数据接口
 
 ### 2.2 Guarded（可实现，但必须保守处理）
 1. Portal 802 当前稳定可复现 `ret_code=1` 类错误归并
-2. `tooffline` 接口存在、参数明确，但当前账号无在线会话，**尚未取得 success=true 正样本**
+2. `tooffline` 接口存在、参数明确，请求成功后必须依赖有界延迟 readback 判定；在线环境下仍可能真实失败
 3. `updateUserSecurity` 已确认两类失败语义：
    - 前端校验拦截（`Not valid!`）
    - 后端拒绝（`403`）
@@ -94,8 +96,7 @@
 ### 2.3 Blocked（接口存在，但成功语义 / 边界仍受环境阻塞）
 1. Portal 802 `ret_code=3`：未复现
 2. Portal 802 `ret_code=8`：未复现
-3. `tooffline` 成功正样本：当前无可踢 session
-4. `updateUserSecurity` 真实成功写路径：低风险可控正样本未拿到
+3. `updateUserSecurity` 真实成功写路径：低风险可控正样本未拿到
 
 ### 2.4 实现时的硬性处理
 - Confirmed：可作为内核确定能力
@@ -386,7 +387,9 @@ Self 接口返回类型不统一，必须采用 **endpoint 级 parser registry**
 - 状态：
   - **Guarded / Blocked**
 - 当前结论：
-  - 接口存在；无会话样本时无法拿到 success=true 正样本
+  - 接口存在；请求体里的 `success=true` 不能直接当作业务成功
+  - 必须结合后续有界延迟 `getOnlineList` 回读判定
+  - 若目标 session 消失且出现新的 follow-up session，视为 guarded success（目标会话已被踢下线，后续已自动重连）
 - 实现要求：
   - 只有在 getOnlineList 返回可踢 session 时才尝试
   - 结果需结合后续 getOnlineList 回读判定
@@ -545,6 +548,7 @@ Self 接口返回类型不统一，必须采用 **endpoint 级 parser registry**
 #### 实现要求
 - 可以暴露 raw / guarded 命令
 - 不应承诺“修改个人资料成功”
+- 标准 JSON 结果不得暴露原始 personList HTML 或密码类字段
 - 默认建议不作为 CLI 核心主路径能力
 
 ---
@@ -724,14 +728,14 @@ Self 接口返回类型不统一，必须采用 **endpoint 级 parser registry**
 - `body_hash` 一致
 
 因此：
-- 801 **缺乏稳定机器可判定的成功/失败信号**
-- 不适合作为主工作路径
-- 仅作为 fallback / legacy compatibility
+- `Logout` 若 body 含 `Logout succeed.`，可视为 **Confirmed success**
+- `Login` 返回通用 EPortal 壳页面时，**缺乏稳定机器可判定的成功/失败信号**
+- 801 不适合作为主工作路径，仍应作为 fallback / legacy compatibility
 
 ### 实现要求
 - 仅在 802 不可用且用户显式允许时尝试
-- 返回 raw HTML 诊断信息
-- 不依赖 801 body 判断成功
+- 801 Login 返回 raw / guarded 诊断信息，不依赖壳页面 body 判断成功
+- 801 Logout 可在稳定成功标记出现时返回 confirmed success
 
 ---
 
@@ -1017,8 +1021,7 @@ njupt-net
 
 1. Portal 802 `ret_code=3` 的触发条件
 2. Portal 802 `ret_code=8` 的触发条件
-3. `tooffline` 的 success=true 正样本
-4. `updateUserSecurity` 的真实成功写路径
+3. `updateUserSecurity` 的真实成功写路径
 
 这些能力的处理策略：
 - 可以暴露接口与 raw 诊断

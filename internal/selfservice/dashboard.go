@@ -12,6 +12,10 @@ import (
 )
 
 var mauthTogglePause = time.Second
+var (
+	offlineReadbackPause    = time.Second
+	offlineReadbackAttempts = 3
+)
 
 // GetOnlineList returns the current online session list.
 func (c *Client) GetOnlineList(ctx context.Context) (*kernel.OperationResult[[]kernel.OnlineSession], error) {
@@ -101,7 +105,7 @@ func (c *Client) GetMauthState(ctx context.Context) (*kernel.OperationResult[ker
 	if err != nil {
 		return nil, &kernel.OpError{Op: "dashboard.mauth.get", Message: "request failed", Err: err}
 	}
-	if looksLikeLoginPage(resp.Body) {
+	if responseLooksLikeLogin(resp) {
 		state := kernel.MauthUnknown
 		return &kernel.OperationResult[kernel.MauthState]{
 			Level:   kernel.EvidenceConfirmed,
@@ -214,35 +218,87 @@ func (c *Client) ForceOffline(ctx context.Context, sessionID string) (*kernel.Op
 		return nil, &kernel.OpError{Op: "dashboard.offline", Message: "parse offline response failed", Err: err}
 	}
 
-	post, err := c.GetOnlineList(ctx)
-	if err != nil {
-		return nil, err
+	stillExists := true
+	replacementDetected := false
+	attempts := offlineReadbackAttempts
+	if attempts < 1 {
+		attempts = 1
 	}
-	stillExists := false
-	if post.Data != nil {
-		for _, row := range *post.Data {
-			if row.SessionID == sessionID {
-				stillExists = true
-				break
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if attempt > 1 && offlineReadbackPause > 0 {
+			time.Sleep(offlineReadbackPause)
+		}
+		post, err := c.GetOnlineList(ctx)
+		if err != nil {
+			return nil, err
+		}
+		stillExists, replacementDetected = offlineSessionState(post.Data, sessionID)
+		if !stillExists {
+			data := map[string]any{
+				"responseSuccess":            boolFromJSON(body["success"]),
+				"sessionStillPresent":        false,
+				"replacementSessionDetected": replacementDetected,
+				"verificationAttempts":       attempt,
 			}
+			message := "target session removed from online list after guarded offline request"
+			if replacementDetected {
+				message = "target session removed from online list; follow-up session detected"
+			}
+			return &kernel.OperationResult[map[string]any]{
+				Level:   kernel.EvidenceGuarded,
+				Success: true,
+				Message: message,
+				Data:    &data,
+				Raw:     rawCapture(resp),
+			}, nil
 		}
 	}
 
 	data := map[string]any{
-		"responseSuccess":     boolFromJSON(body["success"]),
-		"sessionStillPresent": stillExists,
-	}
-
-	success := !stillExists
-	message := "guarded offline request completed"
-	if success {
-		message = "session removed from online list after guarded offline request"
+		"responseSuccess":            boolFromJSON(body["success"]),
+		"sessionStillPresent":        true,
+		"replacementSessionDetected": replacementDetected,
+		"verificationAttempts":       attempts,
 	}
 	return &kernel.OperationResult[map[string]any]{
-		Level:   kernel.EvidenceGuarded,
-		Success: success,
-		Message: message,
-		Data:    &data,
-		Raw:     rawCapture(resp),
-	}, nil
+			Level:   kernel.EvidenceGuarded,
+			Success: false,
+			Message: "target session still present after guarded offline request verification",
+			Data:    &data,
+			Raw:     rawCapture(resp),
+			Problems: []kernel.Problem{kernel.NormalizeProblem(kernel.Problem{
+				Code:    kernel.ProblemReadbackMismatch,
+				Message: "target session still present after guarded offline request verification",
+				Details: kernel.StateComparisonProblemDetails{
+					Field:    "sessionId",
+					Expected: "<removed>",
+					Actual:   sessionID,
+				},
+			})},
+		}, &kernel.OpError{
+			Op:      "dashboard.offline",
+			Message: "target session still present after guarded offline request verification",
+			Err:     kernel.ErrReadBackMismatch,
+			ProblemDetails: kernel.StateComparisonProblemDetails{
+				Field:    "sessionId",
+				Expected: "<removed>",
+				Actual:   sessionID,
+			},
+		}
+}
+
+func offlineSessionState(data *[]kernel.OnlineSession, sessionID string) (stillExists bool, replacementDetected bool) {
+	if data == nil {
+		return false, false
+	}
+	for _, row := range *data {
+		if row.SessionID == sessionID {
+			stillExists = true
+			continue
+		}
+		if strings.TrimSpace(row.SessionID) != "" {
+			replacementDetected = true
+		}
+	}
+	return stillExists, replacementDetected
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/hicancan/njupt-net-cli/internal/kernel"
 )
 
 func looksLikeLoginPage(body []byte) bool {
@@ -25,6 +26,16 @@ func looksLikeLoginPage(body []byte) bool {
 		return true
 	}
 	return false
+}
+
+func responseLooksLikeLogin(resp *kernel.SessionResponse) bool {
+	if resp == nil {
+		return false
+	}
+	if strings.Contains(strings.ToLower(strings.TrimSpace(resp.FinalURL)), "/self/login") {
+		return true
+	}
+	return looksLikeLoginPage(resp.Body)
 }
 
 func extractInputValue(doc *goquery.Document, name string) string {

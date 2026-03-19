@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 )
@@ -102,6 +103,37 @@ func TestNormalizeProblemUpgradesLegacyPortalDetails(t *testing.T) {
 	}
 }
 
+func TestNormalizeProblemKeepsPortalAttemptDetails(t *testing.T) {
+	problem := NormalizeProblem(Problem{
+		Code:    ProblemPortalRequestFailed,
+		Message: "transport failed",
+		Details: map[string]any{
+			"endpoint": "https://10.10.244.11:802/eportal/portal/login",
+			"attempts": []any{
+				map[string]any{
+					"endpoint": "https://10.10.244.11:802/eportal/portal/login",
+					"error":    "dial tcp timeout",
+				},
+				map[string]any{
+					"endpoint": "https://p.njupt.edu.cn:802/eportal/portal/login",
+					"error":    "lookup failed",
+				},
+			},
+		},
+	})
+
+	details, ok := problem.Details.(PortalProblemDetails)
+	if !ok {
+		t.Fatalf("expected typed portal details, got %#v", problem.Details)
+	}
+	if len(details.Attempts) != 2 {
+		t.Fatalf("expected portal attempts to survive normalization, got %#v", details)
+	}
+	if details.Attempts[1].Endpoint == "" || details.Attempts[1].Error == "" {
+		t.Fatalf("unexpected portal attempt details: %#v", details)
+	}
+}
+
 func TestNormalizeProblemUpgradesLegacyStateComparisonDetails(t *testing.T) {
 	problem := NormalizeProblem(Problem{
 		Code: ProblemReadbackMismatch,
@@ -152,5 +184,31 @@ func TestNormalizeProblemUpgradesCapabilityDetails(t *testing.T) {
 	}
 	if details.Capability != "dashboard.offline" || details.Reason != "target session not present" {
 		t.Fatalf("unexpected capability details: %#v", details)
+	}
+}
+
+func TestOperatorBindingJSONKeepsEmptyFields(t *testing.T) {
+	payload, err := json.Marshal(OperatorBinding{})
+	if err != nil {
+		t.Fatalf("marshal operator binding: %v", err)
+	}
+	want := `{"telecomAccount":"","telecomPassword":"","mobileAccount":"","mobilePassword":""}`
+	if string(payload) != want {
+		t.Fatalf("unexpected operator binding json:\n got %s\nwant %s", payload, want)
+	}
+}
+
+func TestBillListResultJSONKeepsEmptyContainers(t *testing.T) {
+	payload, err := json.Marshal(BillListResult{
+		Summary: map[string]interface{}{},
+		Total:   0,
+		Rows:    []map[string]interface{}{},
+	})
+	if err != nil {
+		t.Fatalf("marshal bill list: %v", err)
+	}
+	want := `{"summary":{},"total":0,"rows":[]}`
+	if string(payload) != want {
+		t.Fatalf("unexpected bill list json:\n got %s\nwant %s", payload, want)
 	}
 }

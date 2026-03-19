@@ -249,9 +249,6 @@ bash ./scripts/build.sh all
   },
   "portal": {
     "baseURL": "https://10.10.244.11:802/eportal/portal",
-    "fallbackBaseURLs": [
-      "https://p.njupt.edu.cn:802/eportal/portal"
-    ],
     "isp": "mobile",
     "timeoutSeconds": 8,
     "insecureTLS": true
@@ -270,6 +267,8 @@ bash ./scripts/build.sh all
   }
 }
 ```
+
+如需额外的 802 fallback，可显式配置 `portal.fallbackBaseURLs`；路由器部署默认只依赖直连 IP，不再隐式补域名 fallback。
 
 ### 3. 常用命令
 
@@ -324,7 +323,7 @@ njupt-net guard status --output json
 /etc/init.d/njupt-net status
 /etc/init.d/njupt-net restart
 /etc/init.d/njupt-net stop
-/usr/bin/njupt-net --config /etc/njupt-net/credentials.json --output json guard status --state-dir /tmp/njupt-net-guard
+/usr/bin/njupt-net --config /root/credentials.json --output json guard status --state-dir /tmp/njupt-net-guard
 logread -e njupt-net
 cat /tmp/njupt-net-guard/status.json
 ```
@@ -346,6 +345,7 @@ cat /tmp/njupt-net-guard/status.json
 - `message`
 - 人类可读终端文本
 - README 中的解释性示例
+- 标准 `setting person` 结果中的原始 HTML；敏感页面内容仅保留在受控 raw / 调试路径中
 
 ### 顶层结果结构
 

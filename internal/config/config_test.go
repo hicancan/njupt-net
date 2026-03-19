@@ -43,8 +43,8 @@ func TestLoad_UsesEnvAndDefaults(t *testing.T) {
 	if cfg.Portal.ISP != "telecom" {
 		t.Fatalf("expected env ISP override, got %q", cfg.Portal.ISP)
 	}
-	if len(cfg.Portal.FallbackBaseURLs) == 0 {
-		t.Fatal("expected default portal fallback")
+	if len(cfg.Portal.FallbackBaseURLs) != 0 {
+		t.Fatalf("expected no default portal fallback, got %#v", cfg.Portal.FallbackBaseURLs)
 	}
 	if cfg.Guard.StateDir != filepath.Join("dist", "guard") {
 		t.Fatalf("expected default guard state dir, got %q", cfg.Guard.StateDir)

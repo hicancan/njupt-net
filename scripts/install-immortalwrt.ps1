@@ -26,15 +26,16 @@ param(
 	[string]$User = "root",
 	[string]$BinaryPath = ".\dist\njupt-net-linux-arm64",
 	[string]$ConfigPath = ".\credentials.json",
-	[string]$RemoteBinaryPath = "/usr/bin/njupt-net",
-	[string]$RemoteConfigPath = "/etc/njupt-net/credentials.json",
-	[string]$StateDir = "/tmp/njupt-net-guard",
-	[string]$ServiceName = "njupt-net",
-	[string]$RemoteTempDir = "/tmp/njupt-net-deploy",
-	[switch]$Build,
-	[switch]$SkipConfigUpload,
-	[switch]$SkipStart,
-	[switch]$SkipEnable
+    [string]$RemoteBinaryPath = "/usr/bin/njupt-net",
+    [string]$RemoteConfigPath = "/root/credentials.json",
+    [string]$StateDir = "/tmp/njupt-net-guard",
+    [string]$ServiceName = "njupt-net",
+    [string]$RemoteTempDir = "/tmp/njupt-net-deploy",
+    [bool]$UseInsecureTLS = $true,
+    [switch]$Build,
+    [switch]$SkipConfigUpload,
+    [switch]$SkipStart,
+    [switch]$SkipEnable
 )
 
 Set-StrictMode -Version Latest
@@ -91,10 +92,28 @@ function Invoke-RemoteScript {
 		[Parameter(Mandatory = $true)][string]$Target,
 		[Parameter(Mandatory = $true)][string]$Script
 	)
-	$Script | & $script:SshExe $Target "sh -s"
-	if ($LASTEXITCODE -ne 0) {
-		throw "remote install script failed"
+	$tempScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) "njupt-net-remote-install.sh"
+	$remoteTempScript = "/tmp/njupt-net-remote-install.sh"
+	try {
+		Write-AsciiFile -Path $tempScriptPath -Content $Script
+		Copy-SCP -Source $tempScriptPath -Destination "${Target}:$remoteTempScript"
+		& $script:SshExe $Target "tr -d '\r' < $remoteTempScript > ${remoteTempScript}.run && sh ${remoteTempScript}.run; status=`$?; rm -f $remoteTempScript ${remoteTempScript}.run; exit `$status"
+		if ($LASTEXITCODE -ne 0) {
+			throw "remote install script failed"
+		}
 	}
+	finally {
+		Remove-Item $tempScriptPath -ErrorAction SilentlyContinue
+	}
+}
+
+function Write-AsciiFile {
+	param(
+		[Parameter(Mandatory = $true)][string]$Path,
+		[Parameter(Mandatory = $true)][string]$Content
+	)
+	$encoding = [System.Text.ASCIIEncoding]::new()
+	[System.IO.File]::WriteAllText($Path, $Content, $encoding)
 }
 
 Write-Host "==> Preparing local environment" -ForegroundColor Cyan
@@ -121,6 +140,11 @@ $RemoteConfigDir = [System.IO.Path]::GetDirectoryName($RemoteConfigPath).Replace
 $RemoteInitPath = "/etc/init.d/$ServiceName"
 $RemoteTempBinary = "$RemoteTempDir/njupt-net"
 $RemoteTempConfig = "$RemoteTempDir/credentials.json"
+$RemoteTempInit = "$RemoteTempDir/$ServiceName.init"
+$ServiceCommandLine = '    procd_set_param command "$PROG" --config "$CONFIG" --yes guard run --state-dir "$STATE_DIR"'
+if ($UseInsecureTLS) {
+	$ServiceCommandLine = '    procd_set_param command "$PROG" --config "$CONFIG" --insecure-tls --yes guard run --state-dir "$STATE_DIR"'
+}
 
 Write-Host "==> Probing router architecture" -ForegroundColor Cyan
 $arch = & $script:SshExe $Target "uname -m"
@@ -151,14 +175,14 @@ USE_PROCD=1
 START=95
 STOP=10
 
-PROG=$RemoteBinaryPath
-CONFIG=$RemoteConfigPath
-STATE_DIR=$StateDir
+PROG="$RemoteBinaryPath"
+CONFIG="$RemoteConfigPath"
+STATE_DIR="$StateDir"
 
 start_service() {
-    mkdir -p "\$STATE_DIR"
+    mkdir -p "`$STATE_DIR"
     procd_open_instance
-    procd_set_param command "\$PROG" --config "\$CONFIG" --yes guard run --state-dir "\$STATE_DIR" --replace
+$ServiceCommandLine
     procd_set_param respawn 3600 5 5
     procd_set_param stdout 1
     procd_set_param stderr 1
@@ -166,19 +190,26 @@ start_service() {
 }
 "@
 
+$LocalInitPath = Join-Path ([System.IO.Path]::GetTempPath()) "$ServiceName.init"
+Write-AsciiFile -Path $LocalInitPath -Content $ServiceScript
+
+Write-Host "==> Uploading init script" -ForegroundColor Cyan
+Copy-SCP -Source $LocalInitPath -Destination "${Target}:$RemoteTempInit"
+
 $RemoteScript = @"
 set -eu
 
-install -m 0755 $RemoteTempBinary $RemoteBinaryPath
+mkdir -p $RemoteBinaryDir $StateDir
+cp $RemoteTempBinary $RemoteBinaryPath
+chmod 0755 $RemoteBinaryPath
 
 if [ -f $RemoteTempConfig ]; then
-    install -m 0600 $RemoteTempConfig $RemoteConfigPath
+    mkdir -p $RemoteConfigDir
+    cp $RemoteTempConfig $RemoteConfigPath
+    chmod 0600 $RemoteConfigPath
 fi
 
-cat > $RemoteInitPath <<'EOF'
-$ServiceScript
-EOF
-
+tr -d '\r' < $RemoteTempInit > $RemoteInitPath
 chmod 0755 $RemoteInitPath
 
 if [ ! -f $RemoteConfigPath ]; then
@@ -193,7 +224,10 @@ if [ "$($SkipEnable.IsPresent.ToString().ToLower())" = "false" ]; then
 fi
 
 if [ "$($SkipStart.IsPresent.ToString().ToLower())" = "false" ]; then
-    $RemoteInitPath restart
+    $RemoteInitPath restart || {
+        $RemoteInitPath stop || true
+        $RemoteInitPath start
+    }
     sleep 4
 fi
 
@@ -211,7 +245,12 @@ echo "service: $RemoteInitPath"
 "@
 
 Write-Host "==> Installing service on router" -ForegroundColor Cyan
-Invoke-RemoteScript -Target $Target -Script $RemoteScript
+try {
+	Invoke-RemoteScript -Target $Target -Script $RemoteScript
+}
+finally {
+	Remove-Item $LocalInitPath -ErrorAction SilentlyContinue
+}
 
 Write-Host ""
 Write-Host "Deployment complete." -ForegroundColor Green

@@ -2,6 +2,7 @@ package selfservice
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -95,6 +96,88 @@ func TestGetOperatorBinding(t *testing.T) {
 	}
 	if result == nil || result.Data == nil || result.Data.MobileAccount != "mob" {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestBindOperatorPrefersBusinessFailureMessage(t *testing.T) {
+	readCount := 0
+	client := NewClient(&mockSessionClient{
+		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
+			_ = ctx
+			_ = opts
+			readCount++
+			if readCount == 1 {
+				return &kernel.SessionResponse{StatusCode: 200, Body: []byte(`<html><input name="csrftoken" value="token1"><input name="FLDEXTRA1" value=""><input name="FLDEXTRA2" value=""><input name="FLDEXTRA3" value=""><input name="FLDEXTRA4" value=""></html>`)}, nil
+			}
+			return &kernel.SessionResponse{StatusCode: 200, Body: []byte(`<html><input name="csrftoken" value="token2"><input name="FLDEXTRA1" value=""><input name="FLDEXTRA2" value=""><input name="FLDEXTRA3" value=""><input name="FLDEXTRA4" value=""></html>`)}, nil
+		},
+		postFormFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
+			_ = ctx
+			_ = path
+			_ = opts
+			return &kernel.SessionResponse{StatusCode: 200, Body: []byte(`<html><div class="swal2-content">中国移动账号:13800138000,绑定失败,已存在该运营商账号</div></html>`)}, nil
+		},
+	})
+
+	result, err := client.BindOperator(context.Background(), map[string]string{"FLDEXTRA3": "13800138000"}, true, false)
+	if err == nil {
+		t.Fatal("expected business failure")
+	}
+	if !errors.Is(err, kernel.ErrBusinessFailed) {
+		t.Fatalf("expected business failure classification, got %v", err)
+	}
+	if result == nil || result.Success {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if !strings.Contains(result.Message, "已存在该运营商账号") {
+		t.Fatalf("expected business message, got %#v", result)
+	}
+}
+
+func TestExtractBusinessMessage(t *testing.T) {
+	body := []byte(`<html><div class="layui-layer-content">中国移动账号 B24040213@cmcc 绑定失败,已存在该运营商账号</div></html>`)
+	got := extractBusinessMessage(body)
+	if !strings.Contains(got, "已存在该运营商账号") {
+		t.Fatalf("unexpected business message: %q", got)
+	}
+}
+
+func TestBindOperatorPrefersBusinessFailureWithoutReadback(t *testing.T) {
+	client := NewClient(&mockSessionClient{
+		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
+			_ = ctx
+			_ = opts
+			return &kernel.SessionResponse{StatusCode: 200, Body: []byte(`<html><input name="csrftoken" value="token1"><input name="FLDEXTRA1" value=""><input name="FLDEXTRA2" value=""><input name="FLDEXTRA3" value=""><input name="FLDEXTRA4" value=""></html>`)}, nil
+		},
+		postFormFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
+			_ = ctx
+			_ = path
+			_ = opts
+			return &kernel.SessionResponse{StatusCode: 200, Body: []byte(`<html><div class="swal2-content">中国移动账号:13800138000,绑定失败,已存在该运营商账号</div></html>`)}, nil
+		},
+	})
+
+	result, err := client.BindOperator(context.Background(), map[string]string{"FLDEXTRA3": "13800138000"}, false, false)
+	if err == nil {
+		t.Fatal("expected business failure")
+	}
+	if !errors.Is(err, kernel.ErrBusinessFailed) {
+		t.Fatalf("expected business failure classification, got %v", err)
+	}
+	if result == nil || result.Success {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestBindOperatorRejectsEmptyTarget(t *testing.T) {
+	client := NewClient(&mockSessionClient{})
+
+	_, err := client.BindOperator(context.Background(), map[string]string{}, false, false)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !errors.Is(err, kernel.ErrBusinessFailed) {
+		t.Fatalf("expected business_failed classification, got %v", err)
 	}
 }
 
@@ -218,6 +301,28 @@ func TestGetMacListEmptyBodyTreatsAsZeroRows(t *testing.T) {
 	}
 	if result == nil || result.Data == nil || result.Data.Total != 0 || len(result.Data.Rows) != 0 {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestGetMacListRejectsLoginPage(t *testing.T) {
+	client := NewClient(&mockSessionClient{
+		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
+			_ = ctx
+			_ = opts
+			if path == "/Self/service/myMac" {
+				return &kernel.SessionResponse{StatusCode: 200, Body: fixture(t, "login_page.html")}, nil
+			}
+			t.Fatalf("unexpected path: %s", path)
+			return nil, nil
+		},
+	})
+
+	_, err := client.GetMacList(context.Background())
+	if err == nil {
+		t.Fatal("expected auth error")
+	}
+	if !strings.Contains(err.Error(), "myMac returned login page") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

@@ -7,10 +7,17 @@ import (
 
 // PortalProblemDetails is the typed machine-readable payload for Portal failures.
 type PortalProblemDetails struct {
+	Endpoint string                `json:"endpoint,omitempty"`
+	Msg      string                `json:"msg,omitempty"`
+	Result   string                `json:"result,omitempty"`
+	RetCode  string                `json:"retCode,omitempty"`
+	Attempts []PortalAttemptDetail `json:"attempts,omitempty"`
+}
+
+// PortalAttemptDetail captures one concrete portal endpoint attempt.
+type PortalAttemptDetail struct {
 	Endpoint string `json:"endpoint,omitempty"`
-	Msg      string `json:"msg,omitempty"`
-	Result   string `json:"result,omitempty"`
-	RetCode  string `json:"retCode,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 // StateComparisonProblemDetails captures readback/restore mismatch evidence.
@@ -95,12 +102,24 @@ func normalizePortalProblemDetails(details any) any {
 			RetCode:  value["retCode"],
 		}
 	case map[string]any:
-		return PortalProblemDetails{
+		details := PortalProblemDetails{
 			Endpoint: toString(value["endpoint"]),
 			Msg:      toString(value["msg"]),
 			Result:   toString(value["result"]),
 			RetCode:  toString(value["retCode"]),
 		}
+		if attempts, ok := value["attempts"].([]any); ok {
+			details.Attempts = make([]PortalAttemptDetail, 0, len(attempts))
+			for _, attempt := range attempts {
+				if mapped, ok := attempt.(map[string]any); ok {
+					details.Attempts = append(details.Attempts, PortalAttemptDetail{
+						Endpoint: toString(mapped["endpoint"]),
+						Error:    toString(mapped["error"]),
+					})
+				}
+			}
+		}
+		return details
 	default:
 		return nil
 	}

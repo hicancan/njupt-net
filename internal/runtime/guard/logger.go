@@ -40,14 +40,16 @@ type Recorder struct {
 	textOut  io.Writer
 	eventOut io.Writer
 	now      func() time.Time
+	location *time.Location
 }
 
 // NewRecorder creates a recorder for the paired text/event streams.
-func NewRecorder(textOut, eventOut io.Writer) *Recorder {
+func NewRecorder(textOut, eventOut io.Writer, location *time.Location) *Recorder {
 	return &Recorder{
 		textOut:  textOut,
 		eventOut: eventOut,
 		now:      time.Now,
+		location: location,
 	}
 }
 
@@ -61,7 +63,11 @@ func (r *Recorder) Emit(event Event) {
 
 	event = NormalizeEvent(event)
 	if strings.TrimSpace(event.Timestamp) == "" {
-		event.Timestamp = r.now().Format("2006-01-02 15:04:05")
+		now := r.now()
+		if r.location != nil {
+			now = now.In(r.location)
+		}
+		event.Timestamp = now.Format("2006-01-02 15:04:05")
 	}
 	if r.textOut != nil {
 		_, _ = fmt.Fprintf(r.textOut, "[%s] %s\n", event.Timestamp, r.humanMessage(event))

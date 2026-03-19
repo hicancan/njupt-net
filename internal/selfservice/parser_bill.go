@@ -15,6 +15,12 @@ func parseBillListResult(body []byte) (*kernel.BillListResult, error) {
 	if err := parseJSON(body, &payload); err != nil {
 		return nil, err
 	}
+	if payload.Summary == nil {
+		payload.Summary = map[string]interface{}{}
+	}
+	if payload.Rows == nil {
+		payload.Rows = []map[string]interface{}{}
+	}
 	total, _ := strconv.Atoi(toString(payload.Total))
 	return &kernel.BillListResult{
 		Summary: payload.Summary,

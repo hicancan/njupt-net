@@ -13,6 +13,7 @@ import (
 type mockSessionClient struct {
 	getFn      func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error)
 	postFormFn func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error)
+	resetFn    func() error
 }
 
 func (m *mockSessionClient) Get(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
@@ -27,6 +28,13 @@ func (m *mockSessionClient) PostForm(ctx context.Context, path string, opts kern
 		return m.postFormFn(ctx, path, opts)
 	}
 	return nil, errors.New("mock post not implemented")
+}
+
+func (m *mockSessionClient) ResetCookies() error {
+	if m.resetFn != nil {
+		return m.resetFn()
+	}
+	return nil
 }
 
 func fixture(t *testing.T, name string) []byte {
