@@ -55,6 +55,7 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newBillCmd())
 	cmd.AddCommand(newPortalCmd())
 	cmd.AddCommand(newRawCmd())
+	cmd.AddCommand(newGuardCmd())
 
 	return cmd
 }

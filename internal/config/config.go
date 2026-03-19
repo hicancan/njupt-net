@@ -22,7 +22,7 @@ type AccountConfig struct {
 	Password string `json:"password"`
 }
 
-// BroadbandConfig keeps the current experimental broadband credentials block.
+// BroadbandConfig keeps the configured mobile broadband credentials block.
 type BroadbandConfig struct {
 	Account  string `json:"account"`
 	Password string `json:"password"`
@@ -43,6 +43,25 @@ type PortalConfig struct {
 	InsecureTLS      bool     `json:"insecureTLS"`
 }
 
+// GuardScheduleConfig contains the supported day/night schedule model.
+type GuardScheduleConfig struct {
+	WeekdayDayProfile   string `json:"weekdayDayProfile"`
+	WeekdayNightProfile string `json:"weekdayNightProfile"`
+	WeekdayNightStart   string `json:"weekdayNightStart"`
+	WeekdayNightEnd     string `json:"weekdayNightEnd"`
+	WeekendProfile      string `json:"weekendProfile"`
+	OvernightMode       string `json:"overnightMode"`
+}
+
+// GuardConfig contains runtime defaults for the supported Go guard.
+type GuardConfig struct {
+	StateDir                    string              `json:"stateDir"`
+	ProbeIntervalSeconds        int                 `json:"probeIntervalSeconds"`
+	BindingCheckIntervalSeconds int                 `json:"bindingCheckIntervalSeconds"`
+	Timezone                    string              `json:"timezone"`
+	Schedule                    GuardScheduleConfig `json:"schedule"`
+}
+
 // Config is the canonical config model for the terminal system.
 type Config struct {
 	Accounts map[string]AccountConfig `json:"accounts"`
@@ -50,6 +69,7 @@ type Config struct {
 	Output   string                   `json:"output"`
 	Self     SelfConfig               `json:"self"`
 	Portal   PortalConfig             `json:"portal"`
+	Guard    GuardConfig              `json:"guard"`
 }
 
 // Load resolves config from the given path or the default credentials.json.
@@ -131,6 +151,36 @@ func (c *Config) applyDefaults() {
 	if len(c.Portal.FallbackBaseURLs) == 0 {
 		c.Portal.FallbackBaseURLs = []string{"https://p.njupt.edu.cn:802/eportal/portal"}
 	}
+	if strings.TrimSpace(c.Guard.StateDir) == "" {
+		c.Guard.StateDir = filepath.Join("dist", "guard")
+	}
+	if c.Guard.ProbeIntervalSeconds == 0 {
+		c.Guard.ProbeIntervalSeconds = 3
+	}
+	if c.Guard.BindingCheckIntervalSeconds == 0 {
+		c.Guard.BindingCheckIntervalSeconds = 180
+	}
+	if strings.TrimSpace(c.Guard.Timezone) == "" {
+		c.Guard.Timezone = "Asia/Shanghai"
+	}
+	if strings.TrimSpace(c.Guard.Schedule.WeekdayDayProfile) == "" {
+		c.Guard.Schedule.WeekdayDayProfile = "B"
+	}
+	if strings.TrimSpace(c.Guard.Schedule.WeekdayNightProfile) == "" {
+		c.Guard.Schedule.WeekdayNightProfile = "W"
+	}
+	if strings.TrimSpace(c.Guard.Schedule.WeekdayNightStart) == "" {
+		c.Guard.Schedule.WeekdayNightStart = "23:30"
+	}
+	if strings.TrimSpace(c.Guard.Schedule.WeekdayNightEnd) == "" {
+		c.Guard.Schedule.WeekdayNightEnd = "07:00"
+	}
+	if strings.TrimSpace(c.Guard.Schedule.WeekendProfile) == "" {
+		c.Guard.Schedule.WeekendProfile = "B"
+	}
+	if strings.TrimSpace(c.Guard.Schedule.OvernightMode) == "" {
+		c.Guard.Schedule.OvernightMode = "calendar-day"
+	}
 }
 
 func (c *Config) applyEnv() {
@@ -174,6 +224,12 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.Portal.BaseURL) == "" {
 		return &kernel.OpError{Op: "config.validate", Message: "portal.baseURL is required", Err: kernel.ErrInvalidConfig}
 	}
+	if c.Guard.ProbeIntervalSeconds <= 0 {
+		return &kernel.OpError{Op: "config.validate", Message: "guard.probeIntervalSeconds must be positive", Err: kernel.ErrInvalidConfig}
+	}
+	if c.Guard.BindingCheckIntervalSeconds <= 0 {
+		return &kernel.OpError{Op: "config.validate", Message: "guard.bindingCheckIntervalSeconds must be positive", Err: kernel.ErrInvalidConfig}
+	}
 	return nil
 }
 
@@ -212,4 +268,16 @@ func parseBool(raw string, fallback bool) bool {
 	default:
 		return fallback
 	}
+}
+
+// ResolveBroadband returns the configured mobile broadband credentials.
+func (c *Config) ResolveBroadband() (BroadbandConfig, error) {
+	if strings.TrimSpace(c.CMCC.Account) == "" || strings.TrimSpace(c.CMCC.Password) == "" {
+		return BroadbandConfig{}, &kernel.OpError{
+			Op:      "config.resolveBroadband",
+			Message: "cmcc account and password are required for guard runtime",
+			Err:     kernel.ErrInvalidConfig,
+		}
+	}
+	return c.CMCC, nil
 }

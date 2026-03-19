@@ -25,11 +25,9 @@ The repository is intentionally single-repo and Go-first.
 - `internal/selfservice`: Self-Service protocol implementation
 - `internal/portal`: Portal 802 primary flow and 801 guarded fallback
 - `internal/workflow`: higher-level repair and migration workflows
+- `internal/runtime/guard`: scheduled Go guard runtime, probes, supervisor, and state store
 - `internal/app`: config, output, and explicit app context
 - `scripts/`: supported build and smoke-test helpers
-- `legacy/experimental/`: historical reverse-engineering and guard tooling
-
-Historical Python guard scripts remain under `legacy/experimental/` only as behavior references. They are not part of the formal release surface.
 
 ## Command Tree
 
@@ -42,6 +40,7 @@ The command surface is organized around stable domains:
 - `njupt-net bill`
 - `njupt-net portal`
 - `njupt-net raw`
+- `njupt-net guard`
 
 ## Build
 
@@ -87,6 +86,12 @@ The smoke script reads `credentials.json` and exercises the new command tree:
 .\scripts\test-local.ps1
 ```
 
+Include guard lifecycle checks:
+
+```powershell
+.\scripts\test-local.ps1 -IncludeGuardOps
+```
+
 Include side-effecting writes:
 
 ```powershell
@@ -98,4 +103,5 @@ Include side-effecting writes:
 - Protocol truth belongs in the kernel and protocol packages, not in CLI formatting code.
 - `confirmed`, `guarded`, and `blocked` semantics must stay explicit.
 - Write operations use readback verification and optional restore.
+- Scheduled daemon/runtime behavior belongs in the Go `guard` runtime.
 - Dead experimental code should not stay on the main path.
