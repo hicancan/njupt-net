@@ -73,21 +73,21 @@ func (c *Client) BindOperator(ctx context.Context, target map[string]string, rea
 		for field, expected := range target {
 			if postState[field] != expected {
 				return &kernel.OperationResult[kernel.WriteBackResult]{
-					Level:   kernel.EvidenceConfirmed,
-					Success: false,
-					Message: fmt.Sprintf("binding readback mismatch for %s", field),
-					Data:    writeResult,
-					Raw:     rawCapture(resp),
-				}, &kernel.OpError{
-					Op:      "service.binding.set",
-					Message: fmt.Sprintf("%s expected=%q got=%q", field, expected, postState[field]),
-					Err:     kernel.ErrReadBackMismatch,
-					ProblemDetails: kernel.StateComparisonProblemDetails{
-						Field:    field,
-						Expected: expected,
-						Actual:   postState[field],
-					},
-				}
+						Level:   kernel.EvidenceConfirmed,
+						Success: false,
+						Message: fmt.Sprintf("binding readback mismatch for %s", field),
+						Data:    writeResult,
+						Raw:     rawCapture(resp),
+					}, &kernel.OpError{
+						Op:      "service.binding.set",
+						Message: fmt.Sprintf("%s expected=%q got=%q", field, expected, postState[field]),
+						Err:     kernel.ErrReadBackMismatch,
+						ProblemDetails: kernel.StateComparisonProblemDetails{
+							Field:    field,
+							Expected: expected,
+							Actual:   postState[field],
+						},
+					}
 			}
 		}
 	}
@@ -106,21 +106,21 @@ func (c *Client) BindOperator(ctx context.Context, target map[string]string, rea
 		for field, expected := range preState {
 			if restored[field] != expected {
 				return &kernel.OperationResult[kernel.WriteBackResult]{
-					Level:   kernel.EvidenceConfirmed,
-					Success: false,
-					Message: "binding restore failed",
-					Data:    writeResult,
-					Raw:     rawCapture(resp),
-				}, &kernel.OpError{
-					Op:      "service.binding.restore",
-					Message: fmt.Sprintf("%s expected=%q got=%q", field, expected, restored[field]),
-					Err:     kernel.ErrRestoreFailed,
-					ProblemDetails: kernel.StateComparisonProblemDetails{
-						Field:    field,
-						Expected: expected,
-						Actual:   restored[field],
-					},
-				}
+						Level:   kernel.EvidenceConfirmed,
+						Success: false,
+						Message: "binding restore failed",
+						Data:    writeResult,
+						Raw:     rawCapture(resp),
+					}, &kernel.OpError{
+						Op:      "service.binding.restore",
+						Message: fmt.Sprintf("%s expected=%q got=%q", field, expected, restored[field]),
+						Err:     kernel.ErrRestoreFailed,
+						ProblemDetails: kernel.StateComparisonProblemDetails{
+							Field:    field,
+							Expected: expected,
+							Actual:   restored[field],
+						},
+					}
 			}
 		}
 	}
@@ -183,21 +183,21 @@ func (c *Client) ChangeConsumeProtect(ctx context.Context, limit string, readbac
 		writeResult.PostState = map[string]string{"installmentFlag": post.InstallmentFlag, "consumeLimit": post.CurrentLimit}
 		if post.InstallmentFlag != limit {
 			return &kernel.OperationResult[kernel.WriteBackResult]{
-				Level:   kernel.EvidenceConfirmed,
-				Success: false,
-				Message: "consume protect readback mismatch",
-				Data:    writeResult,
-				Raw:     rawCapture(resp),
-			}, &kernel.OpError{
-				Op:      "service.consume.set",
-				Message: fmt.Sprintf("installmentFlag expected=%q got=%q", limit, post.InstallmentFlag),
-				Err:     kernel.ErrReadBackMismatch,
-				ProblemDetails: kernel.StateComparisonProblemDetails{
-					Field:    "installmentFlag",
-					Expected: limit,
-					Actual:   post.InstallmentFlag,
-				},
-			}
+					Level:   kernel.EvidenceConfirmed,
+					Success: false,
+					Message: "consume protect readback mismatch",
+					Data:    writeResult,
+					Raw:     rawCapture(resp),
+				}, &kernel.OpError{
+					Op:      "service.consume.set",
+					Message: fmt.Sprintf("installmentFlag expected=%q got=%q", limit, post.InstallmentFlag),
+					Err:     kernel.ErrReadBackMismatch,
+					ProblemDetails: kernel.StateComparisonProblemDetails{
+						Field:    "installmentFlag",
+						Expected: limit,
+						Actual:   post.InstallmentFlag,
+					},
+				}
 		}
 	}
 
@@ -213,21 +213,21 @@ func (c *Client) ChangeConsumeProtect(ctx context.Context, limit string, readbac
 		writeResult.RestoredState = map[string]string{"installmentFlag": restored.InstallmentFlag, "consumeLimit": restored.CurrentLimit}
 		if restored.InstallmentFlag != state.InstallmentFlag {
 			return &kernel.OperationResult[kernel.WriteBackResult]{
-				Level:   kernel.EvidenceConfirmed,
-				Success: false,
-				Message: "consume protect restore failed",
-				Data:    writeResult,
-				Raw:     rawCapture(resp),
-			}, &kernel.OpError{
-				Op:      "service.consume.restore",
-				Message: fmt.Sprintf("installmentFlag expected=%q got=%q", state.InstallmentFlag, restored.InstallmentFlag),
-				Err:     kernel.ErrRestoreFailed,
-				ProblemDetails: kernel.StateComparisonProblemDetails{
-					Field:    "installmentFlag",
-					Expected: state.InstallmentFlag,
-					Actual:   restored.InstallmentFlag,
-				},
-			}
+					Level:   kernel.EvidenceConfirmed,
+					Success: false,
+					Message: "consume protect restore failed",
+					Data:    writeResult,
+					Raw:     rawCapture(resp),
+				}, &kernel.OpError{
+					Op:      "service.consume.restore",
+					Message: fmt.Sprintf("installmentFlag expected=%q got=%q", state.InstallmentFlag, restored.InstallmentFlag),
+					Err:     kernel.ErrRestoreFailed,
+					ProblemDetails: kernel.StateComparisonProblemDetails{
+						Field:    "installmentFlag",
+						Expected: state.InstallmentFlag,
+						Actual:   restored.InstallmentFlag,
+					},
+				}
 		}
 	}
 
