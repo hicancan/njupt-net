@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -115,6 +116,28 @@ func (c *SessionClient) PostForm(ctx context.Context, path string, opts kernel.R
 		return nil, fmt.Errorf("create post request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	applyHeaders(req, opts.Headers)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("do post request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	return adaptResponse(resp)
+}
+
+func (c *SessionClient) PostJSON(ctx context.Context, path string, opts kernel.RequestOptions, payload []byte) (*kernel.SessionResponse, error) {
+	reqURL, err := c.buildURL(path, opts.Query)
+	if err != nil {
+		return nil, fmt.Errorf("build post url: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("create post request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
 	applyHeaders(req, opts.Headers)
 
 	resp, err := c.http.Do(req)

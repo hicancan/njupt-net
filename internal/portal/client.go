@@ -14,7 +14,7 @@ const (
 	jsonpCallback     = "dr1003"
 )
 
-// Client implements Portal 802 as primary and 801 as guarded fallback.
+// Client implements Portal 802 as primary and keeps Portal 801 as a legacy admin-console probe.
 type Client struct {
 	session            kernel.SessionClient
 	baseURL802         string
@@ -101,27 +101,77 @@ func (c *Client) Logout802(ctx context.Context, ip string) (*kernel.OperationRes
 	}, nil
 }
 
-// Login801 performs a guarded raw fallback attempt.
-func (c *Client) Login801(ctx context.Context, account, password, ip, ipv6 string) (*kernel.OperationResult[map[string]any], error) {
+// Login801 probes the observed 801 admin-login JSON API.
+func (c *Client) Login801(ctx context.Context, account, password string, _ string, _ string) (*kernel.OperationResult[kernel.Portal801LoginResponse], error) {
 	if c == nil || c.session == nil {
 		return nil, &kernel.OpError{Op: "portal.login801", Message: "session client is nil", Err: kernel.ErrPortal}
 	}
-	resp, err := c.session.Get(ctx, c.baseURL801, kernel.RequestOptions{Query: buildLogin801Query(account, password, ip, ipv6)})
+	preflightResp, err := c.session.Get(ctx, c.baseURL801+"/", kernel.RequestOptions{})
 	if err != nil {
-		return nil, &kernel.OpError{Op: "portal.login801", Message: "request failed", Err: err}
+		return nil, &kernel.OpError{Op: "portal.login801", Message: "preflight request failed", Err: err}
 	}
-	data := map[string]any{
-		"endpoint":             c.baseURL801,
-		"bodyLength":           len(resp.Body),
-		"genericShellDetected": login801LooksLikeGenericShell(string(resp.Body)),
+	adminConsoleDetected := login801LooksLikeGenericShell(string(preflightResp.Body))
+	endpoint := c.baseURL801 + "/admin/login/login"
+	resp, err := c.session.PostJSON(ctx, endpoint, kernel.RequestOptions{
+		Headers: map[string]string{
+			"Accept":  "application/json, text/plain, */*",
+			"Referer": c.baseURL801 + "/#/login?redirect=%2Fdashboard",
+		},
+	}, buildLogin801Payload(account, password))
+	if err != nil {
+		return nil, &kernel.OpError{
+			Op:      "portal.login801",
+			Message: "admin login request failed",
+			Err:     fmt.Errorf("%w: %v", kernel.ErrPortal, err),
+			ProblemDetails: kernel.PortalProblemDetails{
+				Endpoint: endpoint,
+			},
+		}
 	}
-	return &kernel.OperationResult[map[string]any]{
-		Level:   kernel.EvidenceGuarded,
+
+	data, parseErr := parseLogin801Response(string(resp.Body), endpoint, adminConsoleDetected)
+	if parseErr != nil {
+		return &kernel.OperationResult[kernel.Portal801LoginResponse]{
+			Level:   kernel.EvidenceGuarded,
+			Success: false,
+			Message: "portal 801 admin login returned a non-JSON response",
+			Raw:     rawCapture(resp),
+		}, &kernel.OpError{
+			Op:      "portal.login801",
+			Message: "admin login returned a non-json response",
+			Err:     fmt.Errorf("%w: %v", kernel.ErrPortal, parseErr),
+			ProblemDetails: kernel.PortalProblemDetails{
+				Endpoint: endpoint,
+			},
+		}
+	}
+
+	if data.TokenPresent {
+		return &kernel.OperationResult[kernel.Portal801LoginResponse]{
+			Level:   kernel.EvidenceConfirmed,
+			Success: true,
+			Message: "portal 801 admin login returned a token",
+			Data:    data,
+			Raw:     rawCapture(resp),
+		}, nil
+	}
+
+	message := fmt.Sprintf("portal 801 admin login returned no token (code=%d msg=%s)", data.Code, data.Msg)
+	return &kernel.OperationResult[kernel.Portal801LoginResponse]{
+		Level:   kernel.EvidenceBlocked,
 		Success: false,
-		Message: "portal 801 returned a generic eportal shell; success semantics remain guarded",
-		Data:    &data,
+		Message: message,
+		Data:    data,
 		Raw:     rawCapture(resp),
-	}, &kernel.OpError{Op: "portal.login801", Message: "801 cannot determine success semantics from body", Err: kernel.ErrPortalFallbackRequired, ProblemDetails: kernel.PortalProblemDetails{Endpoint: c.baseURL801}}
+	}, &kernel.OpError{
+		Op:      "portal.login801",
+		Message: message,
+		Err:     kernel.ErrBlockedCapability,
+		ProblemDetails: kernel.CapabilityProblemDetails{
+			Capability: "portal.login801",
+			Reason:     "801 login targets an admin-console JSON API and returned no token for these credentials",
+		},
+	}
 }
 
 // Logout801 performs a guarded raw fallback logout.

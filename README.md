@@ -143,11 +143,11 @@ flowchart TD
 | 功能域 | 典型命令 | 作用 |
 | --- | --- | --- |
 | `self` | `login`, `logout`, `status`, `doctor` | Self 登录与诊断主路径 |
-| `dashboard` | `online-list`, `login-history`, `mauth`, `offline` | 在线会话、历史记录、guarded 操作 |
+| `dashboard` | `online-list`, `login-history`, `mauth`, `offline` | 在线会话、历史记录、离线控制 |
 | `service` | `binding`, `consume`, `mac`, `migrate` | 宽带绑定、消费保护、MAC、迁移工作流 |
-| `setting` | `person get`, `person update` | 个人资料相关 guarded / blocked 面 |
+| `setting` | `person get`, `person update` | 脱敏个人资料读取与 blocked 更新面 |
 | `bill` | `month-pay`, `online-log`, `operator-log` | 账单与记录查询 |
-| `portal` | `login`, `logout`, `login-801`, `logout-801` | Portal 802 主链与 801 fallback |
+| `portal` | `login`, `logout`, `login-801`, `logout-801` | Portal 802 主链与 801 管理端探针 |
 | `raw` | `get`, `post` | 低层调试探针 |
 | `guard` | `run`, `start`, `stop`, `status`, `once` | Go 守护运行时 |
 
@@ -408,8 +408,8 @@ cat /tmp/njupt-net-guard/status.json
 | 级别 | 含义 | 例子 |
 | --- | --- | --- |
 | `confirmed` | 已确认，可作为正式能力实现 | Self 登录主链、宽带绑定写入、Portal 802 |
-| `guarded` | 可暴露，但必须保守处理 | force offline、Portal 801 fallback |
-| `blocked` | 已知接口存在，但成功语义不足以正式承诺 | 某些环境敏感的用户资料更新路径 |
+| `guarded` | 可暴露，但必须保守处理 | Portal 802 的 `AC999` 已在线态、部分环境漂移态 |
+| `blocked` | 已知接口存在，但成功语义不足以正式承诺 | `setting person update`、`portal login-801` 管理端探针 |
 
 ## 质量保证
 

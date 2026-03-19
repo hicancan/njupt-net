@@ -180,7 +180,7 @@ func (c *Client) ToggleMauth(ctx context.Context) (*kernel.OperationResult[kerne
 	}, nil
 }
 
-// ForceOffline is guarded: it requires the target session to exist before firing.
+// ForceOffline removes a specific online session and confirms success by bounded readback.
 func (c *Client) ForceOffline(ctx context.Context, sessionID string) (*kernel.OperationResult[map[string]any], error) {
 	if err := c.ensureSession("dashboard.offline"); err != nil {
 		return nil, err
@@ -240,12 +240,12 @@ func (c *Client) ForceOffline(ctx context.Context, sessionID string) (*kernel.Op
 				"replacementSessionDetected": replacementDetected,
 				"verificationAttempts":       attempt,
 			}
-			message := "target session removed from online list after guarded offline request"
+			message := "target session removed from online list after offline request"
 			if replacementDetected {
 				message = "target session removed from online list; follow-up session detected"
 			}
 			return &kernel.OperationResult[map[string]any]{
-				Level:   kernel.EvidenceGuarded,
+				Level:   kernel.EvidenceConfirmed,
 				Success: true,
 				Message: message,
 				Data:    &data,
@@ -263,12 +263,12 @@ func (c *Client) ForceOffline(ctx context.Context, sessionID string) (*kernel.Op
 	return &kernel.OperationResult[map[string]any]{
 			Level:   kernel.EvidenceGuarded,
 			Success: false,
-			Message: "target session still present after guarded offline request verification",
+			Message: "target session still present after offline request verification",
 			Data:    &data,
 			Raw:     rawCapture(resp),
 			Problems: []kernel.Problem{kernel.NormalizeProblem(kernel.Problem{
 				Code:    kernel.ProblemReadbackMismatch,
-				Message: "target session still present after guarded offline request verification",
+				Message: "target session still present after offline request verification",
 				Details: kernel.StateComparisonProblemDetails{
 					Field:    "sessionId",
 					Expected: "<removed>",
@@ -277,7 +277,7 @@ func (c *Client) ForceOffline(ctx context.Context, sessionID string) (*kernel.Op
 			})},
 		}, &kernel.OpError{
 			Op:      "dashboard.offline",
-			Message: "target session still present after guarded offline request verification",
+			Message: "target session still present after offline request verification",
 			Err:     kernel.ErrReadBackMismatch,
 			ProblemDetails: kernel.StateComparisonProblemDetails{
 				Field:    "sessionId",

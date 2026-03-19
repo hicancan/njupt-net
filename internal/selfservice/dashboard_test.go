@@ -207,6 +207,9 @@ func TestForceOfflineSuccess(t *testing.T) {
 	if result == nil || !result.Success {
 		t.Fatalf("unexpected result: %#v", result)
 	}
+	if result.Level != kernel.EvidenceConfirmed {
+		t.Fatalf("expected confirmed level, got %s", result.Level)
+	}
 }
 
 func TestForceOfflineTreatsReplacementSessionAsSuccess(t *testing.T) {
@@ -249,6 +252,9 @@ func TestForceOfflineTreatsReplacementSessionAsSuccess(t *testing.T) {
 	}
 	if result == nil || !result.Success || result.Data == nil {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+	if result.Level != kernel.EvidenceConfirmed {
+		t.Fatalf("expected confirmed level, got %s", result.Level)
 	}
 	if detected, ok := (*result.Data)["replacementSessionDetected"].(bool); !ok || !detected {
 		t.Fatalf("expected replacement session marker, got %#v", result.Data)

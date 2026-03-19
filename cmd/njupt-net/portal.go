@@ -9,7 +9,7 @@ import (
 func newPortalCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "portal",
-		Short: "Portal 802 primary flow and guarded 801 fallback",
+		Short: "Portal 802 primary flow and 801 admin probe",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
@@ -99,7 +99,7 @@ func newPortalLogin801Cmd() *cobra.Command {
 	var ipv6 string
 	cmd := &cobra.Command{
 		Use:   "login-801",
-		Short: "Run the guarded raw Portal 801 fallback login",
+		Short: "Run the Portal 801 admin-login probe",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			account, err := resolveAccount(cmd, flags)
 			if err != nil {
@@ -128,7 +128,7 @@ func newPortalLogout801Cmd() *cobra.Command {
 	var ip string
 	cmd := &cobra.Command{
 		Use:   "logout-801",
-		Short: "Run the guarded raw Portal 801 fallback logout",
+		Short: "Run the Portal 801 logout probe",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := requireYes(cmd, "portal logout-801"); err != nil {
 				return err

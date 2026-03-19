@@ -9,7 +9,7 @@ import (
 func newSettingCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "setting",
-		Short: "Self setting and guarded person-state commands",
+		Short: "Self setting and person-state commands",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
@@ -21,7 +21,7 @@ func newSettingCmd() *cobra.Command {
 func newSettingPersonCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "person",
-		Short: "Guarded person-list operations",
+		Short: "Person-list operations",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
@@ -35,7 +35,7 @@ func newSettingPersonGetCmd() *cobra.Command {
 	var flags authFlags
 	cmd := &cobra.Command{
 		Use:   "get",
-		Short: "Load guarded person-list state",
+		Short: "Load sanitized person-list state",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			account, err := resolveAccount(cmd, flags)
 			if err != nil {

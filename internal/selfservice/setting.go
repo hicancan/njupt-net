@@ -6,7 +6,7 @@ import (
 	"github.com/hicancan/njupt-net-cli/internal/kernel"
 )
 
-// GetPerson returns guarded person-list diagnostics and form fields.
+// GetPerson returns a sanitized projection of person-list state.
 func (c *Client) GetPerson(ctx context.Context) (*kernel.OperationResult[kernel.PersonState], error) {
 	if err := c.ensureSession("setting.person.get"); err != nil {
 		return nil, err
@@ -18,14 +18,18 @@ func (c *Client) GetPerson(ctx context.Context) (*kernel.OperationResult[kernel.
 	if responseLooksLikeLogin(resp) {
 		return nil, &kernel.OpError{Op: "setting.person.get", Message: "personList returned login page", Err: kernel.ErrAuth}
 	}
+	fields := sanitizeSensitiveFields(extractInputFields(doc))
+	for key, value := range extractWindowUserFields(resp.Body) {
+		fields[key] = value
+	}
 	state := &kernel.PersonState{
 		CSRFTOKEN: extractInputValue(doc, "csrftoken"),
-		Fields:    sanitizeSensitiveFields(extractInputFields(doc)),
+		Fields:    fields,
 	}
 	return &kernel.OperationResult[kernel.PersonState]{
-		Level:   kernel.EvidenceGuarded,
+		Level:   kernel.EvidenceConfirmed,
 		Success: true,
-		Message: "personList loaded as guarded capability",
+		Message: "personList loaded with sanitized state",
 		Data:    state,
 	}, nil
 }
@@ -43,7 +47,7 @@ func (c *Client) UpdateUserSecurity(ctx context.Context, form map[string]string,
 		return &kernel.OperationResult[kernel.PersonState]{
 			Level:   kernel.EvidenceBlocked,
 			Success: false,
-			Message: "dry-run only; real success semantics remain blocked",
+			Message: "dry-run only; page exposes no stable writable fields and success semantics remain blocked",
 			Data:    state.Data,
 		}, nil
 	}
@@ -64,7 +68,7 @@ func (c *Client) UpdateUserSecurity(ctx context.Context, form map[string]string,
 	return &kernel.OperationResult[kernel.PersonState]{
 		Level:   kernel.EvidenceBlocked,
 		Success: false,
-		Message: "request submitted, but success semantics remain blocked by SSOT",
+		Message: "request submitted, but page exposes no stable writable fields and success semantics remain blocked",
 		Data:    nextState,
-	}, &kernel.OpError{Op: "setting.person.update", Message: "success path is blocked by SSOT", Err: kernel.ErrBlockedCapability, ProblemDetails: kernel.CapabilityProblemDetails{Capability: "setting.person.update", Reason: "success semantics blocked by SSOT"}}
+	}, &kernel.OpError{Op: "setting.person.update", Message: "success path is blocked because personList only exposes csrftoken and submit-without-fields returns Not valid!", Err: kernel.ErrBlockedCapability, ProblemDetails: kernel.CapabilityProblemDetails{Capability: "setting.person.update", Reason: "page exposes no stable writable fields"}}
 }

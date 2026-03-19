@@ -21,4 +21,5 @@ type SessionResponse struct {
 type SessionClient interface {
 	Get(ctx context.Context, path string, opts RequestOptions) (*SessionResponse, error)
 	PostForm(ctx context.Context, path string, opts RequestOptions) (*SessionResponse, error)
+	PostJSON(ctx context.Context, path string, opts RequestOptions, payload []byte) (*SessionResponse, error)
 }

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/hicancan/njupt-net-cli/internal/kernel"
 )
 
 func parseJSONPPayload(raw string) (map[string]any, error) {
@@ -46,4 +48,48 @@ func login801LooksLikeGenericShell(body string) bool {
 	return strings.Contains(normalized, `<div id=app`) &&
 		strings.Contains(normalized, "/eportal/public/static/js/app") &&
 		strings.Contains(normalized, "<title>eportal</title>")
+}
+
+func parseLogin801Response(raw string, endpoint string, adminConsoleDetected bool) (*kernel.Portal801LoginResponse, error) {
+	var payload struct {
+		Code int         `json:"code"`
+		Msg  string      `json:"msg"`
+		Data interface{} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &payload); err != nil {
+		return nil, err
+	}
+
+	result := &kernel.Portal801LoginResponse{
+		Endpoint:             endpoint,
+		Code:                 payload.Code,
+		Msg:                  strings.TrimSpace(payload.Msg),
+		AdminConsoleDetected: adminConsoleDetected,
+		RawPayload:           raw,
+	}
+
+	if data, ok := payload.Data.(map[string]any); ok {
+		if token := toString(data["token"]); token != "" {
+			result.TokenPresent = true
+		}
+		result.ChangePass = truthy(data["changepass"])
+	}
+
+	return result, nil
+}
+
+func truthy(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return typed
+	case string:
+		normalized := strings.TrimSpace(strings.ToLower(typed))
+		return normalized == "1" || normalized == "true" || normalized == "yes"
+	case float64:
+		return typed != 0
+	default:
+		return strings.TrimSpace(fmt.Sprint(value)) != "" && strings.TrimSpace(fmt.Sprint(value)) != "0"
+	}
 }

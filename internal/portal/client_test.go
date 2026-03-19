@@ -12,7 +12,8 @@ import (
 )
 
 type mockSessionClient struct {
-	getFn func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error)
+	getFn      func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error)
+	postJSONFn func(ctx context.Context, path string, opts kernel.RequestOptions, payload []byte) (*kernel.SessionResponse, error)
 }
 
 func (m *mockSessionClient) Get(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
@@ -24,6 +25,13 @@ func (m *mockSessionClient) Get(ctx context.Context, path string, opts kernel.Re
 
 func (m *mockSessionClient) PostForm(context.Context, string, kernel.RequestOptions) (*kernel.SessionResponse, error) {
 	return nil, errors.New("mock post not implemented")
+}
+
+func (m *mockSessionClient) PostJSON(ctx context.Context, path string, opts kernel.RequestOptions, payload []byte) (*kernel.SessionResponse, error) {
+	if m.postJSONFn != nil {
+		return m.postJSONFn(ctx, path, opts, payload)
+	}
+	return nil, errors.New("mock post json not implemented")
 }
 
 func fixture(t *testing.T, name string) []byte {
@@ -184,7 +192,7 @@ func TestLogout802Success(t *testing.T) {
 	}
 }
 
-func TestLogin801ReturnsGuardedFallback(t *testing.T) {
+func TestLogin801ReturnsBlockedAdminConsoleResultWhenTokenMissing(t *testing.T) {
 	client := NewClient(&mockSessionClient{
 		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
 			_ = ctx
@@ -192,20 +200,63 @@ func TestLogin801ReturnsGuardedFallback(t *testing.T) {
 			_ = opts
 			return &kernel.SessionResponse{StatusCode: 200, Body: []byte(`<!DOCTYPE html><html><head><title>EPortal</title></head><body><div id=app></div><script src=/eportal/public/static/js/app.bb55e182.js></script></body></html>`)}, nil
 		},
+		postJSONFn: func(ctx context.Context, path string, opts kernel.RequestOptions, payload []byte) (*kernel.SessionResponse, error) {
+			_ = ctx
+			_ = opts
+			if path != "http://p.njupt.edu.cn:801/eportal/admin/login/login" {
+				t.Fatalf("unexpected path: %s", path)
+			}
+			if string(payload) != `{"username":"user","password":"1a1dc91c907325c69271ddf0c944bc72"}` {
+				t.Fatalf("unexpected payload: %s", payload)
+			}
+			return &kernel.SessionResponse{StatusCode: 200, Body: []byte(`{"code":0,"msg":"您已登录失败1次，登录失败超过5次账号将被锁定！失败次数隔天清零。"}`)}, nil
+		},
 	}, "https://portal.example", "")
 
 	result, err := client.Login801(context.Background(), "user", "pass", "10.0.0.1", "")
 	if err == nil {
-		t.Fatal("expected guarded fallback error")
+		t.Fatal("expected blocked admin-console error")
 	}
-	if !errors.Is(err, kernel.ErrPortalFallbackRequired) {
-		t.Fatalf("expected fallback-required error, got %v", err)
+	if !errors.Is(err, kernel.ErrBlockedCapability) {
+		t.Fatalf("expected blocked-capability error, got %v", err)
 	}
-	if result == nil || result.Level != kernel.EvidenceGuarded {
+	if result == nil || result.Level != kernel.EvidenceBlocked {
 		t.Fatalf("unexpected result: %#v", result)
 	}
-	if detected, ok := (*result.Data)["genericShellDetected"].(bool); !ok || !detected {
-		t.Fatalf("expected generic shell marker, got %#v", result.Data)
+	if result.Data == nil || !result.Data.AdminConsoleDetected || result.Data.TokenPresent {
+		t.Fatalf("unexpected 801 response data: %#v", result.Data)
+	}
+	if !strings.Contains(result.Message, "returned no token") {
+		t.Fatalf("unexpected message: %#v", result)
+	}
+}
+
+func TestLogin801ReturnsConfirmedSuccessWhenTokenPresent(t *testing.T) {
+	client := NewClient(&mockSessionClient{
+		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
+			_ = ctx
+			_ = path
+			_ = opts
+			return &kernel.SessionResponse{StatusCode: 200, Body: []byte(`<!DOCTYPE html><html><head><title>EPortal</title></head><body><div id=app></div></body></html>`)}, nil
+		},
+		postJSONFn: func(ctx context.Context, path string, opts kernel.RequestOptions, payload []byte) (*kernel.SessionResponse, error) {
+			_ = ctx
+			_ = path
+			_ = opts
+			_ = payload
+			return &kernel.SessionResponse{StatusCode: 200, Body: []byte(`{"code":0,"msg":"ok","data":{"token":"abc","changepass":true}}`)}, nil
+		},
+	}, "https://portal.example", "")
+
+	result, err := client.Login801(context.Background(), "user", "pass", "10.0.0.1", "")
+	if err != nil {
+		t.Fatalf("expected confirmed success, got %v", err)
+	}
+	if result == nil || result.Level != kernel.EvidenceConfirmed || !result.Success || result.Data == nil {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if !result.Data.TokenPresent || !result.Data.ChangePass {
+		t.Fatalf("expected token/changePass markers, got %#v", result.Data)
 	}
 }
 

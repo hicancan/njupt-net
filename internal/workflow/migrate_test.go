@@ -13,6 +13,7 @@ import (
 type mockSessionClient struct {
 	getFn      func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error)
 	postFormFn func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error)
+	postJSONFn func(ctx context.Context, path string, opts kernel.RequestOptions, payload []byte) (*kernel.SessionResponse, error)
 }
 
 func (m *mockSessionClient) Get(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
@@ -27,6 +28,13 @@ func (m *mockSessionClient) PostForm(ctx context.Context, path string, opts kern
 		return m.postFormFn(ctx, path, opts)
 	}
 	return nil, errors.New("mock post not implemented")
+}
+
+func (m *mockSessionClient) PostJSON(ctx context.Context, path string, opts kernel.RequestOptions, payload []byte) (*kernel.SessionResponse, error) {
+	if m.postJSONFn != nil {
+		return m.postJSONFn(ctx, path, opts, payload)
+	}
+	return nil, errors.New("mock post json not implemented")
 }
 
 type queuedMigrationFactory struct {

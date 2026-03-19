@@ -15,7 +15,7 @@ func TestGetPersonSanitizesSensitiveOutput(t *testing.T) {
 			if path != personListPath {
 				t.Fatalf("unexpected path: %s", path)
 			}
-			return &kernel.SessionResponse{StatusCode: 200, Body: []byte(`<html><input name="csrftoken" value="token1"><input name="userName" value="alice"><input name="password" value="secret"><script>window.user={userPassword:"secret"}</script></html>`)}, nil
+			return &kernel.SessionResponse{StatusCode: 200, Body: []byte(`<html><input name="csrftoken" value="token1"><input name="userName" value="alice"><input name="password" value="secret"><script>(function (user) { window.user = user || {}; })({"userPassword":"secret","userName":"alice","userRealName":"Alice","installDate":"2024-01-01","serviceDefault":{"defaultName":"本科生"}});</script></html>`)}, nil
 		},
 	})
 
@@ -32,11 +32,20 @@ func TestGetPersonSanitizesSensitiveOutput(t *testing.T) {
 	if result.Raw != nil {
 		t.Fatalf("expected raw capture to be omitted, got %#v", result.Raw)
 	}
+	if result.Level != kernel.EvidenceConfirmed {
+		t.Fatalf("expected confirmed level, got %s", result.Level)
+	}
 	if got := result.Data.Fields["password"]; got != "" {
 		t.Fatalf("expected password field to be sanitized, got %q", got)
 	}
 	if got := result.Data.Fields["userName"]; got != "alice" {
 		t.Fatalf("expected non-sensitive field to remain, got %q", got)
+	}
+	if got := result.Data.Fields["userRealName"]; got != "Alice" {
+		t.Fatalf("expected projected userRealName, got %q", got)
+	}
+	if got := result.Data.Fields["serviceDefaultName"]; got != "本科生" {
+		t.Fatalf("expected projected service default name, got %q", got)
 	}
 }
 

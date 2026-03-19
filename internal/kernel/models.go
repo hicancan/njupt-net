@@ -75,7 +75,7 @@ type MacListResult struct {
 	Rows  []map[string]interface{} `json:"rows,omitempty"`
 }
 
-// PersonState exposes guarded person-list diagnostics.
+// PersonState exposes a sanitized machine-readable projection of person-list state.
 type PersonState struct {
 	CSRFTOKEN string            `json:"csrftoken,omitempty"`
 	Fields    map[string]string `json:"fields,omitempty"`
@@ -96,4 +96,15 @@ type Portal802Response struct {
 	Msg        string `json:"msg,omitempty"`
 	Endpoint   string `json:"endpoint,omitempty"`
 	RawPayload string `json:"rawPayload,omitempty"`
+}
+
+// Portal801LoginResponse captures the confirmed JSON shape returned by the 801 admin login API.
+type Portal801LoginResponse struct {
+	Endpoint             string `json:"endpoint,omitempty"`
+	Code                 int    `json:"code"`
+	Msg                  string `json:"msg,omitempty"`
+	TokenPresent         bool   `json:"tokenPresent"`
+	ChangePass           bool   `json:"changePass,omitempty"`
+	AdminConsoleDetected bool   `json:"adminConsoleDetected,omitempty"`
+	RawPayload           string `json:"rawPayload,omitempty"`
 }

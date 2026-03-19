@@ -82,12 +82,14 @@
 5. `oprateMauthAction` 会话失效边界明确：登出后跳登录页 / `refreshMauthType` 返回登录页 HTML
 6. Portal 802 `ret_code=2 / AC999` 可稳定观察到“已在线 / 重复登录”语义，应作为 guarded success 而非未知错误
 7. Portal 801 注销页若 body 含 `Logout succeed.`，可作为稳定成功标记
-8. Portal 801 登录返回通用 EPortal 壳页面时，缺乏稳定机器可判定成功信号，只能作为 guarded fallback
+8. Portal 801 登录实际命中 `/eportal/admin/login/login` JSON API，前端会先加载通用 EPortal 壳页，再以 `MD5(password)` 发起管理端登录；校园网用户凭据未返回 token，因此该能力应作为 blocked admin-console probe
 9. `refreshaccount` 为正常空响应，不应依赖为结构化数据接口
+10. `tooffline` 在“目标会话存在 + bounded readback 证明其已消失”时，应作为 confirmed 成功；后续自动重连不否定这次离线动作成功
+11. `personList` 可作为 confirmed 脱敏读取能力；标准 JSON 只允许暴露从页面与 `window.user` 提取出的安全字段，不得暴露原始 HTML 或密码字段
 
 ### 2.2 Guarded（可实现，但必须保守处理）
 1. Portal 802 当前稳定可复现 `ret_code=1` 类错误归并
-2. `tooffline` 接口存在、参数明确，请求成功后必须依赖有界延迟 readback 判定；在线环境下仍可能真实失败
+2. `tooffline` 的裸 `{"success":true}` 响应不能直接当作业务成功；必须结合有界延迟 readback 判定
 3. `updateUserSecurity` 已确认两类失败语义：
    - 前端校验拦截（`Not valid!`）
    - 后端拒绝（`403`）
@@ -385,15 +387,15 @@ Self 接口返回类型不统一，必须采用 **endpoint 级 parser registry**
   - `{"success":true}`
   - 当前历史样本也见过 `{"success":false}`
 - 状态：
-  - **Guarded / Blocked**
+  - **Confirmed（以 bounded readback 为准）**
 - 当前结论：
   - 接口存在；请求体里的 `success=true` 不能直接当作业务成功
   - 必须结合后续有界延迟 `getOnlineList` 回读判定
-  - 若目标 session 消失且出现新的 follow-up session，视为 guarded success（目标会话已被踢下线，后续已自动重连）
+  - 若目标 session 消失且出现新的 follow-up session，仍视为 confirmed success（目标会话已被踢下线，后续已自动重连）
 - 实现要求：
   - 只有在 getOnlineList 返回可踢 session 时才尝试
   - 结果需结合后续 getOnlineList 回读判定
-  - 当前应暴露为 guarded capability
+  - 当前应暴露为 confirmed capability，但禁止只依据裸 `success=true` 判定
 
 ### `GET /Self/dashboard/oprateMauthAction`
 - Response Type: `HTML / Redirected HTML`
@@ -734,7 +736,7 @@ Self 接口返回类型不统一，必须采用 **endpoint 级 parser registry**
 
 ### 实现要求
 - 仅在 802 不可用且用户显式允许时尝试
-- 801 Login 返回 raw / guarded 诊断信息，不依赖壳页面 body 判断成功
+- 801 Login 使用 `/admin/login/login` JSON API 进行探测；若未返回 token，则应作为 blocked admin-console probe，而不是把壳页面误判成用户登录成功
 - 801 Logout 可在稳定成功标记出现时返回 confirmed success
 
 ---
@@ -779,7 +781,7 @@ Self 接口返回类型不统一，必须采用 **endpoint 级 parser registry**
 6. `RefreshAccountRaw`
 7. `GetMauthState`
 8. `ToggleMauth`
-9. `ForceOffline`（Guarded）
+9. `ForceOffline`
 
 ### Service
 10. `GetOperatorBinding`
@@ -790,7 +792,7 @@ Self 接口返回类型不统一，必须采用 **endpoint 级 parser registry**
 
 ### Setting
 15. `GetPersonList`
-16. `UpdateUserSecurity`（Guarded / mostly blocked for success path）
+16. `UpdateUserSecurity`（Blocked / mostly blocked for success path）
 
 ### Bill
 17. `GetUserOnlineLog`
@@ -967,7 +969,7 @@ njupt-net
     refresh-account-raw
     mauth get
     mauth toggle
-    offline <sessionid>         # guarded
+    offline <sessionid>         # confirmed via bounded readback
   service
     binding get
     binding set
@@ -976,7 +978,7 @@ njupt-net
     mac list
   setting
     person get
-    person update               # guarded / experimental
+    person update               # blocked / experimental
   bill
     online-log
     month-pay
@@ -1009,7 +1011,7 @@ njupt-net
    - `wait ~1s`
    - `get state again`
 7. `tooffline` 实现必须先检查 `getOnlineList` 是否有 session。
-8. `updateUserSecurity` 默认标注 experimental / guarded。
+8. `updateUserSecurity` 默认标注 experimental / blocked。
 9. Portal 802 解析器必须允许 `ret_code` 为数字或字符串。
 10. 对 `ret_code=1` 只报告原始消息，不做单义解释。
 

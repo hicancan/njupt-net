@@ -144,11 +144,11 @@ Default guard behavior:
 | Domain | Typical commands | Purpose |
 | --- | --- | --- |
 | `self` | `login`, `logout`, `status`, `doctor` | authoritative Self login and diagnosis |
-| `dashboard` | `online-list`, `login-history`, `mauth`, `offline` | operational state and guarded actions |
+| `dashboard` | `online-list`, `login-history`, `mauth`, `offline` | operational state and offline control |
 | `service` | `binding`, `consume`, `mac`, `migrate` | broadband state and controlled writes |
-| `setting` | `person get`, `person update` | guarded / blocked user-security surface |
+| `setting` | `person get`, `person update` | sanitized person-state reads and blocked update semantics |
 | `bill` | `month-pay`, `online-log`, `operator-log` | billing and usage records |
-| `portal` | `login`, `logout`, `login-801`, `logout-801` | Portal 802 primary flow and 801 fallback |
+| `portal` | `login`, `logout`, `login-801`, `logout-801` | Portal 802 primary flow and 801 admin probe |
 | `raw` | `get`, `post` | low-level debugging probes |
 | `guard` | `run`, `start`, `stop`, `status`, `once` | long-running guard runtime |
 
@@ -409,8 +409,8 @@ Reverse-engineered certainty is part of the runtime API.
 | Level | Meaning | Examples |
 | --- | --- | --- |
 | `confirmed` | safe to ship as a supported capability | Self login chain, broadband binding write, Portal 802 |
-| `guarded` | exposed, but intentionally conservative | force offline, Portal 801 fallback |
-| `blocked` | known endpoint exists, but semantics are not strong enough to promise as supported truth | selected user-security update paths |
+| `guarded` | exposed, but intentionally conservative | transitional states such as Portal 802 `AC999` already-online responses |
+| `blocked` | known endpoint exists, but semantics are not strong enough to promise as supported truth | `setting person update`, `portal login-801` admin-login probe |
 
 ## Quality Gates
 

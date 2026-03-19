@@ -15,13 +15,13 @@ This matrix tracks the current implementation surface against the SSOT certainty
 | Dashboard | `dashboard refresh-account-raw` / `/Self/dashboard/refreshaccount` | confirmed | implemented | intentionally exposed as raw probe |
 | Dashboard | `dashboard mauth get` / `/Self/dashboard/refreshMauthType` | confirmed | implemented | normalized to `on/off/unknown` |
 | Dashboard | `dashboard mauth toggle` / `/Self/dashboard/oprateMauthAction` | confirmed | implemented | verified by before/after state flip |
-| Dashboard | `dashboard offline` / `/Self/dashboard/tooffline` | guarded | implemented | pre-checks target session and performs bounded delayed readback; disappearance plus follow-up session counts as guarded success |
+| Dashboard | `dashboard offline` / `/Self/dashboard/tooffline` | confirmed | implemented | pre-checks target session and performs bounded delayed readback; target-session removal is confirmed success, even if a follow-up session later appears |
 | Service | `service binding get` / `/Self/service/operatorId` | confirmed | implemented | typed `OperatorBinding` |
 | Service | `service binding set` / `/Self/service/bind-operator` | confirmed | implemented | readback and optional restore |
 | Service | `service consume get` / `/Self/service/consumeProtect` | confirmed | implemented | typed `ConsumeProtectState` |
 | Service | `service consume set` / `/Self/service/changeConsumeProtect` | confirmed | implemented | readback and optional restore |
 | Service | `service mac list` / `/Self/service/getMacList` | confirmed | implemented | typed count + raw row list |
-| Setting | `setting person get` / `/Self/setting/personList` | guarded | implemented | exposes sanitized guarded person state; standard JSON omits raw HTML and password-like fields |
+| Setting | `setting person get` / `/Self/setting/personList` | confirmed | implemented | exposes sanitized person state; standard JSON omits raw HTML and password-like fields |
 | Setting | `setting person update` / `/Self/setting/updateUserSecurity` | blocked | implemented as blocked shell | submit path exists, success semantics intentionally blocked |
 | Bill | `bill online-log` / `/Self/bill/getUserOnlineLog` | confirmed | implemented | typed shared list result |
 | Bill | `bill month-pay` / `/Self/bill/getMonthPay` | confirmed | implemented | typed shared list result |
@@ -33,7 +33,7 @@ This matrix tracks the current implementation surface against the SSOT certainty
 | --- | --- | --- | --- | --- |
 | Portal 802 | `portal login` / `:802/eportal/portal/login` | confirmed | implemented | JSONP parsing, ret_code classification; `ret_code=2 / AC999` is treated as already-online guarded success |
 | Portal 802 | `portal logout` / `:802/eportal/portal/logout` | confirmed | implemented | transport-confirmed request path |
-| Portal 801 | `portal login-801` | guarded | implemented | body returns a generic EPortal shell; no stable success signal, so semantics remain guarded |
+| Portal 801 | `portal login-801` | blocked | implemented | browser evidence shows an `/admin/login/login` JSON API with MD5(password); campus-user credentials returned no token, so this remains a blocked admin-console probe |
 | Portal 801 | `portal logout-801` | confirmed | implemented | confirmed when body contains the stable `Logout succeed.` marker |
 
 ## Workflow

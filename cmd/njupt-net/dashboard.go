@@ -191,7 +191,7 @@ func newDashboardOfflineCmd() *cobra.Command {
 	var flags authFlags
 	cmd := &cobra.Command{
 		Use:   "offline <sessionid>",
-		Short: "Guarded force-offline request with readback verification",
+		Short: "Force-offline request with bounded readback verification",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := requireYes(cmd, "dashboard offline"); err != nil {
@@ -217,3 +217,4 @@ func newDashboardOfflineCmd() *cobra.Command {
 	bindAuthFlags(cmd, &flags)
 	return cmd
 }
+

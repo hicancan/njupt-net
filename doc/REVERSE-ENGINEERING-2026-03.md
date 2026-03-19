@@ -157,7 +157,7 @@ flowchart LR
 | 接口 | 页面 / 网络观察 | 证据等级 |
 | --- | --- | --- |
 | `GET /Self/dashboard/oprateMauthAction` | 真实切换后 UI 从“默认”变为“关闭”，前后状态可读回验证 | `confirmed` |
-| `GET /Self/dashboard/tooffline?sessionid=...` | 会话可被踢下线，但目标会话消失后可能马上出现新的 follow-up session | `guarded` |
+| `GET /Self/dashboard/tooffline?sessionid=...` | 会话可被踢下线；若 bounded readback 证明目标会话已消失，则应视为 confirmed 成功，即使后续又出现新的会话 | `confirmed` |
 
 ### 7.3 `dashboard offline` 的最终语义
 
@@ -167,9 +167,9 @@ flowchart LR
 2. 发请求后需要 bounded readback
 3. 若目标会话消失，但在线列表中很快出现新的会话，说明“目标会话被踢下线，后续已自动重连”
 
-因此它应维持：
+因此它现在应定性为：
 
-- `dashboard offline`：`guarded`
+- `dashboard offline`：`confirmed`
 
 ## 8. Service 页面与接口
 
@@ -257,7 +257,7 @@ flowchart LR
 | --- | --- | --- |
 | `GET /Self/setting` | 设置入口页 | `confirmed` |
 | `GET /Self/setting/userSecurity` | 只提供到 `personList` 的入口 | `confirmed` |
-| `GET /Self/setting/personList` | 表单 action 为 `/Self/setting/updateUserSecurity`，页面包含 `csrftoken` | `guarded` |
+| `GET /Self/setting/personList` | 表单 action 为 `/Self/setting/updateUserSecurity`，页面包含 `csrftoken`，并可从 `window.user` 提取稳定脱敏字段 | `confirmed` |
 
 ### 敏感观察
 
@@ -281,7 +281,7 @@ flowchart LR
 
 ### 结论
 
-- `setting person get`：`guarded`
+- `setting person get`：`confirmed`
 - `setting person update`：`blocked`
 
 ## 10. Bill 页面与接口
@@ -345,17 +345,23 @@ flowchart LR
 
 ## 12.1 登录
 
-- 路径：`/eportal/?c=ACSetting&a=Login`
-- 现场观察到的稳定返回是通用 EPortal shell：
+- 页面入口：`/eportal/#/login?redirect=%2Fdashboard`
+- 页面层稳定证据：
   - 标题 `EPortal`
-  - 通用账号密码登录表单
-  - `getSiteInfo` 等壳层请求
+  - Vue SPA 登录表单
+  - 可见字段：`账号`、`密码`
+- 网络层稳定证据：
+  - 真实登录 API：`POST /eportal/admin/login/login`
+  - 请求体：`{"username":"<account>","password":"<md5(password)>"}`
+  - 当前校园网用户凭据现场返回：
+    - `{"code":0,"msg":"您已登录失败1次，登录失败超过5次账号将被锁定！失败次数隔天清零。"}`
+  - 未观察到 `data.token`
 
 ### 结论
 
-- 接口存在
-- 但缺少稳定机器可判定成功信号
-- `portal login-801` 必须维持 `guarded`
+- 接口存在，且已确认不是旧式 `ACSetting Login` 表单，而是管理端 JSON API
+- 前置壳页只是 SPA 容器，不能再作为成功判定依据
+- 对当前校园网用户凭据，未观察到稳定用户 token，因此 `portal login-801` 应作为 `blocked` 的 admin-console probe，而不是正式用户登录能力
 
 ## 12.2 注销
 
@@ -413,10 +419,8 @@ flowchart LR
 
 仍需保留非 `confirmed` 语义的项有：
 
-- `dashboard offline`：`guarded`
-- `setting person get`：`guarded`
 - `setting person update`：`blocked`
-- `portal login-801`：`guarded`
+- `portal login-801`：`blocked`
 
 ## 15.2 是否“所有逆向出来的功能都已实现”
 
@@ -432,4 +436,4 @@ flowchart LR
 
 ## 15.3 最终一句话结论
 
-`njupt-net` 当前命令树范围内的业务页面和业务接口已经完成零基逆向覆盖，所有 32 个叶子命令都已有对应实现；但并不是所有能力都拥有 `confirmed` 成功语义，`dashboard offline`、`setting person get/update`、`portal login-801` 仍必须按 `guarded` / `blocked` 对待。
+`njupt-net` 当前命令树范围内的业务页面和业务接口已经完成零基逆向覆盖，所有 32 个叶子命令都已有对应实现；但并不是所有能力都拥有 `confirmed` 成功语义，`setting person update` 与 `portal login-801` 仍必须按 `blocked` 对待。

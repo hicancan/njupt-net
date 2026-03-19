@@ -11,7 +11,7 @@ import (
 	"github.com/hicancan/njupt-net-cli/internal/kernel"
 )
 
-func TestSessionClientGetAndPostForm(t *testing.T) {
+func TestSessionClientGetAndPostBodies(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/get":
@@ -28,6 +28,18 @@ func TestSessionClientGetAndPostForm(t *testing.T) {
 				t.Fatalf("unexpected form: %#v", r.Form)
 			}
 			_, _ = io.WriteString(w, "post-ok")
+		case "/json":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read json body: %v", err)
+			}
+			if got, want := string(body), `{"hello":"world"}`; got != want {
+				t.Fatalf("unexpected json payload: %q want %q", got, want)
+			}
+			if got := r.Header.Get("Content-Type"); got != "application/json" {
+				t.Fatalf("unexpected content-type: %q", got)
+			}
+			_, _ = io.WriteString(w, "json-ok")
 		default:
 			http.NotFound(w, r)
 		}
@@ -56,6 +68,14 @@ func TestSessionClientGetAndPostForm(t *testing.T) {
 	}
 	if string(postResp.Body) != "post-ok" {
 		t.Fatalf("unexpected post body: %q", string(postResp.Body))
+	}
+
+	jsonResp, err := client.PostJSON(context.Background(), "/json", kernel.RequestOptions{}, []byte(`{"hello":"world"}`))
+	if err != nil {
+		t.Fatalf("post json: %v", err)
+	}
+	if string(jsonResp.Body) != "json-ok" {
+		t.Fatalf("unexpected json body: %q", string(jsonResp.Body))
 	}
 }
 

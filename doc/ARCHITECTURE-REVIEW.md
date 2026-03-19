@@ -28,7 +28,7 @@ Round 1 rebuilt the project around explicit boundaries:
   - dashboard/service/setting/bill protocol implementations
 - `internal/portal`
   - Portal 802 primary implementation
-  - Portal 801 guarded fallback
+  - Portal 801 blocked admin-console probe
 - `internal/workflow`
   - multi-step doctor and migration workflows
 

@@ -18,10 +18,8 @@
 
 当前仍必须保留非 `confirmed` 的项：
 
-- `dashboard offline`：`guarded`
-- `setting person get`：`guarded`
 - `setting person update`：`blocked`
-- `portal login-801`：`guarded`
+- `portal login-801`：`blocked`
 
 ### 1.2 目前是不是“所有逆向出来的功能都已实现”
 
@@ -47,7 +45,7 @@
 | `personList` 敏感内容 | 旧 SSOT 已强调安全边界 | 已现场再次确认页面脚本里存在密码型信息，标准 JSON 不能暴露原始 HTML | `已逆向且已实现` |
 | Portal 802 `AC999` | 旧 SSOT 认为是已在线 / 重复登录 guarded success | 已通过“先 logout 再 login”的现场补证再次确认 | `已逆向且已实现` |
 | Portal 801 logout | 旧 SSOT 认为 `Logout succeed.` 可作为 confirmed 标记 | 已现场再次确认 | `已逆向且已实现` |
-| Portal 801 login | 旧 SSOT 认为返回通用壳页，仅能 guarded | 已现场再次确认，仍无稳定成功信号 | `应保留 guarded/blocked` |
+| Portal 801 login | 旧 SSOT 认为返回通用壳页，仅能 guarded | 已现场补证真实 `/admin/login/login` JSON API；当前校园网用户凭据未返回 token，应提升为明确 blocked | `应保留 guarded/blocked` |
 
 ## 2.2 新零基审计没有推翻旧 SSOT 的点
 
@@ -65,13 +63,13 @@
 | --- | --- | --- |
 | `self login/logout/status/doctor` | 与现场一致 | `已逆向且已实现` |
 | `dashboard online-list/login-history/refresh-account-raw/mauth get/mauth toggle` | 与现场一致 | `已逆向且已实现` |
-| `dashboard offline` guarded | 与现场一致；确应保持 guarded | `应保留 guarded/blocked` |
+| `dashboard offline` guarded | 新现场补证已把它提升为 bounded-readback confirmed 成功 | `已逆向且已实现` |
 | `service binding/consume/mac/migrate` | 与现场一致 | `已逆向且已实现` |
-| `setting person get` guarded | 与现场一致 | `应保留 guarded/blocked` |
+| `setting person get` guarded | 新现场补证已把它提升为 confirmed 脱敏读取能力 | `已逆向且已实现` |
 | `setting person update` blocked shell | 与现场一致 | `应保留 guarded/blocked` |
 | `bill online-log/month-pay/operator-log` | 与现场一致 | `已逆向且已实现` |
 | `portal login/logout` | 与现场一致；`AC999` 的 already-online 语义再次确认 | `已逆向且已实现` |
-| `portal login-801` guarded | 与现场一致 | `应保留 guarded/blocked` |
+| `portal login-801` blocked | 与现场一致；真实管理端 JSON API 已补证 | `应保留 guarded/blocked` |
 | `portal logout-801` confirmed | 与现场一致 | `已逆向且已实现` |
 | `guard` runtime commands | 与现场和路由器运行状态一致 | `已逆向且已实现` |
 
@@ -92,21 +90,21 @@
 | `dashboard refresh-account-raw` | `refreshaccount` | `已逆向且已实现` | 原始探针 |
 | `dashboard mauth get` | `refreshMauthType` | `已逆向且已实现` | |
 | `dashboard mauth toggle` | `oprateMauthAction` | `已逆向且已实现` | 通过前后状态翻转确认 |
-| `dashboard offline` | `tooffline` | `应保留 guarded/blocked` | 会话踢下线后可能立即自动重连 |
+| `dashboard offline` | `tooffline` | `已逆向且已实现` | bounded readback 证明目标会话移除即可 confirmed；后续自动重连不否定成功 |
 | `service binding get` | `operatorId` | `已逆向且已实现` | |
 | `service binding set` | `bind-operator` | `已逆向且已实现` | 业务失败优先于通用读回错误 |
 | `service consume get` | `consumeProtect` | `已逆向且已实现` | |
 | `service consume set` | `changeConsumeProtect` | `已逆向且已实现` | |
 | `service mac list` | `myMac` + `getMacList` | `已逆向且已实现` | |
 | `service migrate` | 组合 `bind-operator` 流程 | `已逆向且已实现` | 组合能力 |
-| `setting person get` | `personList` | `应保留 guarded/blocked` | 页面存在敏感原始内容，标准 JSON 必须脱敏 |
+| `setting person get` | `personList` | `已逆向且已实现` | 页面存在敏感原始内容，但标准 JSON 已稳定输出脱敏字段 |
 | `setting person update` | `updateUserSecurity` | `应保留 guarded/blocked` | 成功语义仍不足以 confirmed |
 | `bill online-log` | `getUserOnlineLog` | `已逆向且已实现` | |
 | `bill month-pay` | `getMonthPay` | `已逆向且已实现` | |
 | `bill operator-log` | `getOperatorLog` | `已逆向且已实现` | |
 | `portal login` | 802 login | `已逆向且已实现` | `AC999` 已按 guarded success 归类 |
 | `portal logout` | 802 logout | `已逆向且已实现` | |
-| `portal login-801` | 801 login | `应保留 guarded/blocked` | 仍缺稳定成功信号 |
+| `portal login-801` | 801 login | `应保留 guarded/blocked` | 已确认是 `/admin/login/login` 管理端 JSON API；当前校园网用户凭据未返回 token |
 | `portal logout-801` | 801 logout | `已逆向且已实现` | `Logout succeed.` 已确认 |
 | `raw get` | 任意 Self GET | `已逆向且已实现` | 观察入口，无新增协议面 |
 | `raw post` | 任意 Self POST | `已逆向且已实现` | 观察入口，无新增协议面 |
@@ -118,12 +116,10 @@
 
 ## 5. 仍然不是 “全部 confirmed” 的空白点
 
-本轮没有留下“未逆向”的命令面空白，但仍有 4 个能力不应被说成 fully confirmed：
+本轮没有留下“未逆向”的命令面空白，但仍有 2 个能力不应被说成 fully confirmed：
 
-1. `dashboard offline`
-2. `setting person get`
-3. `setting person update`
-4. `portal login-801`
+1. `setting person update`
+2. `portal login-801`
 
 它们不是没实现，而是**根据现场证据必须保守表达**。
 
