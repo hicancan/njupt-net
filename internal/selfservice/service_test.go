@@ -142,6 +142,14 @@ func TestExtractBusinessMessage(t *testing.T) {
 	}
 }
 
+func TestExtractBusinessMessageIgnoresInlineScripts(t *testing.T) {
+	body := []byte(`<html><script>$(function(){var exit="注销登录";var recharge="账户充值";});</script><input name="FLDEXTRA3" value="13800138000"></html>`)
+	got := extractBusinessMessage(body)
+	if got != "" {
+		t.Fatalf("expected no business message, got %q", got)
+	}
+}
+
 func TestBindOperatorPrefersBusinessFailureWithoutReadback(t *testing.T) {
 	client := NewClient(&mockSessionClient{
 		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {

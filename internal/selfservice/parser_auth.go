@@ -52,7 +52,7 @@ func extractBusinessMessage(body []byte) string {
 			return text
 		}
 		fallback := ""
-		doc.Find("div,span,p,li,script").EachWithBreak(func(_ int, s *goquery.Selection) bool {
+		doc.Find("div,span,p,li").EachWithBreak(func(_ int, s *goquery.Selection) bool {
 			text := normalizeText(s.Text())
 			if looksLikeBindingBusinessMessage(text) {
 				fallback = text
@@ -77,7 +77,7 @@ func looksLikeBindingBusinessMessage(s string) bool {
 	if trimmed == "" {
 		return false
 	}
-	for _, keyword := range []string{"绑定失败", "未绑定", "已存在", "账号"} {
+	for _, keyword := range []string{"绑定失败", "未绑定", "已存在", "运营商账号", "失败"} {
 		if strings.Contains(trimmed, keyword) {
 			return true
 		}
