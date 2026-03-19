@@ -26,6 +26,7 @@
 - [架构设计](#架构设计)
 - [命令功能清单](#命令功能清单)
 - [快速开始](#快速开始)
+- [路由器 / ImmortalWrt 部署](#路由器--immortalwrt-部署)
 - [配置说明](#配置说明)
 - [机器可读契约](#机器可读契约)
 - [Go 守护运行时](#go-守护运行时)
@@ -274,6 +275,41 @@ njupt-net guard status --output json
 .\scripts\test-local.ps1 -ReadOnly -SkipPortal
 ```
 
+## 路由器 / ImmortalWrt 部署
+
+`scripts/install-immortalwrt.ps1` 现在属于正式支持面。
+
+支持模型如下：
+
+- 本机 PowerShell 部署脚本
+- 路由器侧 `procd + guard run`
+- 状态目录默认放在 `/tmp`，避免高频状态写入闪存
+
+最低要求：
+
+- 本机可用 `ssh` 与 `scp`
+- 目标设备架构为 `aarch64` / `arm64`
+- 路由器可通过 `root@immortalwrt` 直接 SSH 连接，或通过 `-HostName` 覆盖
+
+常用部署命令：
+
+```powershell
+.\scripts\install-immortalwrt.ps1
+.\scripts\install-immortalwrt.ps1 -Build
+.\scripts\install-immortalwrt.ps1 -SkipConfigUpload
+```
+
+部署后，路由器侧常用命令：
+
+```sh
+/etc/init.d/njupt-net status
+/etc/init.d/njupt-net restart
+/etc/init.d/njupt-net stop
+/usr/bin/njupt-net --config /etc/njupt-net/credentials.json --output json guard status --state-dir /tmp/njupt-net-guard
+logread -e njupt-net
+cat /tmp/njupt-net-guard/status.json
+```
+
 ## 配置说明
 
 配置查找顺序：
@@ -302,6 +338,20 @@ njupt-net guard status --output json
 ## 机器可读契约
 
 `--output json` 是正式支持的机器接口，而不是调试附属品。
+
+这一层契约现在视为长期兼容接口：
+
+- 顶层 `OperationResult`
+- `problems[].code`
+- `problems[].details`
+- `guard status` 嵌套字段结构
+- `guard event.kind + details`
+
+下列内容不属于机器兼容承诺：
+
+- `message`
+- 人类可读终端文本
+- README 中的解释性示例文本
 
 ### 操作结果
 

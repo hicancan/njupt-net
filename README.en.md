@@ -26,6 +26,7 @@ The repository name remains `njupt-net-cli`, but the supported product surface i
 - [Architecture](#architecture)
 - [Command Surface](#command-surface)
 - [Quick Start](#quick-start)
+- [Router / ImmortalWrt Deployment](#router--immortalwrt-deployment)
 - [Configuration](#configuration)
 - [Machine-Readable Contract](#machine-readable-contract)
 - [Guard Runtime](#guard-runtime)
@@ -274,6 +275,41 @@ Read-only smoke:
 .\scripts\test-local.ps1 -ReadOnly -SkipPortal
 ```
 
+## Router / ImmortalWrt Deployment
+
+`scripts/install-immortalwrt.ps1` is now part of the supported product surface.
+
+Supported deployment model:
+
+- local PowerShell deployment script
+- router-side `procd + guard run`
+- runtime state stored under `/tmp` to avoid flash write churn
+
+Minimum requirements:
+
+- local `ssh` and `scp`
+- target router architecture `aarch64` / `arm64`
+- direct SSH access such as `root@immortalwrt`, or an override through `-HostName`
+
+Common deployment commands:
+
+```powershell
+.\scripts\install-immortalwrt.ps1
+.\scripts\install-immortalwrt.ps1 -Build
+.\scripts\install-immortalwrt.ps1 -SkipConfigUpload
+```
+
+Useful commands on the router after deployment:
+
+```sh
+/etc/init.d/njupt-net status
+/etc/init.d/njupt-net restart
+/etc/init.d/njupt-net stop
+/usr/bin/njupt-net --config /etc/njupt-net/credentials.json --output json guard status --state-dir /tmp/njupt-net-guard
+logread -e njupt-net
+cat /tmp/njupt-net-guard/status.json
+```
+
 ## Configuration
 
 `njupt-net` resolves config in this order:
@@ -302,6 +338,20 @@ Commands that do not require protocol credentials should still work without a re
 ## Machine-Readable Contract
 
 `--output json` is a supported machine interface.
+
+This contract is now treated as a long-term compatibility surface:
+
+- top-level `OperationResult`
+- `problems[].code`
+- `problems[].details`
+- nested `guard status`
+- `guard event.kind + details`
+
+The following remain human-facing and are not part of the compatibility promise:
+
+- `message`
+- terminal-oriented human output
+- explanatory prose in the README
 
 ### Operation Output
 

@@ -11,6 +11,7 @@
 *.out
 *.coverprofile
 coverage.out
+core
 
 # Go workspace files
 go.work

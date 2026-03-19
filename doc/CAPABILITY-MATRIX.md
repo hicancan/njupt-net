@@ -67,3 +67,11 @@ Machine-readable output contracts also rely on:
 - stable `guard event.kind` values with typed `details`
 - typed nested `guard status` output for binding, connectivity, portal, cycle, timing, and log state, including probe and switch outcome data
 - `guard status` health values: `healthy`, `degraded`, `stopped`
+
+These JSON shapes are now treated as frozen compatibility contracts. Future work should expand tests and fixtures rather than reshape the payloads without an explicit breaking release.
+
+## Supported Deployment Surfaces
+
+- local CLI use on desktop/server systems
+- cross-platform Go guard runtime
+- official ImmortalWrt router deployment through `scripts/install-immortalwrt.ps1` with router-side `procd + guard run`

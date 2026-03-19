@@ -30,6 +30,17 @@ jobs:
         run: |
           test -z "$(gofmt -l .)"
 
+      - name: Parse ImmortalWrt installer script
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile('scripts/install-immortalwrt.ps1', [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_ }
+            exit 1
+          }
+
       - name: Run tests
         run: go test ./...
 

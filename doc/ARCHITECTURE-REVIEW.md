@@ -147,6 +147,31 @@ It now has:
 
 This keeps the long-running model cross-platform while avoiding OS-specific service adapters.
 
+### Machine-readable contracts are frozen
+
+The current JSON output shape is now treated as a supported compatibility surface rather than an exploratory output format.
+
+Protected machine contracts:
+
+- top-level `OperationResult`
+- typed `problem.code + details`
+- typed nested `guard status`
+- typed `guard event.kind + details`
+
+Human-readable `message` strings remain useful context, but they are not the compatibility boundary.
+
+### ImmortalWrt deployment is now part of the supported product surface
+
+The repository now ships an official router deployment path through `scripts/install-immortalwrt.ps1`.
+
+That deployment model is intentionally simple:
+
+- local PowerShell orchestration
+- remote `procd + guard run`
+- state directory under `/tmp` to avoid flash churn
+
+This keeps router deployment aligned with the same single-binary, cross-platform runtime model used elsewhere.
+
 ## Keep / Rewrite / Remove Summary
 
 ### Keep
@@ -178,4 +203,4 @@ The project is now structurally ready, but there are still worthwhile future imp
 - add more fixtures for rare HTML variants
 - increase selfservice and portal coverage further
 - add session persistence when the supported UX requires it
-- continue tightening selected machine-readable payloads where a concrete typed schema is clearly stable enough to justify it
+- keep machine contracts stable and extend coverage and golden tests instead of reshaping JSON
