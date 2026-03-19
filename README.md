@@ -1,71 +1,73 @@
 # njupt-net
 
-[中文文档](README.zh-CN.md) | English
+中文 | [English](README.en.md)
 
 [![Verify](https://github.com/hicancan/njupt-net-cli/actions/workflows/release.yml/badge.svg)](https://github.com/hicancan/njupt-net-cli/actions/workflows/release.yml)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/hicancan/njupt-net-cli)](https://github.com/hicancan/njupt-net-cli/blob/main/go.mod)
 [![Latest Release](https://img.shields.io/github/v/release/hicancan/njupt-net-cli)](https://github.com/hicancan/njupt-net-cli/releases)
 [![Repo Stars](https://img.shields.io/github/stars/hicancan/njupt-net-cli?style=social)](https://github.com/hicancan/njupt-net-cli/stargazers)
 
-`njupt-net` is a Go-first terminal system for NJUPT Self-Service and Portal workflows.
+`njupt-net` 是一个面向 NJUPT 自助服务系统与 Portal 网关的 Go 终端系统。
 
-It is not a thin wrapper around a few endpoints. It is a typed protocol kernel plus a disciplined CLI/runtime layer designed for:
+它不是“几个接口的命令行封装”，而是一套带类型内核的终端系统，核心目标是：
 
-- confirmed vs guarded vs blocked capability modeling
-- readback-first write verification
-- stable machine-readable JSON output
-- cross-platform guard runtime with explicit status and event logs
-- long-term maintainability in a single repository and a single binary
+- 把逆向出来的协议真相显式固化下来
+- 把 `confirmed / guarded / blocked` 变成运行时语义
+- 把写操作统一为 readback-first 的可验证工作流
+- 把 `--output json` 变成稳定的机器接口
+- 把守护逻辑做成跨平台 Go runtime，而不是脚本拼装
 
-The repository name remains `njupt-net-cli`, but the supported product surface is the `njupt-net` command.
+仓库名仍然是 `njupt-net-cli`，但正式产品面是 `njupt-net` 命令。
 
-## Table Of Contents
+## 目录
 
-- [Why This Project](#why-this-project)
-- [Highlights](#highlights)
-- [Architecture](#architecture)
-- [Command Surface](#command-surface)
-- [Quick Start](#quick-start)
-- [Configuration](#configuration)
-- [Machine-Readable Contract](#machine-readable-contract)
-- [Guard Runtime](#guard-runtime)
-- [Evidence Model](#evidence-model)
-- [Quality Gates](#quality-gates)
-- [Project Layout](#project-layout)
-- [Documentation](#documentation)
+- [项目定位](#项目定位)
+- [核心亮点](#核心亮点)
+- [架构设计](#架构设计)
+- [命令功能清单](#命令功能清单)
+- [快速开始](#快速开始)
+- [配置说明](#配置说明)
+- [机器可读契约](#机器可读契约)
+- [Go 守护运行时](#go-守护运行时)
+- [证据级别模型](#证据级别模型)
+- [质量门禁](#质量门禁)
+- [项目结构](#项目结构)
+- [相关文档](#相关文档)
 
-## Why This Project
+## 项目定位
 
-NJUPT networking is not one clean API. It is a combination of:
+NJUPT 的联网环境并不是一个单一、稳定、统一的 API，而是由以下部分组合而成：
 
-- the Self-Service system
-- the Portal gateway
-- HTML pages with embedded state
-- JSON and JSONP endpoints
-- guarded and blocked paths that cannot be treated as fully confirmed protocol truth
+- Self 自助服务系统
+- Portal 认证网关
+- HTML 页面中的嵌入状态
+- JSON / JSONP 接口
+- 可确认、可保守实现、仍被环境阻塞的不同能力层级
 
-`njupt-net` exists to make that environment operable without hiding uncertainty.
+`njupt-net` 的目标不是把复杂性藏起来，而是把复杂性结构化：
 
-Instead of pretending every endpoint is equally trustworthy, the project turns reverse-engineered certainty into first-class runtime semantics.
+- 已确认的能力，按确定语义实现
+- 仍有风险的能力，按 guarded 暴露
+- 仍受环境阻塞的能力，按 blocked 处理
 
-## Highlights
+## 核心亮点
 
-- Typed kernel with explicit `confirmed`, `guarded`, and `blocked` evidence levels
-- Stable `--output json` contract for automation and scripting
-- Confirmed Self login chain with protected-page readback
-- Readback-first write flows for binding, consume-protect, and mauth toggling
-- Portal 802 as the primary implementation, 801 retained as guarded fallback
-- Cross-platform Go guard runtime with:
-  - day `B` / night `W` scheduling
-  - aggressive recovery without `logout`
-  - typed nested status
-  - structured JSONL events
-  - graceful stop-first supervision
-- Architecture guardrail tests to keep protocol truth out of the wrong layers
+- Go-first 的 typed kernel
+- `confirmed / guarded / blocked` 证据模型
+- Self 登录主链的受保护页面回读校验
+- 绑定、消费保护、mauth 的 readback-first 写入模型
+- Portal 802 为主实现，801 仅作 guarded fallback
+- 跨平台 Go 守护 runtime：
+  - 白天守 `B`
+  - 夜间守 `W`
+  - 不主动 `logout`
+  - 高频探测与激进恢复
+  - 结构化状态与事件流
+- AST 架构护栏测试，防止未来回退成“命令层偷做协议”
 
-## Architecture
+## 架构设计
 
-The project is intentionally a modular monolith.
+项目采用克制的模块化单体架构，而不是过度设计的多仓或插件系统。
 
 ```text
 cmd/njupt-net
@@ -77,45 +79,43 @@ cmd/njupt-net
       -> internal/runtime/guard
 ```
 
-### Design Rules
+### 各层职责
 
 - `cmd/njupt-net`
-  - flag parsing and command wiring only
+  - 只负责命令装配和 flag 解析
 - `internal/app`
-  - lazy config loading
-  - renderer selection
-  - client/session factories
+  - lazy config
+  - renderer/output
+  - client/session factory
   - confirmation policy
 - `internal/kernel`
-  - evidence levels
-  - typed operation results
+  - evidence level
+  - typed result
   - typed problem catalog
   - transport contract
-  - writeflow semantics
+  - writeflow 语义
 - `internal/selfservice`
-  - Self protocol truth only
-  - endpoint/request orchestration
-  - parser/helper functions
+  - Self 协议真相
+  - endpoint/request 组织
+  - parser/helper
   - typed model mapping
 - `internal/portal`
-  - Portal request building
-  - raw/JSONP parsing
-  - ret_code classification
+  - Portal 请求构建
+  - 原始响应/JSONP 解析
+  - `ret_code` 分类
   - typed model mapping
 - `internal/workflow`
-  - pure use-cases only
-  - no concrete transport construction
+  - 纯 use-case 组合动作
+  - 不直接构造具体 transport
 - `internal/runtime/guard`
+  - 调度、探测、runner、supervisor、state store
   - typed runtime state machine
-  - scheduler, probe, runner, supervisor, store
 
-This keeps the CLI thin and keeps protocol truth where it belongs.
+## 命令功能清单
 
-## Command Surface
+当前 CLI 一共有 **8 个功能域，32 个叶子命令**。
 
-`njupt-net` currently exposes 8 domain groups and 32 leaf commands.
-
-### Top-Level Groups
+### 顶层功能域
 
 - `self`
 - `dashboard`
@@ -126,7 +126,7 @@ This keeps the CLI thin and keeps protocol truth where it belongs.
 - `raw`
 - `guard`
 
-### Full Command Tree
+### 完整命令树
 
 ```text
 njupt-net
@@ -172,28 +172,28 @@ njupt-net
     once
 ```
 
-### Capability Map
+### 功能域说明
 
-| Domain | Commands | Purpose |
+| 功能域 | 典型命令 | 作用 |
 | --- | --- | --- |
-| `self` | login, logout, status, doctor | authoritative Self auth and diagnosis |
-| `dashboard` | online sessions, login history, mauth, guarded offline | operational state and guarded actions |
-| `service` | binding, consume, MAC, migrate | broadband state and controlled write flows |
-| `setting` | person get/update | guarded user-security surface |
-| `bill` | month-pay, online-log, operator-log | billing and usage records |
-| `portal` | 802 login/logout, 801 fallback login/logout | gateway authentication |
-| `raw` | GET and POST probes | low-level debugging |
-| `guard` | run, start, stop, status, once | scheduled daemon and recovery runtime |
+| `self` | `login`, `logout`, `status`, `doctor` | Self 登录与诊断主路径 |
+| `dashboard` | `online-list`, `login-history`, `mauth`, `offline` | 在线会话、历史记录、无感知与 guarded 操作 |
+| `service` | `binding`, `consume`, `mac`, `migrate` | 宽带绑定、消费保护、MAC、迁移工作流 |
+| `setting` | `person get/update` | guarded 的个人资料面 |
+| `bill` | `month-pay`, `online-log`, `operator-log` | 账单与记录查询 |
+| `portal` | `login`, `logout`, `login-801`, `logout-801` | Portal 802 主链与 801 fallback |
+| `raw` | `get`, `post` | 低层调试探针 |
+| `guard` | `start`, `status`, `stop`, `once`, `run` | Go 守护运行时 |
 
-## Quick Start
+## 快速开始
 
-### 1. Build
+### 1. 编译
 
 ```bash
 go build ./...
 ```
 
-Cross-platform release builds:
+跨平台发布构建：
 
 ```bash
 bash ./scripts/build.sh all
@@ -203,25 +203,25 @@ bash ./scripts/build.sh all
 .\scripts\build.ps1 -Mode all
 ```
 
-### 2. Create `credentials.json`
+### 2. 准备 `credentials.json`
 
-Minimal example:
+最小示例：
 
 ```json
 {
   "accounts": {
     "B": {
-      "username": "your-student-id",
-      "password": "your-password"
+      "username": "你的学号",
+      "password": "你的密码"
     },
     "W": {
-      "username": "your-student-id",
-      "password": "your-password"
+      "username": "你的学号",
+      "password": "你的密码"
     }
   },
   "cmcc": {
-    "account": "your-mobile-broadband-account",
-    "password": "your-mobile-broadband-password"
+    "account": "你的移动宽带账号",
+    "password": "你的移动宽带密码"
   },
   "self": {
     "baseURL": "http://10.10.244.240:8080",
@@ -251,7 +251,7 @@ Minimal example:
 }
 ```
 
-### 3. Run Common Commands
+### 3. 常用命令示例
 
 ```bash
 njupt-net self login --profile B
@@ -262,27 +262,27 @@ njupt-net guard start --replace
 njupt-net guard status --output json
 ```
 
-### 4. Local Smoke Test
+### 4. 本地 smoke 测试
 
 ```powershell
 .\scripts\test-local.ps1
 ```
 
-Read-only smoke:
+只读模式：
 
 ```powershell
 .\scripts\test-local.ps1 -ReadOnly -SkipPortal
 ```
 
-## Configuration
+## 配置说明
 
-`njupt-net` resolves config in this order:
+配置查找顺序：
 
 1. `--config <path>`
 2. `NJUPT_NET_CONFIG`
 3. `credentials.json`
 
-Environment overrides also exist for selected runtime defaults:
+支持的环境变量覆盖包括：
 
 - `NJUPT_NET_OUTPUT`
 - `NJUPT_NET_SELF_BASE_URL`
@@ -292,20 +292,20 @@ Environment overrides also exist for selected runtime defaults:
 - `NJUPT_NET_SELF_TIMEOUT`
 - `NJUPT_NET_PORTAL_TIMEOUT`
 
-Commands that do not require protocol credentials should still work without a readable config file, for example:
+下面这些命令不应依赖成功加载配置文件：
 
 - `njupt-net --help`
 - `njupt-net completion ...`
 - `njupt-net guard status --state-dir ...`
 - `njupt-net guard stop --state-dir ...`
 
-## Machine-Readable Contract
+## 机器可读契约
 
-`--output json` is a supported machine interface.
+`--output json` 是正式支持的机器接口，而不是调试附属品。
 
-### Operation Output
+### 操作结果
 
-All commands return a typed `OperationResult` envelope:
+所有命令都返回 typed `OperationResult`：
 
 - `level`
 - `success`
@@ -316,24 +316,24 @@ All commands return a typed `OperationResult` envelope:
 
 ### Problems
 
-Problems are a versioned machine contract.
+问题输出是版本化的稳定契约。
 
-Each problem exposes:
+每个问题对象都包含：
 
 - `code`
 - `message`
 - `details`
 
-Major typed families include:
+当前重点的 typed family 包括：
 
-- portal problems
-- readback / restore / state-comparison problems
-- invalid-config problems
-- guarded / blocked capability problems
+- Portal 问题
+- readback / restore / state-comparison 问题
+- invalid-config 问题
+- guarded / blocked capability 问题
 
 ### Guard Status
 
-`guard status --output json` uses a nested typed contract:
+`guard status --output json` 使用嵌套结构：
 
 - `running`
 - `health`
@@ -348,9 +348,9 @@ Major typed families include:
 
 ### Guard Events
 
-Guard runtime events are emitted as JSONL records with stable `kind` values plus typed `details`.
+守护运行时事件采用 JSONL 输出，记录稳定的 `kind + typed details`。
 
-Supported kinds:
+支持的事件种类：
 
 - `startup`
 - `schedule-switch`
@@ -361,30 +361,30 @@ Supported kinds:
 - `shutdown`
 - `fatal`
 
-Human-readable output can evolve more freely than these JSON contracts.
+相比之下，人类可读输出允许更自由地演进。
 
-## Guard Runtime
+## Go 守护运行时
 
-The Go guard is the supported long-running runtime model.
+Go guard 是正式支持的长运行模型。
 
-### Behavior
+### 运行策略
 
-- day profile: `B`
-- night profile: `W`
-- probe interval: `3s` by default
-- no proactive `logout`
-- immediate recovery chain on connectivity loss
-- graceful stop request before forced kill
+- 白天守 `B`
+- 夜间守 `W`
+- 默认 `3s` 高频探测
+- 不主动 `logout`
+- 探测失败后立即走恢复链
+- `stop` 优先发 graceful stop request，超时再 kill
 
-### Runtime Files
+### 状态目录
 
-Default state directory:
+默认状态目录：
 
 ```text
 dist/guard
 ```
 
-Important files:
+关键文件：
 
 - `status.json`
 - `current-log.txt`
@@ -394,55 +394,55 @@ Important files:
 - `launcher.pid`
 - `worker.pid`
 
-### Health Model
+### 健康状态
 
 - `healthy`
-  - desired profile is correct
-  - binding is correct
-  - final connectivity is restored
+  - 目标 profile 正确
+  - 绑定正确
+  - 最终连通
 - `degraded`
-  - one full recovery cycle finished without reaching the target state
+  - 一整轮恢复链结束后仍未恢复到目标状态
 - `stopped`
-  - guard is not running
+  - 守护未运行
 
-## Evidence Model
+## 证据级别模型
 
-The reverse-engineered certainty model is part of the runtime API.
+逆向确定性模型是运行时 API 的一部分。
 
 ### `confirmed`
 
-Safe to implement as a normal supported capability.
+可以按正式能力实现。
 
-Examples:
+例如：
 
-- Self login chain with readback
-- broadband binding set with readback
-- consume-protect write with readback
-- mauth toggle with before/after verification
-- Portal 802 primary login flow
+- Self 登录主链
+- 宽带绑定写入与回读验证
+- 消费保护写入与回读验证
+- mauth toggle
+- Portal 802 主登录链
 
 ### `guarded`
 
-Exposed, but intentionally conservative.
+可以暴露，但必须保守。
 
-Examples:
+例如：
 
 - force offline
 - Portal 801 fallback
-- selected write paths whose success semantics are environment-sensitive
+- 某些环境敏感的写路径
 
 ### `blocked`
 
-Known endpoint surface exists, but success semantics are not yet strong enough to promise as fully supported truth.
+已知接口存在，但成功语义还不足以承诺为正式确定能力。
 
-Examples:
+例如：
 
-- blocked/guarded user-security update paths
-- unconfirmed Portal ret_code families
+- 仍被环境阻塞的用户资料更新路径
+- 仍未拿到充分样本的 Portal 某些 ret_code 分支
 
-## Quality Gates
+## 质量门禁
 
-Local gates:
+本地质量门禁：
 
 ```bash
 go test ./...
@@ -455,16 +455,16 @@ go vet ./...
 .\scripts\test-local.ps1 -ReadOnly -SkipPortal
 ```
 
-GitHub Actions enforces:
+GitHub Actions 会继续强制：
 
-- formatting
-- tests
-- coverage run
+- 格式检查
+- 单元测试
+- 覆盖率运行
 - `go vet`
 - `staticcheck`
-- release build matrix
+- 多平台构建
 
-## Project Layout
+## 项目结构
 
 ```text
 .
@@ -479,17 +479,15 @@ GitHub Actions enforces:
 └── scripts
 ```
 
-## Documentation
-
-Source-of-truth and architecture documents:
+## 相关文档
 
 - [doc/FINAL-SSOT.md](doc/FINAL-SSOT.md)
 - [doc/IMPLEMENTATION-TASK.md](doc/IMPLEMENTATION-TASK.md)
 - [doc/ARCHITECTURE-REVIEW.md](doc/ARCHITECTURE-REVIEW.md)
 - [doc/CAPABILITY-MATRIX.md](doc/CAPABILITY-MATRIX.md)
 
-## Repository Notes
+## 仓库说明
 
-- The repo name is `njupt-net-cli`, but the supported product name is `njupt-net`.
-- Historical Python/PowerShell guard helpers are no longer the supported runtime path.
-- The mainline product is the Go command, the typed kernel, and the Go guard runtime.
+- 仓库名是 `njupt-net-cli`，正式产品名是 `njupt-net`
+- 历史 Python/PowerShell 守护脚本不再是正式支持路径
+- 当前主线产品是：Go CLI、typed kernel、Go guard runtime
