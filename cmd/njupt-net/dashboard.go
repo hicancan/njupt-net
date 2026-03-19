@@ -217,4 +217,3 @@ func newDashboardOfflineCmd() *cobra.Command {
 	bindAuthFlags(cmd, &flags)
 	return cmd
 }
-

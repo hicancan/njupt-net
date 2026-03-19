@@ -132,18 +132,18 @@ func (c *Client) Login801(ctx context.Context, account, password string, _ strin
 	data, parseErr := parseLogin801Response(string(resp.Body), endpoint, adminConsoleDetected)
 	if parseErr != nil {
 		return &kernel.OperationResult[kernel.Portal801LoginResponse]{
-			Level:   kernel.EvidenceGuarded,
-			Success: false,
-			Message: "portal 801 admin login returned a non-JSON response",
-			Raw:     rawCapture(resp),
-		}, &kernel.OpError{
-			Op:      "portal.login801",
-			Message: "admin login returned a non-json response",
-			Err:     fmt.Errorf("%w: %v", kernel.ErrPortal, parseErr),
-			ProblemDetails: kernel.PortalProblemDetails{
-				Endpoint: endpoint,
-			},
-		}
+				Level:   kernel.EvidenceGuarded,
+				Success: false,
+				Message: "portal 801 admin login returned a non-JSON response",
+				Raw:     rawCapture(resp),
+			}, &kernel.OpError{
+				Op:      "portal.login801",
+				Message: "admin login returned a non-json response",
+				Err:     fmt.Errorf("%w: %v", kernel.ErrPortal, parseErr),
+				ProblemDetails: kernel.PortalProblemDetails{
+					Endpoint: endpoint,
+				},
+			}
 	}
 
 	if data.TokenPresent {
@@ -158,20 +158,20 @@ func (c *Client) Login801(ctx context.Context, account, password string, _ strin
 
 	message := fmt.Sprintf("portal 801 admin login returned no token (code=%d msg=%s)", data.Code, data.Msg)
 	return &kernel.OperationResult[kernel.Portal801LoginResponse]{
-		Level:   kernel.EvidenceBlocked,
-		Success: false,
-		Message: message,
-		Data:    data,
-		Raw:     rawCapture(resp),
-	}, &kernel.OpError{
-		Op:      "portal.login801",
-		Message: message,
-		Err:     kernel.ErrBlockedCapability,
-		ProblemDetails: kernel.CapabilityProblemDetails{
-			Capability: "portal.login801",
-			Reason:     "801 login targets an admin-console JSON API and returned no token for these credentials",
-		},
-	}
+			Level:   kernel.EvidenceBlocked,
+			Success: false,
+			Message: message,
+			Data:    data,
+			Raw:     rawCapture(resp),
+		}, &kernel.OpError{
+			Op:      "portal.login801",
+			Message: message,
+			Err:     kernel.ErrBlockedCapability,
+			ProblemDetails: kernel.CapabilityProblemDetails{
+				Capability: "portal.login801",
+				Reason:     "801 login targets an admin-console JSON API and returned no token for these credentials",
+			},
+		}
 }
 
 // Logout801 performs a guarded raw fallback logout.
