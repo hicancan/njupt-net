@@ -7,12 +7,10 @@ import (
 
 func TestSchedulerDecide(t *testing.T) {
 	scheduler, err := NewScheduler(ScheduleConfig{
-		WeekdayDayProfile:   "B",
-		WeekdayNightProfile: "W",
-		WeekdayNightStart:   "23:30",
-		WeekdayNightEnd:     "07:00",
-		WeekendProfile:      "B",
-		OvernightMode:       "calendar-day",
+		DayProfile:   "B",
+		NightProfile: "W",
+		NightStart:   "23:30",
+		NightEnd:     "07:00",
 	})
 	if err != nil {
 		t.Fatalf("new scheduler: %v", err)
@@ -25,13 +23,13 @@ func TestSchedulerDecide(t *testing.T) {
 		profile string
 		window  string
 	}{
-		{"monday 00:30", time.Date(2026, 3, 16, 0, 30, 0, 0, location), "W", windowWeekdayNight},
-		{"monday 07:00", time.Date(2026, 3, 16, 7, 0, 0, 0, location), "B", windowWeekdayDay},
-		{"monday 23:30", time.Date(2026, 3, 16, 23, 30, 0, 0, location), "W", windowWeekdayNight},
-		{"friday 23:45", time.Date(2026, 3, 20, 23, 45, 0, 0, location), "W", windowWeekdayNight},
-		{"saturday 00:00", time.Date(2026, 3, 21, 0, 0, 0, 0, location), "B", windowWeekend},
-		{"sunday 23:45", time.Date(2026, 3, 22, 23, 45, 0, 0, location), "B", windowWeekend},
-		{"monday next 00:00", time.Date(2026, 3, 23, 0, 0, 0, 0, location), "W", windowWeekdayNight},
+		{"monday 00:30", time.Date(2026, 3, 16, 0, 30, 0, 0, location), "W", windowNight},
+		{"monday 07:00", time.Date(2026, 3, 16, 7, 0, 0, 0, location), "B", windowDay},
+		{"monday 23:30", time.Date(2026, 3, 16, 23, 30, 0, 0, location), "W", windowNight},
+		{"friday 23:45", time.Date(2026, 3, 20, 23, 45, 0, 0, location), "W", windowNight},
+		{"saturday 00:00", time.Date(2026, 3, 21, 0, 0, 0, 0, location), "W", windowNight},
+		{"saturday 12:00", time.Date(2026, 3, 21, 12, 0, 0, 0, location), "B", windowDay},
+		{"sunday 23:45", time.Date(2026, 3, 22, 23, 45, 0, 0, location), "W", windowNight},
 	}
 
 	for _, tt := range tests {

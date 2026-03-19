@@ -10,19 +10,16 @@ import (
 )
 
 const (
-	windowWeekdayDay   = "weekday-day"
-	windowWeekdayNight = "weekday-night"
-	windowWeekend      = "weekend"
+	windowDay   = "day"
+	windowNight = "night"
 )
 
 // ScheduleConfig is the validated day/night switching model for the guard runtime.
 type ScheduleConfig struct {
-	WeekdayDayProfile   string
-	WeekdayNightProfile string
-	WeekdayNightStart   string
-	WeekdayNightEnd     string
-	WeekendProfile      string
-	OvernightMode       string
+	DayProfile   string
+	NightProfile string
+	NightStart   string
+	NightEnd     string
 }
 
 // Decision is one fully resolved profile decision.
@@ -43,11 +40,11 @@ func NewScheduler(cfg ScheduleConfig) (*Scheduler, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	start, err := parseClockMinutes(cfg.WeekdayNightStart)
+	start, err := parseClockMinutes(cfg.NightStart)
 	if err != nil {
 		return nil, err
 	}
-	end, err := parseClockMinutes(cfg.WeekdayNightEnd)
+	end, err := parseClockMinutes(cfg.NightEnd)
 	if err != nil {
 		return nil, err
 	}
@@ -61,24 +58,19 @@ func NewScheduler(cfg ScheduleConfig) (*Scheduler, error) {
 // Validate ensures the schedule is internally coherent.
 func (c ScheduleConfig) Validate() error {
 	for label, value := range map[string]string{
-		"weekdayDayProfile":   c.WeekdayDayProfile,
-		"weekdayNightProfile": c.WeekdayNightProfile,
-		"weekendProfile":      c.WeekendProfile,
-		"weekdayNightStart":   c.WeekdayNightStart,
-		"weekdayNightEnd":     c.WeekdayNightEnd,
-		"overnightMode":       c.OvernightMode,
+		"dayProfile":   c.DayProfile,
+		"nightProfile": c.NightProfile,
+		"nightStart":   c.NightStart,
+		"nightEnd":     c.NightEnd,
 	} {
 		if strings.TrimSpace(value) == "" {
 			return &kernel.OpError{Op: "guard.schedule", Message: fmt.Sprintf("%s is required", label), Err: kernel.ErrInvalidConfig}
 		}
 	}
-	if strings.TrimSpace(c.OvernightMode) != "calendar-day" {
-		return &kernel.OpError{Op: "guard.schedule", Message: "only overnightMode=calendar-day is supported", Err: kernel.ErrInvalidConfig}
-	}
-	if _, err := parseClockMinutes(c.WeekdayNightStart); err != nil {
+	if _, err := parseClockMinutes(c.NightStart); err != nil {
 		return err
 	}
-	if _, err := parseClockMinutes(c.WeekdayNightEnd); err != nil {
+	if _, err := parseClockMinutes(c.NightEnd); err != nil {
 		return err
 	}
 	return nil
@@ -87,16 +79,11 @@ func (c ScheduleConfig) Validate() error {
 // Decide returns the current target profile and logical schedule window.
 func (s *Scheduler) Decide(now time.Time) Decision {
 	local := now
-	switch local.Weekday() {
-	case time.Saturday, time.Sunday:
-		return Decision{Profile: s.config.WeekendProfile, Window: windowWeekend}
-	}
-
 	minutes := local.Hour()*60 + local.Minute()
 	if minutes >= s.nightStartMinutes || minutes < s.nightEndMinutes {
-		return Decision{Profile: s.config.WeekdayNightProfile, Window: windowWeekdayNight}
+		return Decision{Profile: s.config.NightProfile, Window: windowNight}
 	}
-	return Decision{Profile: s.config.WeekdayDayProfile, Window: windowWeekdayDay}
+	return Decision{Profile: s.config.DayProfile, Window: windowDay}
 }
 
 func parseClockMinutes(raw string) (int, error) {

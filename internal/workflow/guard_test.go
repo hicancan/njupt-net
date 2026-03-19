@@ -192,7 +192,7 @@ func TestGuardCycleHealthyNoLogin(t *testing.T) {
 
 	result, err := GuardCycle(context.Background(), baseGuardEnv(factory, prober), GuardCycleInput{
 		DesiredProfile: "B",
-		ScheduleWindow: "weekday-day",
+		ScheduleWindow: "day",
 	})
 	if err != nil {
 		t.Fatalf("guard cycle: %v", err)
@@ -221,7 +221,7 @@ func TestGuardCycleForceSwitchImmediatelyRestoresTarget(t *testing.T) {
 
 	result, err := GuardCycle(context.Background(), baseGuardEnv(factory, prober), GuardCycleInput{
 		DesiredProfile: "B",
-		ScheduleWindow: "weekday-day",
+		ScheduleWindow: "day",
 		ForceSwitch:    true,
 	})
 	if err != nil {
@@ -255,7 +255,7 @@ func TestGuardCyclePortalFailureTriggersRepairAndRetry(t *testing.T) {
 
 	result, err := GuardCycle(context.Background(), baseGuardEnv(factory, prober), GuardCycleInput{
 		DesiredProfile: "W",
-		ScheduleWindow: "weekday-night",
+		ScheduleWindow: "night",
 	})
 	if err != nil {
 		t.Fatalf("portal failure cycle: %v", err)
@@ -292,7 +292,7 @@ func TestGuardCyclePortalSuccessButStillOfflineRepairsThenRetries(t *testing.T) 
 
 	result, err := GuardCycle(context.Background(), baseGuardEnv(factory, prober), GuardCycleInput{
 		DesiredProfile: "W",
-		ScheduleWindow: "weekday-night",
+		ScheduleWindow: "night",
 	})
 	if err != nil {
 		t.Fatalf("portal success but offline cycle: %v", err)
@@ -316,7 +316,7 @@ func TestGuardCycleBindingRepairFailureDegradesButContinues(t *testing.T) {
 
 	result, err := GuardCycle(context.Background(), baseGuardEnv(factory, prober), GuardCycleInput{
 		DesiredProfile:    "W",
-		ScheduleWindow:    "weekday-night",
+		ScheduleWindow:    "night",
 		ForceBindingCheck: true,
 	})
 	if err != nil {

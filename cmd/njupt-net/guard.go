@@ -23,7 +23,6 @@ type guardFlags struct {
 	NightProfile         string
 	NightStart           string
 	NightEnd             string
-	WeekendProfile       string
 	Replace              bool
 	LogFile              string
 }
@@ -310,11 +309,10 @@ func bindGuardFlags(cmd *cobra.Command, flags *guardFlags) {
 	cmd.Flags().IntVar(&flags.ProbeInterval, "probe-interval", 0, "Connectivity probe interval in seconds")
 	cmd.Flags().IntVar(&flags.BindingCheckInterval, "binding-check-interval", 0, "Binding audit interval in seconds")
 	cmd.Flags().StringVar(&flags.Timezone, "timezone", "", "IANA timezone for schedule evaluation")
-	cmd.Flags().StringVar(&flags.DayProfile, "day-profile", "", "Weekday daytime profile")
-	cmd.Flags().StringVar(&flags.NightProfile, "night-profile", "", "Weekday night profile")
+	cmd.Flags().StringVar(&flags.DayProfile, "day-profile", "", "All-day daytime profile")
+	cmd.Flags().StringVar(&flags.NightProfile, "night-profile", "", "All-day nighttime profile")
 	cmd.Flags().StringVar(&flags.NightStart, "night-start", "", "Night window start time (HH:MM)")
 	cmd.Flags().StringVar(&flags.NightEnd, "night-end", "", "Night window end time (HH:MM)")
-	cmd.Flags().StringVar(&flags.WeekendProfile, "weekend-profile", "", "Weekend profile")
 	cmd.Flags().BoolVar(&flags.Replace, "replace", false, "Replace any existing Go guard and stop the legacy Python guard")
 }
 
@@ -332,7 +330,6 @@ func loadGuardSettings(cmd *cobra.Command, flags guardFlags) (runtimeguard.Setti
 		NightProfile:         flags.NightProfile,
 		NightStart:           flags.NightStart,
 		NightEnd:             flags.NightEnd,
-		WeekendProfile:       flags.WeekendProfile,
 	}, appCtx.InsecureTLS)
 	if err != nil {
 		return runtimeguard.Settings{}, nil, err
@@ -395,9 +392,6 @@ func buildGuardRunArgs(flags guardFlags) []string {
 	}
 	if strings.TrimSpace(flags.NightEnd) != "" {
 		args = append(args, "--night-end", flags.NightEnd)
-	}
-	if strings.TrimSpace(flags.WeekendProfile) != "" {
-		args = append(args, "--weekend-profile", flags.WeekendProfile)
 	}
 	if strings.TrimSpace(flags.LogFile) != "" {
 		args = append(args, "--log-file", flags.LogFile)

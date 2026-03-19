@@ -49,7 +49,7 @@ func TestLoad_UsesEnvAndDefaults(t *testing.T) {
 	if cfg.Guard.StateDir != filepath.Join("dist", "guard") {
 		t.Fatalf("expected default guard state dir, got %q", cfg.Guard.StateDir)
 	}
-	if cfg.Guard.Schedule.WeekdayDayProfile != "B" || cfg.Guard.Schedule.WeekdayNightProfile != "W" {
+	if cfg.Guard.Schedule.DayProfile != "B" || cfg.Guard.Schedule.NightProfile != "W" {
 		t.Fatalf("unexpected default guard profiles: %#v", cfg.Guard.Schedule)
 	}
 }

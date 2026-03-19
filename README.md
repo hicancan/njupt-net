@@ -104,4 +104,5 @@ Include side-effecting writes:
 - `confirmed`, `guarded`, and `blocked` semantics must stay explicit.
 - Write operations use readback verification and optional restore.
 - Scheduled daemon/runtime behavior belongs in the Go `guard` runtime.
+- The supported guard schedule is global day/night switching: daytime `B`, nighttime `W`.
 - Dead experimental code should not stay on the main path.

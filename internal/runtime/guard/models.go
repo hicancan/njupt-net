@@ -20,7 +20,6 @@ type Overrides struct {
 	NightProfile         string
 	NightStart           string
 	NightEnd             string
-	WeekendProfile       string
 }
 
 // Settings are the fully resolved runtime settings for the Go guard.
@@ -97,17 +96,15 @@ func BuildSettings(cfg *config.Config, overrides Overrides, insecureTLS bool) (S
 	}
 
 	schedule := ScheduleConfig{
-		WeekdayDayProfile:   chooseString(overrides.DayProfile, cfg.Guard.Schedule.WeekdayDayProfile),
-		WeekdayNightProfile: chooseString(overrides.NightProfile, cfg.Guard.Schedule.WeekdayNightProfile),
-		WeekdayNightStart:   chooseString(overrides.NightStart, cfg.Guard.Schedule.WeekdayNightStart),
-		WeekdayNightEnd:     chooseString(overrides.NightEnd, cfg.Guard.Schedule.WeekdayNightEnd),
-		WeekendProfile:      chooseString(overrides.WeekendProfile, cfg.Guard.Schedule.WeekendProfile),
-		OvernightMode:       cfg.Guard.Schedule.OvernightMode,
+		DayProfile:   chooseString(overrides.DayProfile, cfg.Guard.Schedule.DayProfile),
+		NightProfile: chooseString(overrides.NightProfile, cfg.Guard.Schedule.NightProfile),
+		NightStart:   chooseString(overrides.NightStart, cfg.Guard.Schedule.NightStart),
+		NightEnd:     chooseString(overrides.NightEnd, cfg.Guard.Schedule.NightEnd),
 	}
 	if err := schedule.Validate(); err != nil {
 		return Settings{}, err
 	}
-	for _, profile := range []string{schedule.WeekdayDayProfile, schedule.WeekdayNightProfile, schedule.WeekendProfile} {
+	for _, profile := range []string{schedule.DayProfile, schedule.NightProfile} {
 		if _, ok := cfg.Accounts[profile]; !ok {
 			return Settings{}, &kernel.OpError{
 				Op:      "guard.settings",

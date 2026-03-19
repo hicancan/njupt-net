@@ -45,12 +45,10 @@ type PortalConfig struct {
 
 // GuardScheduleConfig contains the supported day/night schedule model.
 type GuardScheduleConfig struct {
-	WeekdayDayProfile   string `json:"weekdayDayProfile"`
-	WeekdayNightProfile string `json:"weekdayNightProfile"`
-	WeekdayNightStart   string `json:"weekdayNightStart"`
-	WeekdayNightEnd     string `json:"weekdayNightEnd"`
-	WeekendProfile      string `json:"weekendProfile"`
-	OvernightMode       string `json:"overnightMode"`
+	DayProfile   string `json:"dayProfile"`
+	NightProfile string `json:"nightProfile"`
+	NightStart   string `json:"nightStart"`
+	NightEnd     string `json:"nightEnd"`
 }
 
 // GuardConfig contains runtime defaults for the supported Go guard.
@@ -163,23 +161,17 @@ func (c *Config) applyDefaults() {
 	if strings.TrimSpace(c.Guard.Timezone) == "" {
 		c.Guard.Timezone = "Asia/Shanghai"
 	}
-	if strings.TrimSpace(c.Guard.Schedule.WeekdayDayProfile) == "" {
-		c.Guard.Schedule.WeekdayDayProfile = "B"
+	if strings.TrimSpace(c.Guard.Schedule.DayProfile) == "" {
+		c.Guard.Schedule.DayProfile = "B"
 	}
-	if strings.TrimSpace(c.Guard.Schedule.WeekdayNightProfile) == "" {
-		c.Guard.Schedule.WeekdayNightProfile = "W"
+	if strings.TrimSpace(c.Guard.Schedule.NightProfile) == "" {
+		c.Guard.Schedule.NightProfile = "W"
 	}
-	if strings.TrimSpace(c.Guard.Schedule.WeekdayNightStart) == "" {
-		c.Guard.Schedule.WeekdayNightStart = "23:30"
+	if strings.TrimSpace(c.Guard.Schedule.NightStart) == "" {
+		c.Guard.Schedule.NightStart = "23:30"
 	}
-	if strings.TrimSpace(c.Guard.Schedule.WeekdayNightEnd) == "" {
-		c.Guard.Schedule.WeekdayNightEnd = "07:00"
-	}
-	if strings.TrimSpace(c.Guard.Schedule.WeekendProfile) == "" {
-		c.Guard.Schedule.WeekendProfile = "B"
-	}
-	if strings.TrimSpace(c.Guard.Schedule.OvernightMode) == "" {
-		c.Guard.Schedule.OvernightMode = "calendar-day"
+	if strings.TrimSpace(c.Guard.Schedule.NightEnd) == "" {
+		c.Guard.Schedule.NightEnd = "07:00"
 	}
 }
 
