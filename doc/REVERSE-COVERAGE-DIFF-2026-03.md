@@ -16,6 +16,10 @@
 
 **否，如果“已逆向”要求所有能力都达到 `confirmed` 成功语义。**
 
+**也不是，如果“所有功能”指这次发现式扫描扫出来的整站暴露面。**
+
+新一轮发现式审计确认：Portal 801 / 802 对外还暴露了一整套管理后台接口族，不属于当前 32 个叶子命令，也没有完成逐条业务语义逆向。因此，“命令树范围内全部逆向”与“整站全部暴露面都逆向完”不是一回事。
+
 当前仍必须保留非 `confirmed` 的项：
 
 - `setting person update`：`blocked`
@@ -26,6 +30,8 @@
 **是，如果“已实现”指 32 个叶子命令都存在，且每个命令都映射到了已知协议面。**
 
 **否，如果“已实现”要求所有命令都必须是 `confirmed` 正式能力。**
+
+**也不是，如果“已实现”指发现式审计扫出来的所有站点能力都已经产品化成 CLI。**
 
 当前不是“缺命令”或“漏实现”，而是部分命令根据现场证据应继续保持 `guarded` / `blocked`。
 
@@ -46,6 +52,8 @@
 | Portal 802 `AC999` | 旧 SSOT 认为是已在线 / 重复登录 guarded success | 已通过“先 logout 再 login”的现场补证再次确认 | `已逆向且已实现` |
 | Portal 801 logout | 旧 SSOT 认为 `Logout succeed.` 可作为 confirmed 标记 | 已现场再次确认 | `已逆向且已实现` |
 | Portal 801 login | 旧 SSOT 认为返回通用壳页，仅能 guarded | 已现场补证真实 `/admin/login/login` JSON API；当前校园网用户凭据未返回 token，应提升为明确 blocked | `应保留 guarded/blocked` |
+| `/Self/service/userRecharge` | 旧 SSOT 基本未强调 | 发现式审计确认入口存在，但页面退回服务壳页，未观察到独立充值能力 | `已逆向但未实现` |
+| Portal 801/802 管理后台面 | 旧 SSOT 只覆盖登录/登出及少量入口 | 新审计在前端资源中发现 `admin/user/*`、`admin/role/*`、`portal/page/*`、`portal/program/*`、`portal/settings/*` 等完整后台面，但语义尚未逐条逆向 | `已实现但逆向证据不足` |
 
 ## 2.2 新零基审计没有推翻旧 SSOT 的点
 
@@ -54,6 +62,7 @@
 - 页面层与网络层证据更完整了
 - 旧文档里的若干 guarded/blocked 结论得到了新的现场补证
 - 一些以前偏实现侧的判断，现在获得了浏览器侧的直接佐证
+- 发现式方法额外暴露了**旧 SSOT 没有系统列出的站点后台面**
 
 ## 3. 新零基文档 vs `CAPABILITY-MATRIX`
 
@@ -74,6 +83,11 @@
 | `guard` runtime commands | 与现场和路由器运行状态一致 | `已逆向且已实现` |
 
 没有发现“能力矩阵宣称已实现，但现场证据不足以支撑”的新增问题。
+
+但有一个重要边界需要写清楚：
+
+- 能力矩阵描述的是 **`njupt-net` 当前产品面**
+- 不是整站所有被发现出来的后台能力面
 
 ## 4. 新零基文档 vs 当前 32 个 CLI 命令实现
 
@@ -114,14 +128,57 @@
 | `guard status` | 状态文件读取 | `已逆向且已实现` | |
 | `guard once` | 单轮组合链 | `已逆向且已实现` | |
 
+## 4.1 发现式审计新增、但当前 CLI 不覆盖的站点暴露面
+
+这轮真正的新差异，不是某个旧命令写错了，而是发现了**更大的站点能力图谱**。至少包括：
+
+- 旧式门户根页：
+  - `/eportal/?c=ACSetting&a=Login`
+  - `/eportal/?c=ACSetting&a=Logout&ver=1.0`
+  - `/eportal/portal/page/loadConfig`
+  - `/eportal/portal/online_list`
+- 801 / 802 管理 SPA：
+  - `admin/login/login`
+  - `admin/login/logout`
+  - `admin/user/info`
+  - `admin/user/getList`
+  - `admin/user/saveUser`
+  - `admin/user/deleteUser`
+  - `admin/user/changePassword`
+  - `admin/role/getList`
+  - `admin/module_auth/getInfo`
+  - `admin/module_auth/saveInfo`
+  - `admin/dashboard/getList`
+  - `admin/dashboard/getStoreInfo`
+  - `admin/dashboard/getSiteInfo`
+  - `portal/page/*`
+  - `portal/program/*`
+  - `portal/settings/*`
+  - `portal/visit_blacklist/*`
+  - `portal/custom_error/*`
+
+这些路径的**存在性**已被浏览器资源和网络请求证实，但它们不等于：
+
+1. 已经全部完成业务语义逆向
+2. 已经全部纳入 CLI 设计范围
+
+因此它们不能被算成“当前所有功能都已实现”。
+
 ## 5. 仍然不是 “全部 confirmed” 的空白点
 
-本轮没有留下“未逆向”的命令面空白，但仍有 2 个能力不应被说成 fully confirmed：
+本轮没有留下“未逆向”的命令面空白，但仍有 2 个命令能力不应被说成 fully confirmed：
 
 1. `setting person update`
 2. `portal login-801`
 
 它们不是没实现，而是**根据现场证据必须保守表达**。
+
+与此同时，发现式审计还留下了一组**站点面空白**：
+
+- Portal 801 / 802 管理后台接口族已被发现，但尚未逐项语义逆向
+- `/Self/service/userRecharge` 入口存在，但尚未观察到独立充值功能
+
+所以“命令面空白”与“站点面空白”要分开看。
 
 ## 6. 最终结论
 
@@ -129,12 +186,14 @@
 
 - **按命令树覆盖的业务面来讲：是。**
 - **按“全部都已经 confirmed”来讲：不是。**
+- **按这次发现式扫描出来的整站暴露面来讲：也不是。**
 
 ### 6.2 关于“所有功能都实现了”
 
 - **按 CLI 命令树来讲：是，32 个叶子命令全部已实现。**
 - **按“全部都已成为 confirmed 成熟能力”来讲：不是。**
+- **按“所有被发现到的站点功能都已经产品化成 CLI”来讲：不是。**
 
 ### 6.3 最终一句话
 
-`njupt-net` 当前已经完成了命令树覆盖范围内的业务逆向闭环和实现闭环；剩下不是“漏逆向”或“漏实现”，而是少数能力根据现场证据应继续保持 `guarded` / `blocked`，不能被夸大成 `confirmed`。
+`njupt-net` 当前已经完成了**命令树覆盖范围内**的业务逆向闭环和实现闭环；但发现式审计进一步证明，整站对外暴露的能力面比当前 CLI 更大，尤其是 Portal 801/802 的管理后台面仍有大量“已发现、未逐条逆向、未产品化”的接口。因此，命令树范围内可以说“已逆向、已实现”，整站范围内则还不能这么说。
