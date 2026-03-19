@@ -11,9 +11,6 @@ on:
 permissions:
   contents: write
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   verify:
     name: Verify
@@ -79,11 +76,19 @@ jobs:
         run: bash ./scripts/build.sh all
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2.6.1
-        with:
-          files: |
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files=(
             dist/njupt-net-windows-amd64.exe
             dist/njupt-net-linux-amd64
             dist/njupt-net-linux-arm64
             dist/njupt-net-darwin-arm64
-          generate_release_notes: true
+          )
+
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" "${files[@]}" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" "${files[@]}" --generate-notes --latest
+          fi
