@@ -33,7 +33,7 @@ func newPortalLoginCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			appCtx, err := rootOpts.load(cmd)
+			appCtx, err := appContext(cmd)
 			if err != nil {
 				return err
 			}
@@ -48,7 +48,7 @@ func newPortalLoginCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.Login802(cmd.Context(), account.Username, account.Password, ip, isp)
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				if result.Data == nil {
 					return printKV(w, result.Message)
 				}
@@ -58,10 +58,7 @@ func newPortalLoginCmd() *cobra.Command {
 					"msg="+result.Data.Msg,
 					"endpoint="+result.Data.Endpoint,
 				)
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)
@@ -87,12 +84,9 @@ func newPortalLogoutCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.Logout802(cmd.Context(), ip)
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				return printKV(w, result.Message)
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	cmd.Flags().StringVar(&ip, "ip", "", "Current WLAN IPv4")
@@ -119,12 +113,9 @@ func newPortalLogin801Cmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.Login801(cmd.Context(), account.Username, account.Password, ip, ipv6)
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				return printKV(w, result.Message)
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)
@@ -150,12 +141,9 @@ func newPortalLogout801Cmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.Logout801(cmd.Context(), ip)
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				return printKV(w, result.Message)
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	cmd.Flags().StringVar(&ip, "ip", "", "Current WLAN IPv4")

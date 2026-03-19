@@ -124,6 +124,10 @@ func resolvePath(path string) (string, error) {
 		Op:      "config.load",
 		Message: "no config file found; pass --config or create credentials.json",
 		Err:     kernel.ErrInvalidConfig,
+		ProblemDetails: kernel.ConfigProblemDetails{
+			Field: "configPath",
+			Hint:  "pass --config or create credentials.json",
+		},
 	}
 }
 
@@ -207,20 +211,20 @@ func (c *Config) applyEnv() {
 func (c *Config) Validate() error {
 	for name, account := range c.Accounts {
 		if strings.TrimSpace(account.Username) == "" || strings.TrimSpace(account.Password) == "" {
-			return &kernel.OpError{Op: "config.validate", Message: fmt.Sprintf("account %q requires username and password", name), Err: kernel.ErrInvalidConfig}
+			return &kernel.OpError{Op: "config.validate", Message: fmt.Sprintf("account %q requires username and password", name), Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "accounts." + name, Hint: "set both username and password"}}
 		}
 	}
 	if strings.TrimSpace(c.Self.BaseURL) == "" {
-		return &kernel.OpError{Op: "config.validate", Message: "self.baseURL is required", Err: kernel.ErrInvalidConfig}
+		return &kernel.OpError{Op: "config.validate", Message: "self.baseURL is required", Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "self.baseURL"}}
 	}
 	if strings.TrimSpace(c.Portal.BaseURL) == "" {
-		return &kernel.OpError{Op: "config.validate", Message: "portal.baseURL is required", Err: kernel.ErrInvalidConfig}
+		return &kernel.OpError{Op: "config.validate", Message: "portal.baseURL is required", Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "portal.baseURL"}}
 	}
 	if c.Guard.ProbeIntervalSeconds <= 0 {
-		return &kernel.OpError{Op: "config.validate", Message: "guard.probeIntervalSeconds must be positive", Err: kernel.ErrInvalidConfig}
+		return &kernel.OpError{Op: "config.validate", Message: "guard.probeIntervalSeconds must be positive", Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.probeIntervalSeconds", Value: strconv.Itoa(c.Guard.ProbeIntervalSeconds)}}
 	}
 	if c.Guard.BindingCheckIntervalSeconds <= 0 {
-		return &kernel.OpError{Op: "config.validate", Message: "guard.bindingCheckIntervalSeconds must be positive", Err: kernel.ErrInvalidConfig}
+		return &kernel.OpError{Op: "config.validate", Message: "guard.bindingCheckIntervalSeconds must be positive", Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.bindingCheckIntervalSeconds", Value: strconv.Itoa(c.Guard.BindingCheckIntervalSeconds)}}
 	}
 	return nil
 }
@@ -229,12 +233,12 @@ func (c *Config) Validate() error {
 func (c *Config) ResolveAccount(profile, username, password string) (AccountConfig, error) {
 	if strings.TrimSpace(username) != "" || strings.TrimSpace(password) != "" {
 		if strings.TrimSpace(username) == "" || strings.TrimSpace(password) == "" {
-			return AccountConfig{}, &kernel.OpError{Op: "config.resolveAccount", Message: "explicit username/password must be provided together", Err: kernel.ErrInvalidConfig}
+			return AccountConfig{}, &kernel.OpError{Op: "config.resolveAccount", Message: "explicit username/password must be provided together", Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "username,password", Hint: "set both explicit values together"}}
 		}
 		return AccountConfig{Username: username, Password: password}, nil
 	}
 	if len(c.Accounts) == 0 {
-		return AccountConfig{}, &kernel.OpError{Op: "config.resolveAccount", Message: "no configured accounts; provide --username and --password or add accounts to config", Err: kernel.ErrInvalidConfig}
+		return AccountConfig{}, &kernel.OpError{Op: "config.resolveAccount", Message: "no configured accounts; provide --username and --password or add accounts to config", Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "accounts", Hint: "configure accounts or pass explicit credentials"}}
 	}
 	if strings.TrimSpace(profile) == "" {
 		if len(c.Accounts) == 1 {
@@ -242,11 +246,11 @@ func (c *Config) ResolveAccount(profile, username, password string) (AccountConf
 				return account, nil
 			}
 		}
-		return AccountConfig{}, &kernel.OpError{Op: "config.resolveAccount", Message: "profile is required when config has multiple accounts", Err: kernel.ErrInvalidConfig}
+		return AccountConfig{}, &kernel.OpError{Op: "config.resolveAccount", Message: "profile is required when config has multiple accounts", Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "profile", Hint: "choose one configured account profile"}}
 	}
 	account, ok := c.Accounts[profile]
 	if !ok {
-		return AccountConfig{}, &kernel.OpError{Op: "config.resolveAccount", Message: fmt.Sprintf("profile %q not found", profile), Err: kernel.ErrInvalidConfig}
+		return AccountConfig{}, &kernel.OpError{Op: "config.resolveAccount", Message: fmt.Sprintf("profile %q not found", profile), Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "profile", Value: profile}}
 	}
 	return account, nil
 }
@@ -269,6 +273,10 @@ func (c *Config) ResolveBroadband() (BroadbandConfig, error) {
 			Op:      "config.resolveBroadband",
 			Message: "cmcc account and password are required for guard runtime",
 			Err:     kernel.ErrInvalidConfig,
+			ProblemDetails: kernel.ConfigProblemDetails{
+				Field: "cmcc",
+				Hint:  "configure cmcc.account and cmcc.password for guard runtime",
+			},
 		}
 	}
 	return c.CMCC, nil

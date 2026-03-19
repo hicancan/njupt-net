@@ -4,8 +4,13 @@ import (
 	"context"
 
 	"github.com/hicancan/njupt-net-cli/internal/kernel"
-	"github.com/hicancan/njupt-net-cli/internal/selfservice"
 )
+
+// SelfDoctorClient captures the minimal Self operations required by the doctor workflow.
+type SelfDoctorClient interface {
+	Login(ctx context.Context, username, password string) (*kernel.OperationResult[kernel.SelfLoginResult], error)
+	Status(ctx context.Context) (*kernel.OperationResult[kernel.SelfStatus], error)
+}
 
 // DoctorResult summarizes a full login/status health chain.
 type DoctorResult struct {
@@ -14,7 +19,7 @@ type DoctorResult struct {
 }
 
 // SelfDoctor executes the canonical Self diagnosis chain.
-func SelfDoctor(ctx context.Context, client *selfservice.Client, username, password string) (*kernel.OperationResult[DoctorResult], error) {
+func SelfDoctor(ctx context.Context, client SelfDoctorClient, username, password string) (*kernel.OperationResult[DoctorResult], error) {
 	loginResult, err := client.Login(ctx, username, password)
 	if err != nil {
 		return &kernel.OperationResult[DoctorResult]{

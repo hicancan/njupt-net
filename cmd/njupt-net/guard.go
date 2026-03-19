@@ -133,7 +133,7 @@ func newGuardStartCmd() *cobra.Command {
 					return err
 				}
 			}
-			rootArgs := buildGuardRootArgs()
+			rootArgs := buildGuardRootArgs(cmd)
 			runArgs := buildGuardRunArgs(flags)
 			result, err := supervisor.Start(cmd.Context(), runtimeguard.BuildRunArgs(rootArgs, runArgs), flags.Replace)
 			if result == nil {
@@ -146,17 +146,14 @@ func newGuardStartCmd() *cobra.Command {
 				Message: guardStartMessage(result, legacyKilled),
 				Data:    result,
 			}
-			if renderErr := render(cmd, payload, func(w io.Writer) error {
+			return renderOperation(cmd, payload, err, func(w io.Writer) error {
 				return printKV(w,
 					payload.Message,
 					fmt.Sprintf("running=%t", result.Running),
 					fmt.Sprintf("pid=%d", result.PID),
 					"logPath="+result.LogPath,
 				)
-			}); renderErr != nil {
-				return renderErr
-			}
-			return err
+			})
 		},
 	}
 	bindGuardFlags(cmd, &flags)
@@ -184,12 +181,9 @@ func newGuardStopCmd() *cobra.Command {
 				Message: "guard stopped",
 				Data:    result,
 			}
-			if renderErr := render(cmd, payload, func(w io.Writer) error {
+			return renderOperation(cmd, payload, err, func(w io.Writer) error {
 				return printKV(w, payload.Message, "running=false")
-			}); renderErr != nil {
-				return renderErr
-			}
-			return err
+			})
 		},
 	}
 	bindGuardFlags(cmd, &flags)
@@ -214,22 +208,25 @@ func newGuardStatusCmd() *cobra.Command {
 					Message: "guard status file not found",
 					Data: &runtimeguard.Status{
 						Running: false,
-						LogPath: store.CurrentLogPath(),
+						Health:  runtimeguard.HealthStopped,
+						Log: runtimeguard.LogStatus{
+							Path: store.CurrentLogPath(),
+						},
 					},
 				}
-				if renderErr := render(cmd, payload, func(w io.Writer) error {
+				return renderOperation(cmd, payload, &kernel.OpError{Op: "guard.status", Message: "guard status file not found", Err: kernel.ErrBusinessFailed}, func(w io.Writer) error {
 					return printKV(w, payload.Message, "running=false")
-				}); renderErr != nil {
-					return renderErr
-				}
-				return &kernel.OpError{Op: "guard.status", Message: "guard status file not found", Err: kernel.ErrBusinessFailed}
+				})
 			}
 			supervisor := runtimeguard.NewSupervisor(store, "", "")
 			control, _ := supervisor.Status(cmd.Context())
 			if control != nil {
 				status.Running = control.Running
-				if status.LogPath == "" {
-					status.LogPath = control.LogPath
+				if status.Log.Path == "" {
+					status.Log.Path = control.LogPath
+				}
+				if !control.Running {
+					status.Health = runtimeguard.HealthStopped
 				}
 			}
 			payload := &kernel.OperationResult[runtimeguard.Status]{
@@ -238,17 +235,18 @@ func newGuardStatusCmd() *cobra.Command {
 				Message: "guard status loaded",
 				Data:    status,
 			}
-			return render(cmd, payload, func(w io.Writer) error {
+			return renderOperation(cmd, payload, nil, func(w io.Writer) error {
 				return printKV(w,
 					payload.Message,
 					fmt.Sprintf("running=%t", status.Running),
+					"health="+string(status.Health),
 					"desiredProfile="+status.DesiredProfile,
 					"scheduleWindow="+status.ScheduleWindow,
-					fmt.Sprintf("bindingOk=%t", status.BindingOK),
-					fmt.Sprintf("internetOk=%t", status.InternetOK),
-					fmt.Sprintf("portalLoginOk=%t", status.PortalLoginOK),
-					"recoveryStep="+status.RecoveryStep,
-					"logPath="+status.LogPath,
+					fmt.Sprintf("bindingOk=%t", status.Binding.OK),
+					fmt.Sprintf("internetOk=%t", status.Connectivity.FinalOK),
+					fmt.Sprintf("portalLoginOk=%t", status.Portal.OK),
+					"recoveryStep="+status.Cycle.RecoveryStep,
+					"logPath="+status.Log.Path,
 				)
 			})
 		},
@@ -277,27 +275,25 @@ func newGuardOnceCmd() *cobra.Command {
 			status, err := runner.Once(context.Background(), flags.Replace)
 			payload := &kernel.OperationResult[runtimeguard.Status]{
 				Level:   kernel.EvidenceConfirmed,
-				Success: err == nil && status != nil && status.InternetOK,
+				Success: err == nil && status != nil && status.Connectivity.FinalOK,
 				Message: "guard cycle completed",
 				Data:    status,
 			}
-			if renderErr := render(cmd, payload, func(w io.Writer) error {
+			return renderOperation(cmd, payload, err, func(w io.Writer) error {
 				if status == nil {
 					return printKV(w, payload.Message)
 				}
 				return printKV(w,
 					payload.Message,
+					"health="+string(status.Health),
 					"desiredProfile="+status.DesiredProfile,
 					"scheduleWindow="+status.ScheduleWindow,
-					fmt.Sprintf("bindingOk=%t", status.BindingOK),
-					fmt.Sprintf("internetOk=%t", status.InternetOK),
-					fmt.Sprintf("portalLoginOk=%t", status.PortalLoginOK),
-					"recoveryStep="+status.RecoveryStep,
+					fmt.Sprintf("bindingOk=%t", status.Binding.OK),
+					fmt.Sprintf("internetOk=%t", status.Connectivity.FinalOK),
+					fmt.Sprintf("portalLoginOk=%t", status.Portal.OK),
+					"recoveryStep="+status.Cycle.RecoveryStep,
 				)
-			}); renderErr != nil {
-				return renderErr
-			}
-			return err
+			})
 		},
 	}
 	bindGuardFlags(cmd, &flags)
@@ -317,7 +313,7 @@ func bindGuardFlags(cmd *cobra.Command, flags *guardFlags) {
 }
 
 func loadGuardSettings(cmd *cobra.Command, flags guardFlags) (runtimeguard.Settings, *runtimeguard.StateStore, error) {
-	appCtx, err := rootOpts.load(cmd)
+	appCtx, err := appContext(cmd)
 	if err != nil {
 		return runtimeguard.Settings{}, nil, err
 	}
@@ -342,27 +338,29 @@ func loadGuardSettings(cmd *cobra.Command, flags guardFlags) (runtimeguard.Setti
 }
 
 func loadGuardStore(cmd *cobra.Command, stateDir string) (*runtimeguard.StateStore, error) {
-	appCtx, err := rootOpts.load(cmd)
-	if err != nil {
-		return nil, err
-	}
 	resolvedStateDir := stateDir
 	if strings.TrimSpace(resolvedStateDir) == "" {
-		resolvedStateDir = appCtx.Config.Guard.StateDir
-		if strings.TrimSpace(resolvedStateDir) == "" {
-			resolvedStateDir = "dist/guard"
+		appCtx, err := appContext(cmd)
+		if err == nil {
+			resolvedStateDir = appCtx.Config.Guard.StateDir
 		}
+	}
+	if strings.TrimSpace(resolvedStateDir) == "" {
+		resolvedStateDir = "dist/guard"
 	}
 	return runtimeguard.NewStateStore(resolvedStateDir)
 }
 
-func buildGuardRootArgs() []string {
+func buildGuardRootArgs(cmd *cobra.Command) []string {
 	args := []string{}
-	if strings.TrimSpace(rootOpts.ConfigPath) != "" {
-		args = append(args, "--config", rootOpts.ConfigPath)
-	}
-	if rootOpts.InsecureTLS {
-		args = append(args, "--insecure-tls")
+	env, err := getCommandEnv(cmd)
+	if err == nil {
+		if strings.TrimSpace(env.opts.ConfigPath) != "" {
+			args = append(args, "--config", env.opts.ConfigPath)
+		}
+		if env.opts.InsecureTLS {
+			args = append(args, "--insecure-tls")
+		}
 	}
 	return args
 }

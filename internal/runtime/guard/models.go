@@ -40,27 +40,89 @@ type Settings struct {
 	Schedule              ScheduleConfig
 }
 
+// Health summarizes the final health state of the guard runtime.
+type Health string
+
+const (
+	HealthHealthy  Health = "healthy"
+	HealthDegraded Health = "degraded"
+	HealthStopped  Health = "stopped"
+)
+
+// ProbeStatus captures a typed local IPv4 selection used for Portal calls.
+type ProbeStatus struct {
+	SelectedIP      string `json:"selectedIp,omitempty"`
+	RoutedIP        string `json:"routedIp,omitempty"`
+	SelectionReason string `json:"selectionReason,omitempty"`
+}
+
+// BindingRepairStatus captures one binding repair outcome.
+type BindingRepairStatus struct {
+	Attempted     bool   `json:"attempted"`
+	OK            bool   `json:"ok"`
+	Action        string `json:"action,omitempty"`
+	HolderProfile string `json:"holderProfile,omitempty"`
+	TargetProfile string `json:"targetProfile,omitempty"`
+}
+
+// BindingStatus captures final binding state for one cycle.
+type BindingStatus struct {
+	Audited bool                 `json:"audited"`
+	OK      bool                 `json:"ok"`
+	Message string               `json:"message,omitempty"`
+	Repair  *BindingRepairStatus `json:"repair,omitempty"`
+}
+
+// ConnectivityStatus captures the initial and final internet observations.
+type ConnectivityStatus struct {
+	InitialOK      bool         `json:"initialOk"`
+	InitialMessage string       `json:"initialMessage,omitempty"`
+	FinalOK        bool         `json:"finalOk"`
+	FinalMessage   string       `json:"finalMessage,omitempty"`
+	Probe          *ProbeStatus `json:"probe,omitempty"`
+}
+
+// PortalStatus captures whether Portal was attempted and with which local IP selection.
+type PortalStatus struct {
+	Attempted    bool         `json:"attempted"`
+	OK           bool         `json:"ok"`
+	Message      string       `json:"message,omitempty"`
+	InitialProbe *ProbeStatus `json:"initialProbe,omitempty"`
+	RetryProbe   *ProbeStatus `json:"retryProbe,omitempty"`
+}
+
+// CycleStatus captures cycle-local state-machine information.
+type CycleStatus struct {
+	Index           int    `json:"index,omitempty"`
+	RecoveryStep    string `json:"recoveryStep,omitempty"`
+	LastSwitchAt    string `json:"lastSwitchAt,omitempty"`
+	SwitchTriggered bool   `json:"switchTriggered"`
+	SwitchCompleted bool   `json:"switchCompleted"`
+}
+
+// TimingStatus captures persisted timestamp and elapsed runtime per cycle.
+type TimingStatus struct {
+	Timestamp      string  `json:"timestamp,omitempty"`
+	ElapsedSeconds float64 `json:"elapsedSeconds,omitempty"`
+}
+
+// LogStatus captures the current log pointer.
+type LogStatus struct {
+	Path string `json:"path,omitempty"`
+}
+
 // Status is the persisted guard state exposed by `njupt-net guard status`.
 type Status struct {
-	Running             bool    `json:"running"`
-	DesiredProfile      string  `json:"desiredProfile,omitempty"`
-	ScheduleWindow      string  `json:"scheduleWindow,omitempty"`
-	BindingOK           bool    `json:"bindingOk"`
-	BindingMessage      string  `json:"bindingMessage,omitempty"`
-	InitialInternetOK   bool    `json:"initialInternetOk"`
-	InitialInternetMsg  string  `json:"initialInternetMessage,omitempty"`
-	InternetOK          bool    `json:"internetOk"`
-	InternetMessage     string  `json:"internetMessage,omitempty"`
-	PortalLoginOK       bool    `json:"portalLoginOk"`
-	PortalLoginMessage  string  `json:"portalLoginMessage,omitempty"`
-	RecoveryStep        string  `json:"recoveryStep,omitempty"`
-	CycleIndex          int     `json:"cycleIndex,omitempty"`
-	LastSwitchAt        string  `json:"lastSwitchAt,omitempty"`
-	CycleElapsedSeconds float64 `json:"cycleElapsedSeconds,omitempty"`
-	LogPath             string  `json:"logPath,omitempty"`
-	Timestamp           string  `json:"timestamp,omitempty"`
-	LocalIP             string  `json:"localIp,omitempty"`
-	RetryLocalIP        string  `json:"retryLocalIp,omitempty"`
+	Running        bool               `json:"running"`
+	Health         Health             `json:"health,omitempty"`
+	DesiredProfile string             `json:"desiredProfile,omitempty"`
+	ScheduleWindow string             `json:"scheduleWindow,omitempty"`
+	Binding        BindingStatus      `json:"binding"`
+	Connectivity   ConnectivityStatus `json:"connectivity"`
+	Portal         PortalStatus       `json:"portal"`
+	Cycle          CycleStatus        `json:"cycle"`
+	Timing         TimingStatus       `json:"timing"`
+	Log            LogStatus          `json:"log"`
 }
 
 // ControlResult summarizes start/stop/status command results.
@@ -77,7 +139,7 @@ func BuildSettings(cfg *config.Config, overrides Overrides, insecureTLS bool) (S
 	locationName := chooseString(overrides.Timezone, cfg.Guard.Timezone)
 	location, err := time.LoadLocation(locationName)
 	if err != nil {
-		return Settings{}, &kernel.OpError{Op: "guard.settings", Message: fmt.Sprintf("invalid timezone %q", locationName), Err: kernel.ErrInvalidConfig}
+		return Settings{}, &kernel.OpError{Op: "guard.settings", Message: fmt.Sprintf("invalid timezone %q", locationName), Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.timezone", Value: locationName}}
 	}
 
 	broadband, err := cfg.ResolveBroadband()
@@ -92,7 +154,7 @@ func BuildSettings(cfg *config.Config, overrides Overrides, insecureTLS bool) (S
 	probeInterval := choosePositive(overrides.ProbeInterval, cfg.Guard.ProbeIntervalSeconds)
 	bindingInterval := choosePositive(overrides.BindingCheckInterval, cfg.Guard.BindingCheckIntervalSeconds)
 	if probeInterval <= 0 || bindingInterval <= 0 {
-		return Settings{}, &kernel.OpError{Op: "guard.settings", Message: "probe and binding intervals must be positive", Err: kernel.ErrInvalidConfig}
+		return Settings{}, &kernel.OpError{Op: "guard.settings", Message: "probe and binding intervals must be positive", Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.intervals", Hint: "probeIntervalSeconds and bindingCheckIntervalSeconds must be positive"}}
 	}
 
 	schedule := ScheduleConfig{
@@ -110,6 +172,10 @@ func BuildSettings(cfg *config.Config, overrides Overrides, insecureTLS bool) (S
 				Op:      "guard.settings",
 				Message: fmt.Sprintf("guard profile %q is not configured in accounts", profile),
 				Err:     kernel.ErrInvalidConfig,
+				ProblemDetails: kernel.ConfigProblemDetails{
+					Field: "guard.schedule.profile",
+					Value: profile,
+				},
 			}
 		}
 	}

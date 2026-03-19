@@ -55,7 +55,7 @@ func newServiceBindingGetCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.GetOperatorBinding(cmd.Context())
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				if result.Data == nil {
 					return printKV(w, result.Message)
 				}
@@ -66,10 +66,7 @@ func newServiceBindingGetCmd() *cobra.Command {
 					"mobileAccount="+result.Data.MobileAccount,
 					"mobilePassword="+result.Data.MobilePassword,
 				)
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)
@@ -128,12 +125,9 @@ func newServiceBindingSetCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.BindOperator(cmd.Context(), target, readback, restore)
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				return printKV(w, result.Message)
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 
@@ -179,7 +173,7 @@ func newServiceConsumeGetCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.GetConsumeProtect(cmd.Context())
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				if result.Data == nil {
 					return printKV(w, result.Message)
 				}
@@ -190,10 +184,7 @@ func newServiceConsumeGetCmd() *cobra.Command {
 					"currentUsage="+result.Data.CurrentUsage,
 					"balance="+result.Data.Balance,
 				)
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)
@@ -227,12 +218,9 @@ func newServiceConsumeSetCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.ChangeConsumeProtect(cmd.Context(), limit, readback, restore)
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				return printKV(w, result.Message)
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)
@@ -272,15 +260,12 @@ func newServiceMacListCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.GetMacList(cmd.Context())
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				if result.Data == nil {
 					return printKV(w, result.Message)
 				}
 				return printKV(w, result.Message, "total="+itoa(result.Data.Total))
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)
@@ -302,7 +287,7 @@ func newServiceMigrateCmd() *cobra.Command {
 			if err := requireYes(cmd, "service migrate"); err != nil {
 				return err
 			}
-			appCtx, err := rootOpts.load(cmd)
+			appCtx, err := appContext(cmd)
 			if err != nil {
 				return err
 			}
@@ -333,21 +318,20 @@ func newServiceMigrateCmd() *cobra.Command {
 				return &usageError{message: "service migrate requires at least one target FLDEXTRA field"}
 			}
 
-			result, opErr := workflow.MigrateBroadband(
-				cmd.Context(),
-				appCtx.Config.Self.BaseURL,
-				fromAccount.Username,
-				fromAccount.Password,
-				toAccount.Username,
-				toAccount.Password,
-				target,
-			)
-			if err := render(cmd, result, func(w io.Writer) error {
+			result, opErr := workflow.MigrateBroadband(cmd.Context(), appCtx.NewMigrationFactory(), workflow.MigrationInput{
+				From: workflow.Credentials{
+					Username: fromAccount.Username,
+					Password: fromAccount.Password,
+				},
+				To: workflow.Credentials{
+					Username: toAccount.Username,
+					Password: toAccount.Password,
+				},
+				TargetFields: target,
+			})
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				return printKV(w, result.Message)
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 

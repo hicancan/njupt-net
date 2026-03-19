@@ -103,6 +103,50 @@ The SSOT certainty model is not a documentation note; it is part of the runtime 
 
 This keeps CLI output, workflow decisions, and tests aligned with the reverse-engineered truth model.
 
+### CLI bootstrap is intentionally lazy
+
+Root flags are parsed first, but config and protocol clients are only constructed when a command truly needs them.
+
+This keeps:
+
+- `--help`
+- shell completion
+- `guard status --state-dir ...`
+- `guard stop --state-dir ...`
+
+independent from `credentials.json` when those commands do not need protocol access.
+
+### Machine-readable diagnostics are schema-first
+
+Runtime JSON output no longer depends on ad hoc diagnostic maps.
+
+- kernel results expose stable `problems[].code` with typed `details`
+- guard runtime emits stable `event.kind` records with typed `details`
+- `guard status` is a typed nested contract instead of a flat bag of booleans
+- free-form messages remain human-facing context, not the machine contract
+
+The supported JSON contract now centers on:
+
+- `OperationResult`
+- typed `problem.code + details`
+- typed nested `guard status`
+- typed `guard event.kind + details`
+
+### Guard is a formal runtime subsystem
+
+The Go guard is no longer just a loop with PID files.
+
+It now has:
+
+- explicit schedule evaluation
+- typed cycle health (`healthy`, `degraded`, `stopped`)
+- typed nested status sections for binding, connectivity, portal, cycle, timing, and log pointers
+- graceful stop requests before forced kill
+- structured JSONL runtime events
+- bounded log retention
+
+This keeps the long-running model cross-platform while avoiding OS-specific service adapters.
+
 ## Keep / Rewrite / Remove Summary
 
 ### Keep
@@ -134,4 +178,4 @@ The project is now structurally ready, but there are still worthwhile future imp
 - add more fixtures for rare HTML variants
 - increase selfservice and portal coverage further
 - add session persistence when the supported UX requires it
-- promote selected workflow diagnostics into richer machine-readable reports
+- continue tightening selected machine-readable payloads where a concrete typed schema is clearly stable enough to justify it

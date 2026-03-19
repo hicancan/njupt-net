@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var (
@@ -17,6 +18,8 @@ var (
 	processExists        = defaultProcessExists
 	killPID              = defaultKillPID
 	findLegacyPIDs       = defaultFindLegacyPIDs
+	gracefulStopTimeout  = 5 * time.Second
+	gracefulStopPoll     = 200 * time.Millisecond
 )
 
 // Supervisor manages background guard processes.
@@ -56,20 +59,38 @@ func (s *Supervisor) Status(ctx context.Context) (*ControlResult, error) {
 
 // Stop stops the current Go guard, if any.
 func (s *Supervisor) Stop(ctx context.Context) (*ControlResult, error) {
-	_ = ctx
-	for _, pidPath := range []string{s.store.WorkerPIDFile(), s.store.LauncherPIDFile()} {
-		pid, err := s.store.ReadPID(pidPath)
-		if err != nil || pid <= 0 {
-			s.store.RemovePID(pidPath)
-			continue
-		}
+	pids := s.readKnownPIDs()
+	if len(pids) == 0 {
+		s.store.ClearStopRequest()
+		return &ControlResult{
+			Running:  false,
+			LogPath:  s.store.CurrentLogPath(),
+			StateDir: s.store.StateDir(),
+			PID:      0,
+		}, nil
+	}
+
+	if err := s.store.WriteStopRequest("guard stop requested"); err != nil {
+		return nil, err
+	}
+	if s.waitForExit(ctx, pids) {
+		s.cleanupStoppedState()
+		return &ControlResult{
+			Running:  false,
+			LogPath:  s.store.CurrentLogPath(),
+			StateDir: s.store.StateDir(),
+			PID:      0,
+		}, nil
+	}
+
+	for _, pid := range pids {
 		if processExists(pid) {
 			if err := killPID(pid); err != nil && !errors.Is(err, os.ErrProcessDone) {
 				return nil, err
 			}
 		}
-		s.store.RemovePID(pidPath)
 	}
+	s.cleanupStoppedState()
 	return &ControlResult{
 		Running:  false,
 		LogPath:  s.store.CurrentLogPath(),
@@ -214,4 +235,58 @@ func OpenForegroundWriter(logPath string, stdout io.Writer) (io.Writer, func(), 
 		stdout = io.Discard
 	}
 	return io.MultiWriter(stdout, file), func() { _ = file.Close() }, nil
+}
+
+func (s *Supervisor) readKnownPIDs() []int {
+	paths := []string{s.store.WorkerPIDFile(), s.store.LauncherPIDFile()}
+	seen := map[int]struct{}{}
+	pids := []int{}
+	for _, pidPath := range paths {
+		pid, err := s.store.ReadPID(pidPath)
+		if err != nil || pid <= 0 {
+			s.store.RemovePID(pidPath)
+			continue
+		}
+		if _, ok := seen[pid]; ok {
+			continue
+		}
+		seen[pid] = struct{}{}
+		pids = append(pids, pid)
+	}
+	return pids
+}
+
+func (s *Supervisor) waitForExit(ctx context.Context, pids []int) bool {
+	deadline := time.NewTimer(gracefulStopTimeout)
+	ticker := time.NewTicker(gracefulStopPoll)
+	defer deadline.Stop()
+	defer ticker.Stop()
+
+	for {
+		if !anyProcessExists(pids) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return !anyProcessExists(pids)
+		case <-deadline.C:
+			return !anyProcessExists(pids)
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Supervisor) cleanupStoppedState() {
+	s.store.RemovePID(s.store.WorkerPIDFile())
+	s.store.RemovePID(s.store.LauncherPIDFile())
+	s.store.ClearStopRequest()
+}
+
+func anyProcessExists(pids []int) bool {
+	for _, pid := range pids {
+		if processExists(pid) {
+			return true
+		}
+	}
+	return false
 }

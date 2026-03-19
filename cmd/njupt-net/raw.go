@@ -43,16 +43,13 @@ func newRawGetCmd() *cobra.Command {
 				}
 			}
 			result, opErr := client.RawGet(cmd.Context(), args[0])
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				if result.Raw == nil {
 					return printKV(w, result.Message)
 				}
 				_, err := fmt.Fprintf(w, "Status: %d\nFinalURL: %s\n%s\n", result.Raw.Status, result.Raw.FinalURL, result.Raw.Body)
 				return err
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)
@@ -87,16 +84,13 @@ func newRawPostCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.RawPost(cmd.Context(), args[0], form)
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				if result.Raw == nil {
 					return printKV(w, result.Message)
 				}
 				_, err := fmt.Fprintf(w, "Status: %d\nFinalURL: %s\n%s\n", result.Raw.Status, result.Raw.FinalURL, result.Raw.Body)
 				return err
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)

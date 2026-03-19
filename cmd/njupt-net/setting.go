@@ -49,15 +49,12 @@ func newSettingPersonGetCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.GetPerson(cmd.Context())
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				if result.Data == nil {
 					return printKV(w, result.Message)
 				}
 				return printKV(w, result.Message, "csrftoken="+result.Data.CSRFTOKEN)
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)
@@ -91,12 +88,9 @@ func newSettingPersonUpdateCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.UpdateUserSecurity(cmd.Context(), form, dryRun)
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				return printKV(w, result.Message)
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)

@@ -5,13 +5,12 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/hicancan/njupt-net-cli/internal/config"
 	"github.com/hicancan/njupt-net-cli/internal/kernel"
 )
 
 type fakeProber struct {
 	checks []probeResult
-	ips    []string
+	ips    []LocalIPSelection
 	ipErr  error
 }
 
@@ -30,13 +29,13 @@ func (p *fakeProber) CheckConnectivity(ctx context.Context) (bool, string) {
 	return result.ok, result.message
 }
 
-func (p *fakeProber) DetectLocalIPv4(ctx context.Context) (string, error) {
+func (p *fakeProber) DetectLocalIPv4(ctx context.Context) (LocalIPSelection, error) {
 	_ = ctx
 	if p.ipErr != nil {
-		return "", p.ipErr
+		return LocalIPSelection{}, p.ipErr
 	}
 	if len(p.ips) == 0 {
-		return "", errors.New("no ip queued")
+		return LocalIPSelection{}, errors.New("no ip queued")
 	}
 	ip := p.ips[0]
 	p.ips = p.ips[1:]
@@ -132,11 +131,11 @@ func (f *fakeFactory) NewPortal() (GuardPortalClient, error) {
 
 func baseGuardEnv(factory GuardClientFactory, prober GuardProber) GuardEnvironment {
 	return GuardEnvironment{
-		Accounts: map[string]config.AccountConfig{
+		Accounts: map[string]Credentials{
 			"W": {Username: "w-user", Password: "w-pass"},
 			"B": {Username: "b-user", Password: "b-pass"},
 		},
-		Broadband: config.BroadbandConfig{
+		Broadband: BroadbandCredentials{
 			Account:  "cmcc-user",
 			Password: "cmcc-pass",
 		},
@@ -211,7 +210,7 @@ func TestGuardCycleForceSwitchImmediatelyRestoresTarget(t *testing.T) {
 		errs: []error{nil},
 	}
 	prober := &fakeProber{
-		ips:    []string{"10.1.2.3"},
+		ips:    []LocalIPSelection{{SelectedIP: "10.1.2.3", RoutedIP: "10.1.2.3", SelectionReason: "routed-match"}},
 		checks: []probeResult{{ok: true, message: "internet ok after portal"}},
 	}
 	factory := &fakeFactory{
@@ -246,7 +245,10 @@ func TestGuardCyclePortalFailureTriggersRepairAndRetry(t *testing.T) {
 			{ok: false, message: "offline"},
 			{ok: true, message: "internet ok after retry"},
 		},
-		ips: []string{"10.1.2.3", "10.1.2.3"},
+		ips: []LocalIPSelection{
+			{SelectedIP: "10.1.2.3", RoutedIP: "10.1.2.3", SelectionReason: "routed-match"},
+			{SelectedIP: "10.1.2.3", RoutedIP: "10.1.2.3", SelectionReason: "routed-match"},
+		},
 	}
 	factory := &fakeFactory{
 		selfClients:   []GuardSelfClient{target},
@@ -268,6 +270,31 @@ func TestGuardCyclePortalFailureTriggersRepairAndRetry(t *testing.T) {
 	}
 }
 
+func TestApplyEnsureOnlineKeepsPortalOutcomeSeparateFromConnectivity(t *testing.T) {
+	dst := &GuardCycleResult{}
+	applyEnsureOnline(dst, &EnsureOnlineResult{
+		InitialProbe:           &LocalIPSelection{SelectedIP: "10.1.2.3", RoutedIP: "10.1.2.3", SelectionReason: "routed-match"},
+		RetryProbe:             &LocalIPSelection{SelectedIP: "10.1.2.3", RoutedIP: "10.1.2.3", SelectionReason: "routed-match"},
+		FirstPortalLoginOK:     false,
+		FirstPortalLoginMsg:    "portal login failed",
+		SecondPortalLoginOK:    false,
+		SecondPortalLoginMsg:   "portal retry failed",
+		BindingRepairAttempted: true,
+		BindingRepairOK:        true,
+		BindingRepairMessage:   "binding moved",
+		InternetOK:             true,
+		InternetMessage:        "internet restored",
+		RecoveryStep:           "binding-repair-then-portal-login",
+	})
+
+	if !dst.InternetOK {
+		t.Fatalf("expected internet success, got %#v", dst)
+	}
+	if dst.PortalLoginOK {
+		t.Fatalf("expected portal outcome to remain false, got %#v", dst)
+	}
+}
+
 func TestGuardCyclePortalSuccessButStillOfflineRepairsThenRetries(t *testing.T) {
 	target := &fakeSelfClient{binding: &kernel.OperatorBinding{}}
 	portalClient := &fakePortalClient{
@@ -283,7 +310,10 @@ func TestGuardCyclePortalSuccessButStillOfflineRepairsThenRetries(t *testing.T) 
 			{ok: false, message: "still offline"},
 			{ok: true, message: "internet restored"},
 		},
-		ips: []string{"10.1.2.3", "10.1.2.3"},
+		ips: []LocalIPSelection{
+			{SelectedIP: "10.1.2.3", RoutedIP: "10.1.2.3", SelectionReason: "routed-match"},
+			{SelectedIP: "10.1.2.3", RoutedIP: "10.1.2.3", SelectionReason: "routed-match"},
+		},
 	}
 	factory := &fakeFactory{
 		selfClients:   []GuardSelfClient{target},

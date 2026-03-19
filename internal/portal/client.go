@@ -2,10 +2,8 @@ package portal
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/hicancan/njupt-net-cli/internal/kernel"
 )
@@ -69,11 +67,7 @@ func (c *Client) Logout802(ctx context.Context, ip string) (*kernel.OperationRes
 		return nil, &kernel.OpError{Op: "portal.logout802", Message: "session client is nil", Err: kernel.ErrPortal}
 	}
 	resp, err := c.session.Get(ctx, c.baseURL802+"/logout", kernel.RequestOptions{
-		Query: map[string]string{
-			"callback":     jsonpCallback,
-			"login_method": "1",
-			"wlan_user_ip": ip,
-		},
+		Query: buildLogout802Query(ip),
 	})
 	if err != nil {
 		return nil, &kernel.OpError{Op: "portal.logout802", Message: "request failed", Err: err}
@@ -96,16 +90,7 @@ func (c *Client) Login801(ctx context.Context, account, password, ip, ipv6 strin
 	if c == nil || c.session == nil {
 		return nil, &kernel.OpError{Op: "portal.login801", Message: "session client is nil", Err: kernel.ErrPortal}
 	}
-	query := map[string]string{
-		"c":     "ACSetting",
-		"a":     "Login",
-		"DDDDD": account,
-		"upass": password,
-		"mip":   ip,
-		"v6ip":  ipv6,
-		"timet": fmt.Sprintf("%d", time.Now().Unix()),
-	}
-	resp, err := c.session.Get(ctx, c.baseURL801, kernel.RequestOptions{Query: query})
+	resp, err := c.session.Get(ctx, c.baseURL801, kernel.RequestOptions{Query: buildLogin801Query(account, password, ip, ipv6)})
 	if err != nil {
 		return nil, &kernel.OpError{Op: "portal.login801", Message: "request failed", Err: err}
 	}
@@ -125,11 +110,7 @@ func (c *Client) Logout801(ctx context.Context, ip string) (*kernel.OperationRes
 		return nil, &kernel.OpError{Op: "portal.logout801", Message: "session client is nil", Err: kernel.ErrPortal}
 	}
 	resp, err := c.session.Get(ctx, c.baseURL801, kernel.RequestOptions{
-		Query: map[string]string{
-			"c":   "ACSetting",
-			"a":   "Logout",
-			"mip": ip,
-		},
+		Query: buildLogout801Query(ip),
 	})
 	if err != nil {
 		return nil, &kernel.OpError{Op: "portal.logout801", Message: "request failed", Err: err}
@@ -146,13 +127,7 @@ func (c *Client) Logout801(ctx context.Context, ip string) (*kernel.OperationRes
 
 func (c *Client) login802Once(ctx context.Context, endpoint, account, password, ip, isp string) (*kernel.OperationResult[kernel.Portal802Response], error) {
 	resp, err := c.session.Get(ctx, endpoint+"/login", kernel.RequestOptions{
-		Query: map[string]string{
-			"callback":      jsonpCallback,
-			"login_method":  "1",
-			"user_account":  ",0," + strings.TrimSpace(account) + ispSuffix(isp),
-			"user_password": password,
-			"wlan_user_ip":  ip,
-		},
+		Query: buildLogin802Query(account, password, ip, isp),
 	})
 	if err != nil {
 		return nil, &kernel.OpError{Op: "portal.login802", Message: fmt.Sprintf("transport failed for %s", endpoint), Err: err}
@@ -168,13 +143,7 @@ func (c *Client) login802Once(ctx context.Context, endpoint, account, password, 
 		}, &kernel.OpError{Op: "portal.login802", Message: "invalid jsonp payload", Err: parseErr}
 	}
 
-	result := &kernel.Portal802Response{
-		Result:     toString(payload["result"]),
-		RetCode:    toString(payload["ret_code"]),
-		Msg:        toString(payload["msg"]),
-		Endpoint:   endpoint + "/login",
-		RawPayload: string(resp.Body),
-	}
+	result := mapPortal802Response(payload, endpoint+"/login", string(resp.Body))
 	opResult := &kernel.OperationResult[kernel.Portal802Response]{
 		Data: result,
 		Raw:  rawCapture(resp),
@@ -195,78 +164,11 @@ func (c *Client) login802Once(ctx context.Context, endpoint, account, password, 
 		Op:      "portal.login802",
 		Message: opResult.Message,
 		Err:     sentinel,
-		Diagnostics: map[string]any{
-			"retCode":  result.RetCode,
-			"msg":      result.Msg,
-			"result":   result.Result,
-			"endpoint": result.Endpoint,
+		ProblemDetails: kernel.PortalProblemDetails{
+			RetCode:  result.RetCode,
+			Msg:      result.Msg,
+			Result:   result.Result,
+			Endpoint: result.Endpoint,
 		},
-	}
-}
-
-func classifyRetCode(retCode string) (kernel.EvidenceLevel, error) {
-	switch strings.TrimSpace(retCode) {
-	case "1":
-		return kernel.EvidenceGuarded, kernel.ErrPortalRetCode1
-	case "3":
-		return kernel.EvidenceBlocked, kernel.ErrPortalRetCode3
-	case "8":
-		return kernel.EvidenceBlocked, kernel.ErrPortalRetCode8
-	case "":
-		return kernel.EvidenceGuarded, kernel.ErrPortal
-	default:
-		return kernel.EvidenceGuarded, kernel.ErrPortalUnknownCode
-	}
-}
-
-func parseJSONPPayload(raw string) (map[string]any, error) {
-	body := strings.TrimSpace(raw)
-	prefix := jsonpCallback + "("
-	if !strings.HasPrefix(body, prefix) {
-		return nil, fmt.Errorf("invalid jsonp prefix")
-	}
-	body = strings.TrimPrefix(body, prefix)
-	body = strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(body, ");"), ")"))
-	if body == "" {
-		return nil, fmt.Errorf("empty jsonp payload")
-	}
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(body), &payload); err != nil {
-		return nil, err
-	}
-	return payload, nil
-}
-
-func ispSuffix(isp string) string {
-	switch strings.ToLower(strings.TrimSpace(isp)) {
-	case "telecom":
-		return "@dx"
-	case "unicom":
-		return "@lt"
-	case "mobile":
-		return "@cmcc"
-	default:
-		return ""
-	}
-}
-
-func rawCapture(resp *kernel.SessionResponse) *kernel.RawCapture {
-	if resp == nil {
-		return nil
-	}
-	return &kernel.RawCapture{
-		Status:   resp.StatusCode,
-		Headers:  resp.Headers,
-		Body:     string(resp.Body),
-		FinalURL: resp.FinalURL,
-	}
-}
-
-func toString(v any) string {
-	switch val := v.(type) {
-	case string:
-		return strings.TrimSpace(val)
-	default:
-		return strings.TrimSpace(fmt.Sprint(val))
 	}
 }

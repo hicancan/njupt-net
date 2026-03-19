@@ -9,6 +9,9 @@ import (
 	"github.com/hicancan/njupt-net-cli/internal/httpx"
 	"github.com/hicancan/njupt-net-cli/internal/kernel"
 	"github.com/hicancan/njupt-net-cli/internal/output"
+	"github.com/hicancan/njupt-net-cli/internal/portal"
+	"github.com/hicancan/njupt-net-cli/internal/selfservice"
+	"github.com/hicancan/njupt-net-cli/internal/workflow"
 )
 
 // Options are the root CLI/application settings.
@@ -65,6 +68,29 @@ func (c *Context) NewPortalSession() (kernel.SessionClient, error) {
 	})
 }
 
+// NewSelfClient returns a fresh concrete Self protocol client.
+func (c *Context) NewSelfClient() (*selfservice.Client, error) {
+	session, err := c.NewSelfSession()
+	if err != nil {
+		return nil, err
+	}
+	return selfservice.NewClient(session), nil
+}
+
+// NewPortalClient returns a fresh concrete Portal protocol client.
+func (c *Context) NewPortalClient() (*portal.Client, error) {
+	session, err := c.NewPortalSession()
+	if err != nil {
+		return nil, err
+	}
+	return portal.NewClient(session, c.Config.Portal.BaseURL, firstFallback(c.Config.Portal.FallbackBaseURLs)), nil
+}
+
+// NewMigrationFactory returns the workflow-facing migration client factory.
+func (c *Context) NewMigrationFactory() workflow.MigrationFactory {
+	return migrationFactory{ctx: c}
+}
+
 // MustConfirm returns an error when a side-effecting command requires --yes.
 func (c *Context) MustConfirm(action string) error {
 	if c.AssumeYes {
@@ -74,6 +100,10 @@ func (c *Context) MustConfirm(action string) error {
 		Op:      "app.confirm",
 		Message: fmt.Sprintf("%s requires --yes", action),
 		Err:     kernel.ErrGuardedCapability,
+		ProblemDetails: kernel.CapabilityProblemDetails{
+			Capability: action,
+			Reason:     "requires --yes",
+		},
 	}
 }
 
@@ -82,4 +112,19 @@ func chooseOutputMode(flagValue, configValue string) string {
 		return flagValue
 	}
 	return configValue
+}
+
+func firstFallback(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+type migrationFactory struct {
+	ctx *Context
+}
+
+func (f migrationFactory) NewSelf() (workflow.MigrationSelfClient, error) {
+	return f.ctx.NewSelfClient()
 }

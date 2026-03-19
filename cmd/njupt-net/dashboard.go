@@ -40,15 +40,12 @@ func newDashboardOnlineListCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.GetOnlineList(cmd.Context())
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				if result.Data == nil {
 					return printKV(w, result.Message)
 				}
 				return printKV(w, result.Message)
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)
@@ -73,12 +70,9 @@ func newDashboardLoginHistoryCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.GetLoginHistory(cmd.Context())
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				return printKV(w, result.Message)
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)
@@ -103,12 +97,9 @@ func newDashboardRefreshAccountCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.RefreshAccountRaw(cmd.Context())
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				return printKV(w, result.Message)
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)
@@ -146,12 +137,9 @@ func newDashboardMauthGetCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.GetMauthState(cmd.Context())
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				return printKV(w, result.Message)
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)
@@ -180,7 +168,7 @@ func newDashboardMauthToggleCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.ToggleMauth(cmd.Context())
-			if err := render(cmd, result, func(w io.Writer) error {
+			if err := renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				return printKV(w, result.Message)
 			}); err != nil {
 				return err
@@ -221,12 +209,9 @@ func newDashboardOfflineCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.ForceOffline(cmd.Context(), args[0])
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				return printKV(w, result.Message)
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)

@@ -39,12 +39,9 @@ func newSelfLoginCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.Login(cmd.Context(), account.Username, account.Password)
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				return printKV(w, result.Message)
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)
@@ -72,12 +69,9 @@ func newSelfLogoutCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.Logout(cmd.Context())
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				return printKV(w, result.Message)
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)
@@ -100,15 +94,12 @@ func newSelfStatusCmd() *cobra.Command {
 			}
 			loginResult, loginErr := client.Login(cmd.Context(), account.Username, account.Password)
 			if loginErr != nil {
-				if err := render(cmd, loginResult, func(w io.Writer) error {
+				return renderOperation(cmd, loginResult, loginErr, func(w io.Writer) error {
 					return printKV(w, loginResult.Message)
-				}); err != nil {
-					return err
-				}
-				return loginErr
+				})
 			}
 			statusResult, statusErr := client.Status(cmd.Context())
-			if err := render(cmd, statusResult, func(w io.Writer) error {
+			if err := renderOperation(cmd, statusResult, statusErr, func(w io.Writer) error {
 				if statusResult.Data == nil {
 					return printKV(w, statusResult.Message)
 				}
@@ -149,16 +140,13 @@ func newSelfDoctorCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := workflow.SelfDoctor(cmd.Context(), client, account.Username, account.Password)
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				lines := []string{result.Message}
 				if result.Data != nil && result.Data.Status != nil && result.Data.Status.Data != nil {
 					lines = append(lines, "loggedIn="+boolString(result.Data.Status.Data.LoggedIn))
 				}
 				return printKV(w, lines...)
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)

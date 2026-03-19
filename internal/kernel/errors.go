@@ -26,10 +26,11 @@ var (
 
 // OpError decorates a sentinel error with operation-scoped context.
 type OpError struct {
-	Op          string
-	Message     string
-	Err         error
-	Diagnostics map[string]any
+	Op             string
+	Message        string
+	Err            error
+	ProblemDetails any
+	Problems       []Problem
 }
 
 func (e *OpError) Error() string {

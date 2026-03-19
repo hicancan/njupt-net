@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/hicancan/njupt-net-cli/internal/kernel"
+	"github.com/hicancan/njupt-net-cli/internal/selfservice"
 )
 
 type mockSessionClient struct {
@@ -28,40 +29,59 @@ func (m *mockSessionClient) PostForm(ctx context.Context, path string, opts kern
 	return nil, errors.New("mock post not implemented")
 }
 
-func withSessionFactory(t *testing.T, factory func(string) (kernel.SessionClient, error)) {
-	t.Helper()
-	previous := newSessionClient
-	newSessionClient = factory
-	t.Cleanup(func() {
-		newSessionClient = previous
-	})
+type queuedMigrationFactory struct {
+	clients []MigrationSelfClient
+	err     error
+}
+
+func (f *queuedMigrationFactory) NewSelf() (MigrationSelfClient, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if len(f.clients) == 0 {
+		return nil, errors.New("no self client queued")
+	}
+	client := f.clients[0]
+	f.clients = f.clients[1:]
+	return client, nil
 }
 
 func TestMigrateBroadband_RejectsInvalidArgs(t *testing.T) {
-	_, err := MigrateBroadband(context.Background(), "http://self.example", "", "p1", "u2", "p2", map[string]string{"FLDEXTRA1": "x"})
+	_, err := MigrateBroadband(context.Background(), &queuedMigrationFactory{}, MigrationInput{
+		From:         Credentials{Password: "p1"},
+		To:           Credentials{Username: "u2", Password: "p2"},
+		TargetFields: map[string]string{"FLDEXTRA1": "x"},
+	})
 	if err == nil || !strings.Contains(err.Error(), "from/to credentials are required") {
 		t.Fatalf("expected credential validation error, got: %v", err)
 	}
 
-	_, err = MigrateBroadband(context.Background(), "http://self.example", "u1", "p1", "u2", "p2", map[string]string{})
+	_, err = MigrateBroadband(context.Background(), &queuedMigrationFactory{}, MigrationInput{
+		From: Credentials{Username: "u1", Password: "p1"},
+		To:   Credentials{Username: "u2", Password: "p2"},
+	})
 	if err == nil || !strings.Contains(err.Error(), "target fields are required") {
 		t.Fatalf("expected target field validation error, got: %v", err)
 	}
 }
 
 func TestMigrateBroadband_FailFastOnSourceLogin(t *testing.T) {
-	withSessionFactory(t, func(string) (kernel.SessionClient, error) {
-		return &mockSessionClient{
+	factory := &queuedMigrationFactory{clients: []MigrationSelfClient{
+		selfservice.NewClient(&mockSessionClient{
 			getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
 				_ = ctx
 				_ = path
 				_ = opts
 				return nil, errors.New("network down")
 			},
-		}, nil
-	})
+		}),
+	}}
 
-	_, err := MigrateBroadband(context.Background(), "http://self.example", "from", "frompwd", "to", "topwd", map[string]string{"FLDEXTRA1": "x"})
+	_, err := MigrateBroadband(context.Background(), factory, MigrationInput{
+		From:         Credentials{Username: "from", Password: "frompwd"},
+		To:           Credentials{Username: "to", Password: "topwd"},
+		TargetFields: map[string]string{"FLDEXTRA1": "x"},
+	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -72,8 +92,8 @@ func TestMigrateBroadband_FailFastOnSourceLogin(t *testing.T) {
 
 func TestMigrateBroadband_FailFastOnSourceUnbindReadback(t *testing.T) {
 	operatorReadCount := 0
-	withSessionFactory(t, func(string) (kernel.SessionClient, error) {
-		return &mockSessionClient{
+	factory := &queuedMigrationFactory{clients: []MigrationSelfClient{
+		selfservice.NewClient(&mockSessionClient{
 			getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
 				_ = ctx
 				_ = opts
@@ -106,10 +126,14 @@ func TestMigrateBroadband_FailFastOnSourceUnbindReadback(t *testing.T) {
 					return nil, errors.New("unexpected post path: " + path)
 				}
 			},
-		}, nil
-	})
+		}),
+	}}
 
-	result, err := MigrateBroadband(context.Background(), "http://self.example", "from", "frompwd", "to", "topwd", map[string]string{"FLDEXTRA1": "target"})
+	result, err := MigrateBroadband(context.Background(), factory, MigrationInput{
+		From:         Credentials{Username: "from", Password: "frompwd"},
+		To:           Credentials{Username: "to", Password: "topwd"},
+		TargetFields: map[string]string{"FLDEXTRA1": "target"},
+	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -122,23 +146,19 @@ func TestMigrateBroadband_FailFastOnSourceUnbindReadback(t *testing.T) {
 }
 
 func TestMigrateBroadband_Succeeds(t *testing.T) {
-	factoryCalls := 0
-	withSessionFactory(t, func(string) (kernel.SessionClient, error) {
-		factoryCalls++
-		if factoryCalls == 1 {
-			return successfulSession("source-old", "source-pass", map[string]string{
-				"FLDEXTRA1": "old-telecom",
-				"FLDEXTRA2": "old-pass",
-				"FLDEXTRA3": "old-mobile",
-				"FLDEXTRA4": "old-mobile-pass",
-			}, map[string]string{
-				"FLDEXTRA1": "",
-				"FLDEXTRA2": "",
-				"FLDEXTRA3": "",
-				"FLDEXTRA4": "",
-			}), nil
-		}
-		return successfulSession("target-new", "target-pass", map[string]string{
+	factory := &queuedMigrationFactory{clients: []MigrationSelfClient{
+		successfulSession("source-old", "source-pass", map[string]string{
+			"FLDEXTRA1": "old-telecom",
+			"FLDEXTRA2": "old-pass",
+			"FLDEXTRA3": "old-mobile",
+			"FLDEXTRA4": "old-mobile-pass",
+		}, map[string]string{
+			"FLDEXTRA1": "",
+			"FLDEXTRA2": "",
+			"FLDEXTRA3": "",
+			"FLDEXTRA4": "",
+		}),
+		successfulSession("target-new", "target-pass", map[string]string{
 			"FLDEXTRA1": "",
 			"FLDEXTRA2": "",
 			"FLDEXTRA3": "",
@@ -146,12 +166,16 @@ func TestMigrateBroadband_Succeeds(t *testing.T) {
 		}, map[string]string{
 			"FLDEXTRA1": "target-mobile",
 			"FLDEXTRA4": "target-secret",
-		}), nil
-	})
+		}),
+	}}
 
-	result, err := MigrateBroadband(context.Background(), "http://self.example", "source-old", "source-pass", "target-new", "target-pass", map[string]string{
-		"FLDEXTRA1": "target-mobile",
-		"FLDEXTRA4": "target-secret",
+	result, err := MigrateBroadband(context.Background(), factory, MigrationInput{
+		From: Credentials{Username: "source-old", Password: "source-pass"},
+		To:   Credentials{Username: "target-new", Password: "target-pass"},
+		TargetFields: map[string]string{
+			"FLDEXTRA1": "target-mobile",
+			"FLDEXTRA4": "target-secret",
+		},
 	})
 	if err != nil {
 		t.Fatalf("expected success, got %v", err)
@@ -162,23 +186,19 @@ func TestMigrateBroadband_Succeeds(t *testing.T) {
 }
 
 func TestMigrateBroadband_TargetBindFailure(t *testing.T) {
-	factoryCalls := 0
-	withSessionFactory(t, func(string) (kernel.SessionClient, error) {
-		factoryCalls++
-		if factoryCalls == 1 {
-			return successfulSession("source-old", "source-pass", map[string]string{
-				"FLDEXTRA1": "old-telecom",
-				"FLDEXTRA2": "old-pass",
-				"FLDEXTRA3": "old-mobile",
-				"FLDEXTRA4": "old-mobile-pass",
-			}, map[string]string{
-				"FLDEXTRA1": "",
-				"FLDEXTRA2": "",
-				"FLDEXTRA3": "",
-				"FLDEXTRA4": "",
-			}), nil
-		}
-		return successfulSession("target-new", "target-pass", map[string]string{
+	factory := &queuedMigrationFactory{clients: []MigrationSelfClient{
+		successfulSession("source-old", "source-pass", map[string]string{
+			"FLDEXTRA1": "old-telecom",
+			"FLDEXTRA2": "old-pass",
+			"FLDEXTRA3": "old-mobile",
+			"FLDEXTRA4": "old-mobile-pass",
+		}, map[string]string{
+			"FLDEXTRA1": "",
+			"FLDEXTRA2": "",
+			"FLDEXTRA3": "",
+			"FLDEXTRA4": "",
+		}),
+		successfulSession("target-new", "target-pass", map[string]string{
 			"FLDEXTRA1": "",
 			"FLDEXTRA2": "",
 			"FLDEXTRA3": "",
@@ -186,12 +206,16 @@ func TestMigrateBroadband_TargetBindFailure(t *testing.T) {
 		}, map[string]string{
 			"FLDEXTRA1": "",
 			"FLDEXTRA4": "",
-		}), nil
-	})
+		}),
+	}}
 
-	result, err := MigrateBroadband(context.Background(), "http://self.example", "source-old", "source-pass", "target-new", "target-pass", map[string]string{
-		"FLDEXTRA1": "target-mobile",
-		"FLDEXTRA4": "target-secret",
+	result, err := MigrateBroadband(context.Background(), factory, MigrationInput{
+		From: Credentials{Username: "source-old", Password: "source-pass"},
+		To:   Credentials{Username: "target-new", Password: "target-pass"},
+		TargetFields: map[string]string{
+			"FLDEXTRA1": "target-mobile",
+			"FLDEXTRA4": "target-secret",
+		},
 	})
 	if err == nil {
 		t.Fatal("expected target bind failure")
@@ -204,9 +228,9 @@ func TestMigrateBroadband_TargetBindFailure(t *testing.T) {
 	}
 }
 
-func successfulSession(expectedUser, expectedPassword string, initialState, postState map[string]string) *mockSessionClient {
+func successfulSession(expectedUser, expectedPassword string, initialState, postState map[string]string) MigrationSelfClient {
 	operatorReadCount := 0
-	return &mockSessionClient{
+	return selfservice.NewClient(&mockSessionClient{
 		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
 			_ = ctx
 			_ = opts
@@ -241,7 +265,7 @@ func successfulSession(expectedUser, expectedPassword string, initialState, post
 				return nil, errors.New("unexpected post path: " + path)
 			}
 		},
-	}
+	})
 }
 
 func operatorHTML(token string, state map[string]string) string {

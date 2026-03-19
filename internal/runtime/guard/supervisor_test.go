@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestSupervisorStartStopStatus(t *testing.T) {
@@ -17,12 +18,18 @@ func TestSupervisorStartStopStatus(t *testing.T) {
 	oldExists := processExists
 	oldKill := killPID
 	oldFindLegacy := findLegacyPIDs
+	oldTimeout := gracefulStopTimeout
+	oldPoll := gracefulStopPoll
 	defer func() {
 		startDetachedProcess = oldStart
 		processExists = oldExists
 		killPID = oldKill
 		findLegacyPIDs = oldFindLegacy
+		gracefulStopTimeout = oldTimeout
+		gracefulStopPoll = oldPoll
 	}()
+	gracefulStopTimeout = 20 * time.Millisecond
+	gracefulStopPoll = 5 * time.Millisecond
 
 	startCalled := false
 	startDetachedProcess = func(executable string, args []string, workDir, logPath string) (int, error) {
@@ -45,8 +52,13 @@ func TestSupervisorStartStopStatus(t *testing.T) {
 		}
 		return 4321, nil
 	}
+	stopChecks := 0
 	processExists = func(pid int) bool {
-		return pid == 4321
+		if pid != 4321 {
+			return false
+		}
+		stopChecks++
+		return stopChecks < 3
 	}
 	killed := []int{}
 	killPID = func(pid int) error {
@@ -84,11 +96,14 @@ func TestSupervisorStartStopStatus(t *testing.T) {
 	if stopResult.Running {
 		t.Fatalf("expected stopped result: %#v", stopResult)
 	}
-	if len(killed) == 0 {
-		t.Fatal("expected process kill")
+	if len(killed) != 0 {
+		t.Fatalf("expected graceful stop without kill, got %v", killed)
 	}
 	if _, err := os.Stat(store.WorkerPIDFile()); !os.IsNotExist(err) {
 		t.Fatalf("expected worker pid removed, got %v", err)
+	}
+	if store.StopRequested() {
+		t.Fatal("expected stop request cleared")
 	}
 }
 
@@ -133,5 +148,47 @@ func TestSupervisorStopLegacy(t *testing.T) {
 	}
 	if !legacyKilled || len(killed) != 2 {
 		t.Fatalf("unexpected legacy stop result: killed=%v pids=%v", legacyKilled, killed)
+	}
+}
+
+func TestSupervisorStopFallsBackToKillAfterTimeout(t *testing.T) {
+	store, err := NewStateStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	if err := store.WritePID(store.WorkerPIDFile(), 2468); err != nil {
+		t.Fatalf("write worker pid: %v", err)
+	}
+
+	oldExists := processExists
+	oldKill := killPID
+	oldTimeout := gracefulStopTimeout
+	oldPoll := gracefulStopPoll
+	defer func() {
+		processExists = oldExists
+		killPID = oldKill
+		gracefulStopTimeout = oldTimeout
+		gracefulStopPoll = oldPoll
+	}()
+	gracefulStopTimeout = 20 * time.Millisecond
+	gracefulStopPoll = 5 * time.Millisecond
+
+	processExists = func(pid int) bool { return pid == 2468 }
+	killed := []int{}
+	killPID = func(pid int) error {
+		killed = append(killed, pid)
+		return nil
+	}
+
+	supervisor := NewSupervisor(store, "", "")
+	result, err := supervisor.Stop(context.Background())
+	if err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if result.Running {
+		t.Fatalf("expected stopped result: %#v", result)
+	}
+	if len(killed) != 1 || killed[0] != 2468 {
+		t.Fatalf("expected forced kill after timeout, got %v", killed)
 	}
 }

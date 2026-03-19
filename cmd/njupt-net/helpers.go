@@ -6,7 +6,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/hicancan/njupt-net-cli/internal/app"
 	"github.com/hicancan/njupt-net-cli/internal/config"
+	"github.com/hicancan/njupt-net-cli/internal/kernel"
 	"github.com/hicancan/njupt-net-cli/internal/portal"
 	"github.com/hicancan/njupt-net-cli/internal/selfservice"
 )
@@ -23,8 +25,16 @@ func bindAuthFlags(cmd *cobra.Command, flags *authFlags) {
 	cmd.Flags().StringVar(&flags.Password, "password", "", "Explicit password override")
 }
 
+func appContext(cmd *cobra.Command) (*app.Context, error) {
+	env, err := getCommandEnv(cmd)
+	if err != nil {
+		return nil, err
+	}
+	return env.appContext(cmd.OutOrStdout())
+}
+
 func resolveAccount(cmd *cobra.Command, flags authFlags) (*config.AccountConfig, error) {
-	appCtx, err := rootOpts.load(cmd)
+	appCtx, err := appContext(cmd)
 	if err != nil {
 		return nil, err
 	}
@@ -36,53 +46,55 @@ func resolveAccount(cmd *cobra.Command, flags authFlags) (*config.AccountConfig,
 }
 
 func newSelfClient(cmd *cobra.Command) (*selfservice.Client, error) {
-	appCtx, err := rootOpts.load(cmd)
+	appCtx, err := appContext(cmd)
 	if err != nil {
 		return nil, err
 	}
-	session, err := appCtx.NewSelfSession()
-	if err != nil {
-		return nil, err
-	}
-	return selfservice.NewClient(session), nil
+	return appCtx.NewSelfClient()
 }
 
 func newPortalClient(cmd *cobra.Command) (*portal.Client, error) {
-	appCtx, err := rootOpts.load(cmd)
+	appCtx, err := appContext(cmd)
 	if err != nil {
 		return nil, err
 	}
-	session, err := appCtx.NewPortalSession()
-	if err != nil {
-		return nil, err
-	}
-	return portal.NewClient(session, appCtx.Config.Portal.BaseURL, firstFallback(appCtx.Config.Portal.FallbackBaseURLs)), nil
+	return appCtx.NewPortalClient()
 }
 
 func render(cmd *cobra.Command, payload any, human func(io.Writer) error) error {
-	appCtx, err := rootOpts.load(cmd)
+	env, err := getCommandEnv(cmd)
 	if err != nil {
 		return err
 	}
 	if payload == nil {
 		return nil
 	}
-	return appCtx.Renderer.Print(payload, human)
-}
-
-func requireYes(cmd *cobra.Command, action string) error {
-	appCtx, err := rootOpts.load(cmd)
+	renderer, err := env.rendererFor(cmd.OutOrStdout())
 	if err != nil {
 		return err
 	}
-	return appCtx.MustConfirm(action)
+	return renderer.Print(payload, human)
 }
 
-func firstFallback(values []string) string {
-	if len(values) == 0 {
-		return ""
+func requireYes(cmd *cobra.Command, action string) error {
+	env, err := getCommandEnv(cmd)
+	if err != nil {
+		return err
 	}
-	return values[0]
+	if env.opts.AssumeYes {
+		return nil
+	}
+	return (&app.Context{AssumeYes: false}).MustConfirm(action)
+}
+
+func renderOperation[T any](cmd *cobra.Command, result *kernel.OperationResult[T], opErr error, human func(io.Writer) error) error {
+	if result != nil {
+		result.Problems = kernel.MergeProblems(result.Problems, opErr)
+	}
+	if err := render(cmd, result, human); err != nil {
+		return err
+	}
+	return opErr
 }
 
 func printKV(w io.Writer, pairs ...string) error {

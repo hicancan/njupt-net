@@ -40,15 +40,12 @@ func newBillOnlineLogCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.GetUserOnlineLog(cmd.Context(), startTime, endTime)
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				if result.Data == nil {
 					return printKV(w, result.Message)
 				}
 				return printKV(w, result.Message, "total="+itoa(result.Data.Total))
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)
@@ -77,15 +74,12 @@ func newBillMonthPayCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.GetMonthPay(cmd.Context(), startTime, endTime)
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				if result.Data == nil {
 					return printKV(w, result.Message)
 				}
 				return printKV(w, result.Message, "total="+itoa(result.Data.Total))
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)
@@ -114,15 +108,12 @@ func newBillOperatorLogCmd() *cobra.Command {
 				return err
 			}
 			result, opErr := client.GetOperatorLog(cmd.Context(), startTime, endTime)
-			if err := render(cmd, result, func(w io.Writer) error {
+			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				if result.Data == nil {
 					return printKV(w, result.Message)
 				}
 				return printKV(w, result.Message, "total="+itoa(result.Data.Total))
-			}); err != nil {
-				return err
-			}
-			return opErr
+			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)

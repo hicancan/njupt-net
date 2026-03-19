@@ -47,25 +47,15 @@ func (c *Client) getBillList(ctx context.Context, op, path, startTime, endTime s
 		return nil, &kernel.OpError{Op: op, Message: "request failed", Err: err}
 	}
 
-	var payload struct {
-		Summary map[string]interface{}   `json:"summary"`
-		Total   interface{}              `json:"total"`
-		Rows    []map[string]interface{} `json:"rows"`
-	}
-	if err := parseJSON(resp.Body, &payload); err != nil {
+	data, err := parseBillListResult(resp.Body)
+	if err != nil {
 		return nil, &kernel.OpError{Op: op, Message: "parse json failed", Err: err}
 	}
 
-	total, _ := strconv.Atoi(toString(payload.Total))
-	data := &kernel.BillListResult{
-		Summary: payload.Summary,
-		Total:   total,
-		Rows:    payload.Rows,
-	}
 	return &kernel.OperationResult[kernel.BillListResult]{
 		Level:   kernel.EvidenceConfirmed,
 		Success: true,
-		Message: fmt.Sprintf("loaded %d bill rows", len(payload.Rows)),
+		Message: fmt.Sprintf("loaded %d bill rows", len(data.Rows)),
 		Data:    data,
 		Raw:     rawCapture(resp),
 	}, nil

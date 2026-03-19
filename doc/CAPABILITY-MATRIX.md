@@ -42,6 +42,7 @@ This matrix tracks the current implementation surface against the SSOT certainty
 | --- | --- | --- | --- | --- |
 | Doctor | `self doctor` | confirmed | implemented | typed composition of login and status |
 | Migration | `service migrate` | confirmed | implemented | source clear then target bind with readback |
+| Guard Runtime | `guard run|start|stop|status|once` | confirmed | implemented | typed schedule/runtime status, structured events, graceful stop-first supervision |
 
 ## Diagnostics And Raw Access
 
@@ -59,3 +60,10 @@ The implementation uses three kinds of evidence in tests:
 - `httptest` servers for `internal/httpx`
 
 Future fixture expansion should prefer committed HTML/JSON samples when new page variants are discovered in the field.
+
+Machine-readable output contracts also rely on:
+
+- stable `problem.code` values with typed `details`
+- stable `guard event.kind` values with typed `details`
+- typed nested `guard status` output for binding, connectivity, portal, cycle, timing, and log state, including probe and switch outcome data
+- `guard status` health values: `healthy`, `degraded`, `stopped`

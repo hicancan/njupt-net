@@ -10,12 +10,12 @@ type RawCapture struct {
 
 // OperationResult is the canonical typed result returned by kernel/app actions.
 type OperationResult[T any] struct {
-	Level       EvidenceLevel  `json:"level"`
-	Success     bool           `json:"success"`
-	Message     string         `json:"message,omitempty"`
-	Data        *T             `json:"data,omitempty"`
-	Diagnostics map[string]any `json:"diagnostics,omitempty"`
-	Raw         *RawCapture    `json:"raw,omitempty"`
+	Level    EvidenceLevel `json:"level"`
+	Success  bool          `json:"success"`
+	Message  string        `json:"message,omitempty"`
+	Data     *T            `json:"data,omitempty"`
+	Problems []Problem     `json:"problems,omitempty"`
+	Raw      *RawCapture   `json:"raw,omitempty"`
 }
 
 // WriteBackResult captures pre/target/post/restore evidence for stateful writes.

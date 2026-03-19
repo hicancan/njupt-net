@@ -64,7 +64,7 @@ func (c ScheduleConfig) Validate() error {
 		"nightEnd":     c.NightEnd,
 	} {
 		if strings.TrimSpace(value) == "" {
-			return &kernel.OpError{Op: "guard.schedule", Message: fmt.Sprintf("%s is required", label), Err: kernel.ErrInvalidConfig}
+			return &kernel.OpError{Op: "guard.schedule", Message: fmt.Sprintf("%s is required", label), Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.schedule." + label}}
 		}
 	}
 	if _, err := parseClockMinutes(c.NightStart); err != nil {
@@ -89,18 +89,18 @@ func (s *Scheduler) Decide(now time.Time) Decision {
 func parseClockMinutes(raw string) (int, error) {
 	parts := strings.Split(strings.TrimSpace(raw), ":")
 	if len(parts) != 2 {
-		return 0, &kernel.OpError{Op: "guard.schedule", Message: fmt.Sprintf("invalid clock value %q", raw), Err: kernel.ErrInvalidConfig}
+		return 0, &kernel.OpError{Op: "guard.schedule", Message: fmt.Sprintf("invalid clock value %q", raw), Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.schedule.clock", Value: raw}}
 	}
 	hour, err := strconv.Atoi(parts[0])
 	if err != nil {
-		return 0, &kernel.OpError{Op: "guard.schedule", Message: fmt.Sprintf("invalid clock value %q", raw), Err: kernel.ErrInvalidConfig}
+		return 0, &kernel.OpError{Op: "guard.schedule", Message: fmt.Sprintf("invalid clock value %q", raw), Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.schedule.clock", Value: raw}}
 	}
 	minute, err := strconv.Atoi(parts[1])
 	if err != nil {
-		return 0, &kernel.OpError{Op: "guard.schedule", Message: fmt.Sprintf("invalid clock value %q", raw), Err: kernel.ErrInvalidConfig}
+		return 0, &kernel.OpError{Op: "guard.schedule", Message: fmt.Sprintf("invalid clock value %q", raw), Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.schedule.clock", Value: raw}}
 	}
 	if hour < 0 || hour > 23 || minute < 0 || minute > 59 {
-		return 0, &kernel.OpError{Op: "guard.schedule", Message: fmt.Sprintf("invalid clock value %q", raw), Err: kernel.ErrInvalidConfig}
+		return 0, &kernel.OpError{Op: "guard.schedule", Message: fmt.Sprintf("invalid clock value %q", raw), Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.schedule.clock", Value: raw}}
 	}
 	return hour*60 + minute, nil
 }

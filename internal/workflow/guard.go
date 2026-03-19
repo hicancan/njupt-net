@@ -4,19 +4,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
-	"github.com/hicancan/njupt-net-cli/internal/config"
-	"github.com/hicancan/njupt-net-cli/internal/httpx"
 	"github.com/hicancan/njupt-net-cli/internal/kernel"
-	"github.com/hicancan/njupt-net-cli/internal/portal"
-	"github.com/hicancan/njupt-net-cli/internal/selfservice"
 )
 
 // GuardProber provides connectivity and local IPv4 detection to the workflow layer.
 type GuardProber interface {
 	CheckConnectivity(ctx context.Context) (bool, string)
-	DetectLocalIPv4(ctx context.Context) (string, error)
+	DetectLocalIPv4(ctx context.Context) (LocalIPSelection, error)
 }
 
 // GuardSelfClient captures the Self operations the guard workflow needs.
@@ -37,40 +32,23 @@ type GuardClientFactory interface {
 	NewPortal() (GuardPortalClient, error)
 }
 
-// RealGuardClientFactory creates concrete Self/Portal clients.
-type RealGuardClientFactory struct {
-	SelfBaseURL           string
-	PortalBaseURL         string
-	PortalFallbackBaseURL string
-	SelfTimeout           time.Duration
-	PortalTimeout         time.Duration
-	InsecureTLS           bool
+// Credentials is the minimal username/password pair workflows need.
+type Credentials struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
-// NewSelf creates a fresh concrete Self client.
-func (f RealGuardClientFactory) NewSelf() (GuardSelfClient, error) {
-	session, err := httpx.NewSessionClient(httpx.Options{
-		BaseURL:     f.SelfBaseURL,
-		Timeout:     f.SelfTimeout,
-		InsecureTLS: f.InsecureTLS,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return selfservice.NewClient(session), nil
+// BroadbandCredentials is the minimal broadband account/password pair workflows need.
+type BroadbandCredentials struct {
+	Account  string `json:"account"`
+	Password string `json:"password"`
 }
 
-// NewPortal creates a fresh concrete Portal client.
-func (f RealGuardClientFactory) NewPortal() (GuardPortalClient, error) {
-	session, err := httpx.NewSessionClient(httpx.Options{
-		BaseURL:     f.PortalBaseURL,
-		Timeout:     f.PortalTimeout,
-		InsecureTLS: f.InsecureTLS,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return portal.NewClient(session, f.PortalBaseURL, f.PortalFallbackBaseURL), nil
+// LocalIPSelection captures how the guard chose a local IPv4 for Portal traffic.
+type LocalIPSelection struct {
+	SelectedIP      string `json:"selectedIp,omitempty"`
+	RoutedIP        string `json:"routedIp,omitempty"`
+	SelectionReason string `json:"selectionReason,omitempty"`
 }
 
 // BindingRepairResult summarizes the non-secret repair outcome.
@@ -83,8 +61,8 @@ type BindingRepairResult struct {
 // EnsureOnlineResult summarizes one aggressive ensure-online chain.
 type EnsureOnlineResult struct {
 	DesiredProfile         string                    `json:"desiredProfile"`
-	InitialIP              string                    `json:"initialIp,omitempty"`
-	RetryIP                string                    `json:"retryIp,omitempty"`
+	InitialProbe           *LocalIPSelection         `json:"initialProbe,omitempty"`
+	RetryProbe             *LocalIPSelection         `json:"retryProbe,omitempty"`
 	FirstPortalLoginOK     bool                      `json:"firstPortalLoginOk"`
 	FirstPortalLoginMsg    string                    `json:"firstPortalLoginMessage,omitempty"`
 	SecondPortalLoginOK    bool                      `json:"secondPortalLoginOk"`
@@ -122,16 +100,16 @@ type GuardCycleResult struct {
 	PortalLoginOK      bool                 `json:"portalLoginOk"`
 	PortalLoginMessage string               `json:"portalLoginMessage,omitempty"`
 	RecoveryStep       string               `json:"recoveryStep"`
-	LocalIP            string               `json:"localIp,omitempty"`
-	RetryLocalIP       string               `json:"retryLocalIp,omitempty"`
+	InitialProbe       *LocalIPSelection    `json:"initialProbe,omitempty"`
+	RetryProbe         *LocalIPSelection    `json:"retryProbe,omitempty"`
 	BindingRepair      *BindingRepairResult `json:"bindingRepair,omitempty"`
 	EnsureOnline       *EnsureOnlineResult  `json:"ensureOnline,omitempty"`
 }
 
 // GuardEnvironment contains the dependencies needed for guard workflows.
 type GuardEnvironment struct {
-	Accounts  map[string]config.AccountConfig
-	Broadband config.BroadbandConfig
+	Accounts  map[string]Credentials
+	Broadband BroadbandCredentials
 	PortalISP string
 	Factory   GuardClientFactory
 	Prober    GuardProber
@@ -141,7 +119,7 @@ type GuardEnvironment struct {
 func RepairBinding(ctx context.Context, env GuardEnvironment, targetProfile string) (*kernel.OperationResult[BindingRepairResult], error) {
 	targetAccount, ok := env.Accounts[targetProfile]
 	if !ok {
-		return nil, &kernel.OpError{Op: "workflow.guard.repairBinding", Message: fmt.Sprintf("target profile %q not found", targetProfile), Err: kernel.ErrInvalidConfig}
+		return nil, &kernel.OpError{Op: "workflow.guard.repairBinding", Message: fmt.Sprintf("target profile %q not found", targetProfile), Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.targetProfile", Value: targetProfile}}
 	}
 	targetClient, err := env.Factory.NewSelf()
 	if err != nil {
@@ -250,7 +228,7 @@ func RepairBinding(ctx context.Context, env GuardEnvironment, targetProfile stri
 func EnsureOnline(ctx context.Context, env GuardEnvironment, targetProfile string, forcePortalLogin bool) (*kernel.OperationResult[EnsureOnlineResult], error) {
 	account, ok := env.Accounts[targetProfile]
 	if !ok {
-		return nil, &kernel.OpError{Op: "workflow.guard.ensureOnline", Message: fmt.Sprintf("target profile %q not found", targetProfile), Err: kernel.ErrInvalidConfig}
+		return nil, &kernel.OpError{Op: "workflow.guard.ensureOnline", Message: fmt.Sprintf("target profile %q not found", targetProfile), Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.targetProfile", Value: targetProfile}}
 	}
 	result := &EnsureOnlineResult{
 		DesiredProfile: targetProfile,
@@ -258,8 +236,8 @@ func EnsureOnline(ctx context.Context, env GuardEnvironment, targetProfile strin
 	}
 	_ = forcePortalLogin
 
-	ip, err := env.Prober.DetectLocalIPv4(ctx)
-	if err != nil || strings.TrimSpace(ip) == "" {
+	initialProbe, err := env.Prober.DetectLocalIPv4(ctx)
+	if err != nil || strings.TrimSpace(initialProbe.SelectedIP) == "" {
 		return &kernel.OperationResult[EnsureOnlineResult]{
 			Level:   kernel.EvidenceConfirmed,
 			Success: false,
@@ -267,13 +245,13 @@ func EnsureOnline(ctx context.Context, env GuardEnvironment, targetProfile strin
 			Data:    result,
 		}, &kernel.OpError{Op: "workflow.guard.ensureOnline", Message: "unable to detect local IPv4", Err: err}
 	}
-	result.InitialIP = ip
+	result.InitialProbe = &initialProbe
 
 	portalClient, err := env.Factory.NewPortal()
 	if err != nil {
 		return nil, &kernel.OpError{Op: "workflow.guard.ensureOnline", Message: "create portal client failed", Err: err}
 	}
-	first, firstErr := portalClient.Login802(ctx, account.Username, account.Password, ip, env.PortalISP)
+	first, firstErr := portalClient.Login802(ctx, account.Username, account.Password, initialProbe.SelectedIP, env.PortalISP)
 	result.FirstPortalLoginOK = firstErr == nil
 	if first != nil {
 		result.FirstPortalLoginMsg = first.Message
@@ -311,12 +289,12 @@ func EnsureOnline(ctx context.Context, env GuardEnvironment, targetProfile strin
 		}, repairErr
 	}
 
-	retryIP, err := env.Prober.DetectLocalIPv4(ctx)
-	if err != nil || strings.TrimSpace(retryIP) == "" {
-		retryIP = ip
+	retryProbe, err := env.Prober.DetectLocalIPv4(ctx)
+	if err != nil || strings.TrimSpace(retryProbe.SelectedIP) == "" {
+		retryProbe = initialProbe
 	}
-	result.RetryIP = retryIP
-	second, secondErr := portalClient.Login802(ctx, account.Username, account.Password, retryIP, env.PortalISP)
+	result.RetryProbe = &retryProbe
+	second, secondErr := portalClient.Login802(ctx, account.Username, account.Password, retryProbe.SelectedIP, env.PortalISP)
 	result.SecondPortalLoginOK = secondErr == nil
 	if second != nil {
 		result.SecondPortalLoginMsg = second.Message
@@ -415,9 +393,9 @@ func GuardCycle(ctx context.Context, env GuardEnvironment, input GuardCycleInput
 
 func applyEnsureOnline(dst *GuardCycleResult, src *EnsureOnlineResult) {
 	dst.EnsureOnline = src
-	dst.LocalIP = src.InitialIP
-	dst.RetryLocalIP = src.RetryIP
-	dst.PortalLoginOK = src.InternetOK
+	dst.InitialProbe = src.InitialProbe
+	dst.RetryProbe = src.RetryProbe
+	dst.PortalLoginOK = finalPortalLoginOK(src)
 	dst.InternetOK = src.InternetOK
 	dst.InternetMessage = src.InternetMessage
 	dst.PortalLoginMessage = portalMessageFromEnsure(src)
@@ -429,6 +407,16 @@ func applyEnsureOnline(dst *GuardCycleResult, src *EnsureOnlineResult) {
 			dst.BindingRepair = src.BindingRepair
 		}
 	}
+}
+
+func finalPortalLoginOK(src *EnsureOnlineResult) bool {
+	if src == nil {
+		return false
+	}
+	if src.BindingRepairAttempted || src.RetryProbe != nil || strings.TrimSpace(src.SecondPortalLoginMsg) != "" {
+		return src.SecondPortalLoginOK
+	}
+	return src.FirstPortalLoginOK
 }
 
 func portalMessageFromEnsure(src *EnsureOnlineResult) string {

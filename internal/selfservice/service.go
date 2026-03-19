@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/PuerkitoBio/goquery"
-
 	"github.com/hicancan/njupt-net-cli/internal/kernel"
 )
 
@@ -80,7 +78,16 @@ func (c *Client) BindOperator(ctx context.Context, target map[string]string, rea
 					Message: fmt.Sprintf("binding readback mismatch for %s", field),
 					Data:    writeResult,
 					Raw:     rawCapture(resp),
-				}, &kernel.OpError{Op: "service.binding.set", Message: fmt.Sprintf("%s expected=%q got=%q", field, expected, postState[field]), Err: kernel.ErrReadBackMismatch}
+				}, &kernel.OpError{
+					Op:      "service.binding.set",
+					Message: fmt.Sprintf("%s expected=%q got=%q", field, expected, postState[field]),
+					Err:     kernel.ErrReadBackMismatch,
+					ProblemDetails: kernel.StateComparisonProblemDetails{
+						Field:    field,
+						Expected: expected,
+						Actual:   postState[field],
+					},
+				}
 			}
 		}
 	}
@@ -104,7 +111,16 @@ func (c *Client) BindOperator(ctx context.Context, target map[string]string, rea
 					Message: "binding restore failed",
 					Data:    writeResult,
 					Raw:     rawCapture(resp),
-				}, &kernel.OpError{Op: "service.binding.restore", Message: fmt.Sprintf("%s expected=%q got=%q", field, expected, restored[field]), Err: kernel.ErrRestoreFailed}
+				}, &kernel.OpError{
+					Op:      "service.binding.restore",
+					Message: fmt.Sprintf("%s expected=%q got=%q", field, expected, restored[field]),
+					Err:     kernel.ErrRestoreFailed,
+					ProblemDetails: kernel.StateComparisonProblemDetails{
+						Field:    field,
+						Expected: expected,
+						Actual:   restored[field],
+					},
+				}
 			}
 		}
 	}
@@ -172,7 +188,16 @@ func (c *Client) ChangeConsumeProtect(ctx context.Context, limit string, readbac
 				Message: "consume protect readback mismatch",
 				Data:    writeResult,
 				Raw:     rawCapture(resp),
-			}, &kernel.OpError{Op: "service.consume.set", Message: fmt.Sprintf("installmentFlag expected=%q got=%q", limit, post.InstallmentFlag), Err: kernel.ErrReadBackMismatch}
+			}, &kernel.OpError{
+				Op:      "service.consume.set",
+				Message: fmt.Sprintf("installmentFlag expected=%q got=%q", limit, post.InstallmentFlag),
+				Err:     kernel.ErrReadBackMismatch,
+				ProblemDetails: kernel.StateComparisonProblemDetails{
+					Field:    "installmentFlag",
+					Expected: limit,
+					Actual:   post.InstallmentFlag,
+				},
+			}
 		}
 	}
 
@@ -193,7 +218,16 @@ func (c *Client) ChangeConsumeProtect(ctx context.Context, limit string, readbac
 				Message: "consume protect restore failed",
 				Data:    writeResult,
 				Raw:     rawCapture(resp),
-			}, &kernel.OpError{Op: "service.consume.restore", Message: fmt.Sprintf("installmentFlag expected=%q got=%q", state.InstallmentFlag, restored.InstallmentFlag), Err: kernel.ErrRestoreFailed}
+			}, &kernel.OpError{
+				Op:      "service.consume.restore",
+				Message: fmt.Sprintf("installmentFlag expected=%q got=%q", state.InstallmentFlag, restored.InstallmentFlag),
+				Err:     kernel.ErrRestoreFailed,
+				ProblemDetails: kernel.StateComparisonProblemDetails{
+					Field:    "installmentFlag",
+					Expected: state.InstallmentFlag,
+					Actual:   restored.InstallmentFlag,
+				},
+			}
 		}
 	}
 
@@ -266,24 +300,11 @@ func (c *Client) getOperatorState(ctx context.Context) (string, map[string]strin
 	if looksLikeLoginPage(resp.Body) {
 		return "", nil, resp, &kernel.OpError{Op: "service.binding.state", Message: "operatorId returned login page", Err: kernel.ErrAuth}
 	}
-	token := extractInputValue(doc, "csrftoken")
+	token, state := parseOperatorState(doc)
 	if token == "" {
 		return "", nil, resp, &kernel.OpError{Op: "service.binding.state", Message: "missing csrftoken", Err: kernel.ErrTokenExpired}
 	}
-	state := map[string]string{}
-	for _, field := range bindFields {
-		state[field] = extractInputValue(doc, field)
-	}
 	return token, state, resp, nil
-}
-
-func operatorBindingFromState(state map[string]string) kernel.OperatorBinding {
-	return kernel.OperatorBinding{
-		TelecomAccount:  state["FLDEXTRA1"],
-		TelecomPassword: state["FLDEXTRA2"],
-		MobileAccount:   state["FLDEXTRA3"],
-		MobilePassword:  state["FLDEXTRA4"],
-	}
 }
 
 func (c *Client) readConsumeProtect(ctx context.Context) (*kernel.ConsumeProtectState, *kernel.SessionResponse, error) {
@@ -295,39 +316,9 @@ func (c *Client) readConsumeProtect(ctx context.Context) (*kernel.ConsumeProtect
 		return nil, resp, &kernel.OpError{Op: "service.consume.state", Message: "consumeProtect returned login page", Err: kernel.ErrAuth}
 	}
 
-	body := string(resp.Body)
-	match := installmentFlagPattern.FindStringSubmatch(body)
-	installment := ""
-	if len(match) > 1 {
-		installment = strings.TrimSpace(match[1])
-	}
-
-	state := &kernel.ConsumeProtectState{
-		CSRFTOKEN:       extractInputValue(doc, "csrftoken"),
-		InstallmentFlag: installment,
-		CurrentLimit:    firstAttrOrText(doc, "input[name='consumeLimit']", "#consumeLimit", ".consume-limit", ".currentLimit"),
-		CurrentUsage:    firstAttrOrText(doc, "#currentUsage", ".currentUsage", ".useFlow"),
-		Balance:         firstAttrOrText(doc, "#balance", ".balance", ".remainBalance"),
-	}
+	state := parseConsumeProtectState(doc, string(resp.Body))
 	if state.CSRFTOKEN == "" {
 		return nil, resp, &kernel.OpError{Op: "service.consume.state", Message: "missing csrftoken", Err: kernel.ErrTokenExpired}
 	}
 	return state, resp, nil
-}
-
-func firstAttrOrText(doc *goquery.Document, selectors ...string) string {
-	for _, selector := range selectors {
-		sel := doc.Find(selector).First()
-		if sel.Length() == 0 {
-			continue
-		}
-		if value, ok := sel.Attr("value"); ok && strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-		text := normalizeText(sel.Text())
-		if text != "" {
-			return text
-		}
-	}
-	return ""
 }

@@ -30,21 +30,7 @@ func (c *Client) GetOnlineList(ctx context.Context) (*kernel.OperationResult[[]k
 		return nil, &kernel.OpError{Op: "dashboard.onlineList", Message: "parse json array failed", Err: err}
 	}
 
-	sessions := make([]kernel.OnlineSession, 0, len(rawRows))
-	for _, row := range rawRows {
-		sessions = append(sessions, kernel.OnlineSession{
-			BRASID:       toString(row["brasid"]),
-			IP:           toString(row["ip"]),
-			LoginTime:    toString(row["loginTime"]),
-			MAC:          toString(row["mac"]),
-			SessionID:    toString(row["sessionId"]),
-			TerminalType: toString(row["terminalType"]),
-			UpFlow:       toString(row["upFlow"]),
-			DownFlow:     toString(row["downFlow"]),
-			UseTime:      toString(row["useTime"]),
-			UserID:       toString(row["userId"]),
-		})
-	}
+	sessions := parseOnlineSessions(rawRows)
 
 	return &kernel.OperationResult[[]kernel.OnlineSession]{
 		Level:   kernel.EvidenceConfirmed,
@@ -72,29 +58,7 @@ func (c *Client) GetLoginHistory(ctx context.Context) (*kernel.OperationResult[[
 		return nil, &kernel.OpError{Op: "dashboard.loginHistory", Message: "parse 2D json failed", Err: err}
 	}
 
-	entries := make([]kernel.LoginHistoryEntry, 0, len(rows))
-	for _, row := range rows {
-		entry := kernel.LoginHistoryEntry{Raw: row}
-		if len(row) > 0 {
-			entry.LoginTime = toString(row[0])
-		}
-		if len(row) > 1 {
-			entry.LogoutTime = toString(row[1])
-		}
-		if len(row) > 2 {
-			entry.IP = toString(row[2])
-		}
-		if len(row) > 3 {
-			entry.MAC = toString(row[3])
-		}
-		if len(row) > 9 {
-			entry.TerminalFlag = toString(row[9])
-		}
-		if len(row) > 10 {
-			entry.TerminalType = toString(row[10])
-		}
-		entries = append(entries, entry)
-	}
+	entries := parseLoginHistoryEntries(rows)
 
 	return &kernel.OperationResult[[]kernel.LoginHistoryEntry]{
 		Level:   kernel.EvidenceConfirmed,
@@ -149,13 +113,7 @@ func (c *Client) GetMauthState(ctx context.Context) (*kernel.OperationResult[ker
 	}
 
 	body := strings.TrimSpace(string(resp.Body))
-	state := kernel.MauthUnknown
-	switch {
-	case strings.Contains(body, "默认"):
-		state = kernel.MauthOn
-	case strings.Contains(body, "关闭"):
-		state = kernel.MauthOff
-	}
+	state := parseMauthState(body)
 
 	return &kernel.OperationResult[kernel.MauthState]{
 		Level:   kernel.EvidenceConfirmed,
@@ -173,7 +131,7 @@ func (c *Client) ToggleMauth(ctx context.Context) (*kernel.OperationResult[kerne
 		return nil, err
 	}
 	if before.Data == nil || *before.Data == kernel.MauthUnknown {
-		return nil, &kernel.OpError{Op: "dashboard.mauth.toggle", Message: "current mauth state unknown", Err: kernel.ErrGuardedCapability}
+		return nil, &kernel.OpError{Op: "dashboard.mauth.toggle", Message: "current mauth state unknown", Err: kernel.ErrGuardedCapability, ProblemDetails: kernel.CapabilityProblemDetails{Capability: "dashboard.mauth.toggle", Reason: "current mauth state unknown"}}
 	}
 
 	resp, err := c.session.Get(ctx, "/Self/dashboard/oprateMauthAction", kernel.RequestOptions{})
@@ -187,16 +145,25 @@ func (c *Client) ToggleMauth(ctx context.Context) (*kernel.OperationResult[kerne
 		return nil, err
 	}
 	if after.Data == nil || *after.Data == *before.Data {
+		beforeState := fmt.Sprint(*before.Data)
+		afterState := "<nil>"
+		if after.Data != nil {
+			afterState = fmt.Sprint(*after.Data)
+		}
 		return &kernel.OperationResult[kernel.MauthState]{
 			Level:   kernel.EvidenceConfirmed,
 			Success: false,
 			Message: "mauth state did not flip after toggle",
 			Data:    after.Data,
 			Raw:     rawCapture(resp),
-			Diagnostics: map[string]any{
-				"before": before.Data,
-				"after":  after.Data,
-			},
+			Problems: []kernel.Problem{kernel.NormalizeProblem(kernel.Problem{
+				Code:    kernel.ProblemReadbackMismatch,
+				Message: "mauth state did not flip after toggle",
+				Details: kernel.StateComparisonProblemDetails{
+					Before: beforeState,
+					After:  afterState,
+				},
+			})},
 		}, &kernel.OpError{Op: "dashboard.mauth.toggle", Message: "state not flipped", Err: kernel.ErrReadBackMismatch}
 	}
 
@@ -206,10 +173,6 @@ func (c *Client) ToggleMauth(ctx context.Context) (*kernel.OperationResult[kerne
 		Message: fmt.Sprintf("mauth toggled to %s", *after.Data),
 		Data:    after.Data,
 		Raw:     rawCapture(resp),
-		Diagnostics: map[string]any{
-			"before": *before.Data,
-			"after":  *after.Data,
-		},
 	}, nil
 }
 
@@ -238,7 +201,7 @@ func (c *Client) ForceOffline(ctx context.Context, sessionID string) (*kernel.Op
 			Success: false,
 			Message: "target session not present in current online list",
 			Data:    &payload,
-		}, &kernel.OpError{Op: "dashboard.offline", Message: "session not found for guarded offline", Err: kernel.ErrGuardedCapability}
+		}, &kernel.OpError{Op: "dashboard.offline", Message: "session not found for guarded offline", Err: kernel.ErrGuardedCapability, ProblemDetails: kernel.CapabilityProblemDetails{Capability: "dashboard.offline", Reason: "target session not present"}}
 	}
 
 	resp, err := c.session.Get(ctx, "/Self/dashboard/tooffline", kernel.RequestOptions{Query: map[string]string{"sessionid": sessionID}})

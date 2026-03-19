@@ -3,8 +3,6 @@ package selfservice
 import (
 	"context"
 
-	"github.com/PuerkitoBio/goquery"
-
 	"github.com/hicancan/njupt-net-cli/internal/kernel"
 )
 
@@ -41,7 +39,7 @@ func (c *Client) UpdateUserSecurity(ctx context.Context, form map[string]string,
 		return nil, err
 	}
 	if state.Data == nil {
-		return nil, &kernel.OpError{Op: "setting.person.update", Message: "person state unavailable", Err: kernel.ErrBlockedCapability}
+		return nil, &kernel.OpError{Op: "setting.person.update", Message: "person state unavailable", Err: kernel.ErrBlockedCapability, ProblemDetails: kernel.CapabilityProblemDetails{Capability: "setting.person.update", Reason: "person state unavailable"}}
 	}
 	if dryRun {
 		return &kernel.OperationResult[kernel.PersonState]{
@@ -72,18 +70,5 @@ func (c *Client) UpdateUserSecurity(ctx context.Context, form map[string]string,
 		Message: "request submitted, but success semantics remain blocked by SSOT",
 		Data:    nextState,
 		Raw:     rawCapture(resp),
-	}, &kernel.OpError{Op: "setting.person.update", Message: "success path is blocked by SSOT", Err: kernel.ErrBlockedCapability}
-}
-
-func extractInputFields(doc *goquery.Document) map[string]string {
-	fields := map[string]string{}
-	doc.Find("input[name]").Each(func(_ int, selection *goquery.Selection) {
-		name, ok := selection.Attr("name")
-		if !ok || name == "" {
-			return
-		}
-		value, _ := selection.Attr("value")
-		fields[name] = value
-	})
-	return fields
+	}, &kernel.OpError{Op: "setting.person.update", Message: "success path is blocked by SSOT", Err: kernel.ErrBlockedCapability, ProblemDetails: kernel.CapabilityProblemDetails{Capability: "setting.person.update", Reason: "success semantics blocked by SSOT"}}
 }
