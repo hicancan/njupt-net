@@ -237,6 +237,12 @@ if [ "$($SkipStart.IsPresent.ToString().ToLower())" = "false" ]; then
     $RemoteBinaryPath --config $RemoteConfigPath --output json guard status --state-dir $StateDir || true
 fi
 
+rm -f $RemoteTempBinary $RemoteTempInit
+if [ -f $RemoteTempConfig ] && [ "$($SkipConfigUpload.IsPresent.ToString().ToLower())" = "false" ]; then
+    rm -f $RemoteTempConfig
+fi
+rmdir $RemoteTempDir 2>/dev/null || true
+
 echo "=== install complete ==="
 echo "binary: $RemoteBinaryPath"
 echo "config: $RemoteConfigPath"
