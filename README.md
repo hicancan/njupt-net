@@ -5,7 +5,7 @@
 **NJUPT 校园网终端系统** — 登录 · 诊断 · 守护 · 一键部署路由器
 
 [![CI](https://github.com/hicancan/njupt-net/actions/workflows/release.yml/badge.svg)](https://github.com/hicancan/njupt-net/actions/workflows/release.yml)
-[![Go](https://img.shields.io/github/go-mod-go-version/hicancan/njupt-net)](go.mod)
+[![Go](https://img.shields.io/github/go-mod/go-version/hicancan/njupt-net)](go.mod)
 [![Release](https://img.shields.io/github/v/release/hicancan/njupt-net?color=%2300b4d8)](https://github.com/hicancan/njupt-net/releases)
 [![License](https://img.shields.io/github/license/hicancan/njupt-net?color=%23198754)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/hicancan/njupt-net?style=social)](https://github.com/hicancan/njupt-net/stargazers)
@@ -101,7 +101,7 @@ bash ./scripts/build.sh all        # Linux/macOS
 
 ## 🔧 配置
 
-创建 `config.json`（此文件已在 `.gitignore` 中，不会被提交）：
+创建 `config.json`（建议从 `config.example.json` 复制；此文件已在 `.gitignore` 中，不会被提交）：
 
 ```jsonc
 {
@@ -113,7 +113,6 @@ bash ./scripts/build.sh all        # Linux/macOS
     "account": "移动宽带手机号",
     "password": "移动宽带密码"
   },
-  // 以下均有合理默认值，可省略
   "portal": {
     "baseURL": "https://10.10.244.11:802/eportal/portal",
     "isp": "mobile",
@@ -129,6 +128,8 @@ bash ./scripts/build.sh all        # Linux/macOS
   }
 }
 ```
+
+`guard.schedule.dayProfile` 和 `guard.schedule.nightProfile` 现在是**必填项**。`B` / `W` 只是示例配置名，不再存在隐式默认值。
 
 <details>
 <summary>📄 完整配置项参考</summary>
@@ -146,6 +147,10 @@ bash ./scripts/build.sh all        # Linux/macOS
 | `guard.probeIntervalSeconds` | `3` | 连通性探测间隔 |
 | `guard.bindingCheckIntervalSeconds` | `180` | 绑定审计间隔 |
 | `guard.timezone` | `Asia/Shanghai` | 调度时区 |
+| `guard.schedule.dayProfile` | 无默认值 | 白天守护使用的账号名，必填 |
+| `guard.schedule.nightProfile` | 无默认值 | 夜间守护使用的账号名，必填 |
+| `guard.schedule.nightStart` | `23:30` | 夜间窗口开始时间 |
+| `guard.schedule.nightEnd` | `07:00` | 夜间窗口结束时间 |
 | `output` | `human` | 默认输出模式: `human` / `json` |
 
 也可通过环境变量覆盖：`NJUPT_NET_CONFIG`、`NJUPT_NET_OUTPUT`、`NJUPT_NET_SELF_BASE_URL`、`NJUPT_NET_PORTAL_BASE_URL` 等。

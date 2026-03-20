@@ -22,6 +22,9 @@ func TestToStringAndBoolFromJSON(t *testing.T) {
 	if got := kernel.ToString(float64(1.5)); got != "1.5" {
 		t.Fatalf("unexpected toString float: %q", got)
 	}
+	if got := kernel.ToString(true); got != "true" {
+		t.Fatalf("unexpected toString bool: %q", got)
+	}
 	if !boolFromJSON(true) || !boolFromJSON("1") || !boolFromJSON("true") {
 		t.Fatal("expected truthy values")
 	}

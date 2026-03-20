@@ -20,7 +20,6 @@ type Options struct {
 	BaseURL     string
 	Timeout     time.Duration
 	InsecureTLS bool
-	UserAgent   string
 }
 
 // SessionClient is the default kernel.SessionClient implementation.

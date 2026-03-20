@@ -16,7 +16,13 @@ func TestLoad_UsesEnvAndDefaults(t *testing.T) {
 	  },
 	  "cmcc": {"account": "cmcc-user", "password": "cmcc-pass"},
 	  "self": {},
-	  "portal": {}
+	  "portal": {},
+	  "guard": {
+	    "schedule": {
+	      "dayProfile": "A",
+	      "nightProfile": "A"
+	    }
+	  }
 	}`
 	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -49,8 +55,8 @@ func TestLoad_UsesEnvAndDefaults(t *testing.T) {
 	if cfg.Guard.StateDir != filepath.Join("dist", "guard") {
 		t.Fatalf("expected default guard state dir, got %q", cfg.Guard.StateDir)
 	}
-	if cfg.Guard.Schedule.DayProfile != "B" || cfg.Guard.Schedule.NightProfile != "W" {
-		t.Fatalf("unexpected default guard profiles: %#v", cfg.Guard.Schedule)
+	if cfg.Guard.Schedule.DayProfile != "A" || cfg.Guard.Schedule.NightProfile != "A" {
+		t.Fatalf("unexpected explicit guard profiles: %#v", cfg.Guard.Schedule)
 	}
 }
 
@@ -89,7 +95,13 @@ func TestLoad_AllowsAccountlessConfig(t *testing.T) {
 	path := filepath.Join(dir, "config.json")
 	payload := `{
 	  "self": {"baseURL": "http://self.example"},
-	  "portal": {"baseURL": "https://portal.example"}
+	  "portal": {"baseURL": "https://portal.example"},
+	  "guard": {
+	    "schedule": {
+	      "dayProfile": "A",
+	      "nightProfile": "A"
+	    }
+	  }
 	}`
 	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -106,6 +118,26 @@ func TestLoad_AllowsAccountlessConfig(t *testing.T) {
 	_, err = cfg.ResolveAccount("", "", "")
 	if err == nil || !strings.Contains(err.Error(), "no configured accounts") {
 		t.Fatalf("expected account resolution failure, got %v", err)
+	}
+}
+
+func TestLoad_RequiresExplicitGuardProfiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	payload := `{
+	  "accounts": {
+	    "A": {"username": "user-a", "password": "pass-a"}
+	  },
+	  "self": {"baseURL": "http://self.example"},
+	  "portal": {"baseURL": "https://portal.example"}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "guard.schedule.dayProfile is required") {
+		t.Fatalf("expected explicit dayProfile validation error, got %v", err)
 	}
 }
 

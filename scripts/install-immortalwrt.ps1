@@ -75,7 +75,7 @@ function Resolve-ConfigPath {
 		return (Resolve-Path ".\config.json").Path
 	}
 
-	throw "Config not found. Pass -ConfigPath explicitly or create .\config.json."
+	throw "Config not found. Pass -ConfigPath explicitly or create .\config.json from .\config.example.json."
 }
 
 function Invoke-SSH {

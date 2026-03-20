@@ -31,6 +31,8 @@ func buildLogin801Payload(account, password string) []byte {
 		Password string `json:"password"`
 	}{
 		Username: strings.TrimSpace(account),
+		// The observed 801 admin API expects an MD5-hex password payload.
+		// This mirrors the upstream protocol and is not a security recommendation.
 		Password: md5Hex(password),
 	})
 	return payload
@@ -45,6 +47,7 @@ func buildLogout801Query(ip string) map[string]string {
 }
 
 func md5Hex(value string) string {
+	// The observed 801 admin-login endpoint requires MD5-hex input.
 	sum := md5.Sum([]byte(value))
 	return hex.EncodeToString(sum[:])
 }

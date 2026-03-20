@@ -101,9 +101,7 @@ func (c *Client) Logout802(ctx context.Context, ip string) (*kernel.OperationRes
 	}, nil
 }
 
-// Login801 probes the observed 801 admin-login JSON API.
-// Login801 posts admin credentials to the discovered 801 JSON API.
-// The current API does not consume client IP metadata.
+// Login801 posts admin credentials to the observed 801 JSON API; the current API does not consume client IP metadata.
 func (c *Client) Login801(ctx context.Context, account, password string) (*kernel.OperationResult[kernel.Portal801LoginResponse], error) {
 	if c == nil || c.session == nil {
 		return nil, &kernel.OpError{Op: "portal.login801", Message: "session client is nil", Err: kernel.ErrPortal}

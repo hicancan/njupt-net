@@ -5,7 +5,7 @@
 **NJUPT Campus Network Terminal System** — Login · Diagnose · Guard · Deploy to Router
 
 [![CI](https://github.com/hicancan/njupt-net/actions/workflows/release.yml/badge.svg)](https://github.com/hicancan/njupt-net/actions/workflows/release.yml)
-[![Go](https://img.shields.io/github/go-mod-go-version/hicancan/njupt-net)](go.mod)
+[![Go](https://img.shields.io/github/go-mod/go-version/hicancan/njupt-net)](go.mod)
 [![Release](https://img.shields.io/github/v/release/hicancan/njupt-net?color=%2300b4d8)](https://github.com/hicancan/njupt-net/releases)
 [![License](https://img.shields.io/github/license/hicancan/njupt-net?color=%23198754)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/hicancan/njupt-net?style=social)](https://github.com/hicancan/njupt-net/stargazers)
@@ -102,7 +102,7 @@ bash ./scripts/build.sh all        # Linux/macOS
 
 ## 🔧 Configuration
 
-Create `config.json` (already in `.gitignore` — never committed):
+Create `config.json` (recommended: copy from `config.example.json`; already in `.gitignore` and never committed):
 
 ```jsonc
 {
@@ -114,7 +114,6 @@ Create `config.json` (already in `.gitignore` — never committed):
     "account": "your-mobile-broadband-number",
     "password": "your-mobile-broadband-password"
   },
-  // All below have sensible defaults and can be omitted
   "portal": {
     "baseURL": "https://10.10.244.11:802/eportal/portal",
     "isp": "mobile",
@@ -130,6 +129,8 @@ Create `config.json` (already in `.gitignore` — never committed):
   }
 }
 ```
+
+`guard.schedule.dayProfile` and `guard.schedule.nightProfile` are now **required**. `B` / `W` are example profile names only; there are no implicit guard defaults anymore.
 
 <details>
 <summary>📄 Full Configuration Reference</summary>
@@ -147,6 +148,10 @@ Create `config.json` (already in `.gitignore` — never committed):
 | `guard.probeIntervalSeconds` | `3` | Connectivity probe interval |
 | `guard.bindingCheckIntervalSeconds` | `180` | Binding audit interval |
 | `guard.timezone` | `Asia/Shanghai` | Schedule timezone |
+| `guard.schedule.dayProfile` | no default | Profile name used during the day; required |
+| `guard.schedule.nightProfile` | no default | Profile name used at night; required |
+| `guard.schedule.nightStart` | `23:30` | Night window start time |
+| `guard.schedule.nightEnd` | `07:00` | Night window end time |
 | `output` | `human` | Default output mode: `human` / `json` |
 
 Override via environment variables: `NJUPT_NET_CONFIG`, `NJUPT_NET_OUTPUT`, `NJUPT_NET_SELF_BASE_URL`, `NJUPT_NET_PORTAL_BASE_URL`, etc.

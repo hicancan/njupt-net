@@ -81,6 +81,7 @@ func truthy(value any) bool {
 	case float64:
 		return typed != 0
 	default:
-		return strings.TrimSpace(fmt.Sprint(value)) != "" && strings.TrimSpace(fmt.Sprint(value)) != "0"
+		rendered := strings.TrimSpace(fmt.Sprint(value))
+		return rendered != "" && rendered != "0"
 	}
 }

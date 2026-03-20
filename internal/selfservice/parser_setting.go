@@ -3,10 +3,10 @@ package selfservice
 import (
 	"encoding/json"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/hicancan/njupt-net-cli/internal/kernel"
 )
 
 var windowUserPattern = regexp.MustCompile(`(?s)\(function\s*\(user\)\s*\{\s*window\.user\s*=\s*user\s*\|\|\s*\{\};\s*\}\)\((\{.*?\})\);\s*</script>`)
@@ -84,12 +84,12 @@ func extractWindowUserFields(body []byte) map[string]string {
 	copyProjectedField(projected, payload, "vlanId")
 
 	if serviceDefault, ok := payload["serviceDefault"].(map[string]any); ok {
-		if value := stringifyField(serviceDefault["defaultName"]); value != "" {
+		if value := kernel.ToString(serviceDefault["defaultName"]); value != "" {
 			projected["serviceDefaultName"] = value
 		}
 	}
 	if userGroup, ok := payload["userGroup"].(map[string]any); ok {
-		if value := stringifyField(userGroup["userGroupName"]); value != "" {
+		if value := kernel.ToString(userGroup["userGroupName"]); value != "" {
 			projected["userGroupName"] = value
 		}
 	}
@@ -97,22 +97,7 @@ func extractWindowUserFields(body []byte) map[string]string {
 }
 
 func copyProjectedField(dst map[string]string, src map[string]any, key string) {
-	if value := stringifyField(src[key]); value != "" {
+	if value := kernel.ToString(src[key]); value != "" {
 		dst[key] = value
-	}
-}
-
-func stringifyField(value any) string {
-	switch typed := value.(type) {
-	case nil:
-		return ""
-	case string:
-		return typed
-	case float64:
-		return strconv.FormatFloat(typed, 'f', -1, 64)
-	case bool:
-		return strconv.FormatBool(typed)
-	default:
-		return ""
 	}
 }

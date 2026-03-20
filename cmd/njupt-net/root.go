@@ -73,18 +73,12 @@ func (env *commandEnv) appContext(cmd *cobra.Command, out io.Writer) (*app.Conte
 			},
 		}
 	}
-	if env.appCtx != nil {
-		opts, err := currentRootOptions(cmd)
-		if err != nil {
-			return nil, err
-		}
-		if env.appOpts == opts {
-			return env.appCtx, nil
-		}
-	}
 	opts, err := currentRootOptions(cmd)
 	if err != nil {
 		return nil, err
+	}
+	if env.appCtx != nil && env.appOpts == opts {
+		return env.appCtx, nil
 	}
 	appCtx, err := app.Load(app.Options{
 		ConfigPath:  opts.ConfigPath,

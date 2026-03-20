@@ -123,11 +123,11 @@ func resolvePath(path string) (string, error) {
 
 	return "", &kernel.OpError{
 		Op:      "config.load",
-		Message: "no config file found; pass --config or create config.json",
+		Message: "no config file found; pass --config or create config.json from config.example.json",
 		Err:     kernel.ErrInvalidConfig,
 		ProblemDetails: kernel.ConfigProblemDetails{
 			Field: "configPath",
-			Hint:  "pass --config or create config.json",
+			Hint:  "pass --config or create config.json from config.example.json",
 		},
 	}
 }
@@ -162,12 +162,6 @@ func (c *Config) applyDefaults() {
 	}
 	if strings.TrimSpace(c.Guard.Timezone) == "" {
 		c.Guard.Timezone = "Asia/Shanghai"
-	}
-	if strings.TrimSpace(c.Guard.Schedule.DayProfile) == "" {
-		c.Guard.Schedule.DayProfile = "B"
-	}
-	if strings.TrimSpace(c.Guard.Schedule.NightProfile) == "" {
-		c.Guard.Schedule.NightProfile = "W"
 	}
 	if strings.TrimSpace(c.Guard.Schedule.NightStart) == "" {
 		c.Guard.Schedule.NightStart = "23:30"
@@ -223,6 +217,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Guard.BindingCheckIntervalSeconds <= 0 {
 		return &kernel.OpError{Op: "config.validate", Message: "guard.bindingCheckIntervalSeconds must be positive", Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.bindingCheckIntervalSeconds", Value: strconv.Itoa(c.Guard.BindingCheckIntervalSeconds)}}
+	}
+	if strings.TrimSpace(c.Guard.Schedule.DayProfile) == "" {
+		return &kernel.OpError{Op: "config.validate", Message: "guard.schedule.dayProfile is required", Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.schedule.dayProfile", Hint: "set the daytime profile explicitly"}}
+	}
+	if strings.TrimSpace(c.Guard.Schedule.NightProfile) == "" {
+		return &kernel.OpError{Op: "config.validate", Message: "guard.schedule.nightProfile is required", Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.schedule.nightProfile", Hint: "set the nighttime profile explicitly"}}
 	}
 	return nil
 }

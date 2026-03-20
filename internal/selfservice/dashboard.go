@@ -17,6 +17,20 @@ var (
 	offlineReadbackAttempts = 3
 )
 
+func waitDashboardDelay(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 // GetOnlineList returns the current online session list.
 func (c *Client) GetOnlineList(ctx context.Context) (*kernel.OperationResult[[]kernel.OnlineSession], error) {
 	if err := c.ensureSession("dashboard.onlineList"); err != nil {
@@ -142,7 +156,9 @@ func (c *Client) ToggleMauth(ctx context.Context) (*kernel.OperationResult[kerne
 	if err != nil {
 		return nil, &kernel.OpError{Op: "dashboard.mauth.toggle", Message: "toggle request failed", Err: err}
 	}
-	time.Sleep(mauthTogglePause)
+	if err := waitDashboardDelay(ctx, mauthTogglePause); err != nil {
+		return nil, err
+	}
 
 	after, err := c.GetMauthState(ctx)
 	if err != nil {
@@ -226,7 +242,9 @@ func (c *Client) ForceOffline(ctx context.Context, sessionID string) (*kernel.Op
 	}
 	for attempt := 1; attempt <= attempts; attempt++ {
 		if attempt > 1 && offlineReadbackPause > 0 {
-			time.Sleep(offlineReadbackPause)
+			if err := waitDashboardDelay(ctx, offlineReadbackPause); err != nil {
+				return nil, err
+			}
 		}
 		post, err := c.GetOnlineList(ctx)
 		if err != nil {

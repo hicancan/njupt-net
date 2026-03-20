@@ -1,0 +1,40 @@
+{
+  "accounts": {
+    "B": {
+      "username": "your-daytime-student-id",
+      "password": "your-daytime-password"
+    },
+    "W": {
+      "username": "your-nighttime-student-id",
+      "password": "your-nighttime-password"
+    }
+  },
+  "cmcc": {
+    "account": "your-mobile-broadband-number",
+    "password": "your-mobile-broadband-password"
+  },
+  "self": {
+    "baseURL": "http://10.10.244.240:8080",
+    "timeoutSeconds": 10
+  },
+  "portal": {
+    "baseURL": "https://10.10.244.11:802/eportal/portal",
+    "fallbackBaseURLs": [],
+    "isp": "mobile",
+    "timeoutSeconds": 8,
+    "insecureTLS": true
+  },
+  "guard": {
+    "stateDir": "dist/guard",
+    "probeIntervalSeconds": 3,
+    "bindingCheckIntervalSeconds": 180,
+    "timezone": "Asia/Shanghai",
+    "schedule": {
+      "dayProfile": "B",
+      "nightProfile": "W",
+      "nightStart": "23:30",
+      "nightEnd": "07:00"
+    }
+  },
+  "output": "human"
+}

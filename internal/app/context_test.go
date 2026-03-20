@@ -16,7 +16,13 @@ func TestLoadAndMustConfirm(t *testing.T) {
 	    "A": {"username": "user-a", "password": "pass-a"}
 	  },
 	  "self": {"baseURL": "http://self.example", "timeoutSeconds": 5},
-	  "portal": {"baseURL": "https://portal.example", "timeoutSeconds": 3, "insecureTLS": true}
+	  "portal": {"baseURL": "https://portal.example", "timeoutSeconds": 3, "insecureTLS": true},
+	  "guard": {
+	    "schedule": {
+	      "dayProfile": "A",
+	      "nightProfile": "A"
+	    }
+	  }
 	}`
 	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
