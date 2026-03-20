@@ -1,264 +1,126 @@
+<div align="center">
+
 # njupt-net
+
+**NJUPT Campus Network Terminal System** — Login · Diagnose · Guard · Deploy to Router
+
+[![CI](https://github.com/hicancan/njupt-net/actions/workflows/release.yml/badge.svg)](https://github.com/hicancan/njupt-net/actions/workflows/release.yml)
+[![Go](https://img.shields.io/github/go-mod-go-version/hicancan/njupt-net)](go.mod)
+[![Release](https://img.shields.io/github/v/release/hicancan/njupt-net?color=%2300b4d8)](https://github.com/hicancan/njupt-net/releases)
+[![License](https://img.shields.io/github/license/hicancan/njupt-net?color=%23198754)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/hicancan/njupt-net?style=social)](https://github.com/hicancan/njupt-net/stargazers)
 
 [中文](README.md) | English
 
-[![Verify](https://github.com/hicancan/njupt-net/actions/workflows/release.yml/badge.svg)](https://github.com/hicancan/njupt-net/actions/workflows/release.yml)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/hicancan/njupt-net)](https://github.com/hicancan/njupt-net/blob/main/go.mod)
-[![Latest Release](https://img.shields.io/github/v/release/hicancan/njupt-net)](https://github.com/hicancan/njupt-net/releases)
-[![License](https://img.shields.io/github/license/hicancan/njupt-net)](https://github.com/hicancan/njupt-net/blob/main/LICENSE)
-[![Repo Stars](https://img.shields.io/github/stars/hicancan/njupt-net?style=social)](https://github.com/hicancan/njupt-net/stargazers)
+One Go binary for everything painful about NJUPT campus networking:<br>
+login, diagnosis, broadband binding, consume protection, and 24/7 guarding.<br>
+Runs on desktop & OpenWrt/ImmortalWrt routers. `--output json` for automation.
 
-> One Go binary for the messy parts of NJUPT campus networking: login, diagnosis, repair, automation, and always-on guarding.
+[**Quick Start**](#-quick-start) · [**Features**](#-features) · [**Router Deployment**](#-router-deployment) · [**Architecture**](#%EF%B8%8F-architecture)
 
-`njupt-net` is a Go terminal system for the NJUPT networking environment.  
-It is not just a thin wrapper over existing web pages. It is a typed kernel, a workflow layer, and a real guard runtime packaged into one repository and one binary.
+</div>
 
-Use it when you want to:
+---
 
-- log in to Self and Portal reliably from a terminal
-- query online state, billing, MAC addresses, broadband binding, and login history
-- perform controlled writes such as binding changes, consume-protect updates, and mauth toggles with readback verification
-- keep a long-running day/night guard on a desktop or a router
-- integrate campus networking behavior into your own scripts with stable `--output json`
+## ✨ Key Features
 
-## Why This Exists
+<table>
+<tr>
+<td width="50%">
 
-Campus networking problems are rarely about “clicking the login button.”  
-They are about everything around it:
+### 🔐 Dual-System Authentication
+One command for the full Self auth chain or Portal 802 JSONP login.<br>Handles checkcode, randomCode, and redirect verification automatically.
 
-- Self and Portal are different systems with different semantics
-- some reverse-engineered paths exist, but their success criteria are not equally trustworthy
-- writes are dangerous if you cannot verify them after submission
-- daemon logic becomes fragile quickly when it is only a pile of scripts
-- router deployment gets messy if desktop and OpenWrt paths drift apart
+### 📊 Full-Spectrum Queries
+Online devices · Login history · Billing · MAC list · Broadband binding · Consume protection · Person info
 
-`njupt-net` exists to turn that mess into a system that is explicit, typed, testable, and automatable.
+### ✍️ Safe Write Operations
+All mutations are `readback-first` by default: pre-state → submit → readback → compare → optional restore.
 
-## Highlights
+</td>
+<td width="50%">
 
-- **A typed kernel, not a throwaway CLI wrapper**
-  - protocol truth, evidence levels, error families, and write semantics live in Go types rather than command-layer heuristics
-- **Reverse-engineered certainty is explicit**
-  - `confirmed / guarded / blocked` are runtime semantics, not just notes in documentation
-- **Writes are readback-first by default**
-  - broadband binding, consume-protect, and mauth updates all follow the same verified write pipeline
-- **The guard is a real runtime**
-  - desktop and router deployments share one scheduler, one recovery model, one status model, and one event model
-- **JSON output is treated as a supported interface**
-  - `OperationResult`, `problems[].code + details`, `guard status`, and `guard events` are designed for automation, not just debugging
+### 🛡️ 24/7 Guard Engine
+Built-in day/night scheduling, binding audit, connectivity probing, and Portal recovery chain. Supports foreground, background daemon, and procd service modes.
 
-## Common Use Cases
+### 🌐 One-Click Router Deployment
+`install-immortalwrt.ps1` auto-builds, uploads, and installs a procd service.<br>State files go to `/tmp` — zero flash wear.
 
-| Use case | Commands you will likely use |
-| --- | --- |
-| reliable login and diagnosis | `self login` `self status` `self doctor` |
-| online-session and history inspection | `dashboard online-list` `dashboard login-history` |
-| broadband binding, consume-protect, and MAC work | `service binding` `service consume` `service mac` |
-| billing and usage records | `bill month-pay` `bill online-log` `bill operator-log` |
-| low-level Self/Portal debugging | `portal login` `portal logout` `raw get` `raw post` |
-| long-running day/night guard | `guard start` `guard status` `guard once` |
+### 🤖 Machine-Readable API
+`--output json` is a first-class contract: typed `OperationResult`,<br>`problems[].code`, guard status/events — all automatable.
 
-## Architecture At A Glance
+</td>
+</tr>
+</table>
 
-The project is intentionally a disciplined modular monolith.  
-No multi-repo split, no plugin framework, no extra abstraction layer on top of Cobra.
-
-```mermaid
-flowchart LR
-  CLI["cmd/njupt-net<br/>command wiring and flags"] --> APP["internal/app<br/>lazy config / renderer / factories"]
-  APP --> KERNEL["internal/kernel<br/>typed results / problems / writeflow"]
-  APP --> WORKFLOW["internal/workflow<br/>doctor / migrate / guard use-cases"]
-  WORKFLOW --> SELF["internal/selfservice<br/>Self protocol truth"]
-  WORKFLOW --> PORTAL["internal/portal<br/>Portal 802 / 801 truth"]
-  APP --> RUNTIME["internal/runtime/guard<br/>scheduler / probe / runner / supervisor / store"]
-  RUNTIME --> WORKFLOW
-```
-
-### Design Rules
-
-- `cmd/njupt-net`
-  - command wiring and flag parsing only
-- `internal/app`
-  - lazy config loading, output selection, client/session factories, confirmation policy
-- `internal/kernel`
-  - evidence levels, `OperationResult`, typed problems, transport contract, writeflow semantics
-- `internal/selfservice`
-  - Self requests, parsing, and typed model mapping
-- `internal/portal`
-  - Portal request building, JSONP parsing, `ret_code` classification, and typed mapping
-- `internal/workflow`
-  - pure use-cases, no concrete transport construction
-- `internal/runtime/guard`
-  - daemon state machine, scheduling, probing, status files, events, and background execution
-
-## Guard Recovery Flow
-
-The guard is designed to be observable and aggressive, not silent and mysterious.
-
-```mermaid
-flowchart TD
-  A["Every 3s: decide target profile"] --> B{"Schedule switch needed?"}
-  B -- "Yes" --> C["Repair binding to target profile"]
-  C --> D["Portal login"]
-  D --> E["Connectivity check"]
-  B -- "No" --> F{"Connectivity OK?"}
-  F -- "Yes" --> G{"Binding audit due?"}
-  G -- "No" --> H["Healthy cycle"]
-  G -- "Yes" --> I["Run binding audit"]
-  I --> H
-  F -- "No" --> J["Portal login"]
-  J --> K{"Recovered?"}
-  K -- "Yes" --> H
-  K -- "No" --> L["Repair binding"]
-  L --> M["Portal login again"]
-  M --> N{"Recovered now?"}
-  N -- "Yes" --> H
-  N -- "No" --> O["Degraded cycle"]
-```
-
-Default guard behavior:
-
-- day profile: `B`
-- night profile: `W`
-- no proactive `logout`
-- immediate recovery when connectivity fails
-- graceful stop request before forced kill
-
-## Command Surface
-
-`njupt-net` currently exposes **8 domain groups and 32 leaf commands**.
-
-### Top-Level Groups
-
-- `self`
-- `dashboard`
-- `service`
-- `setting`
-- `bill`
-- `portal`
-- `raw`
-- `guard`
-
-### Domain Map
-
-| Domain | Typical commands | Purpose |
-| --- | --- | --- |
-| `self` | `login`, `logout`, `status`, `doctor` | authoritative Self login and diagnosis |
-| `dashboard` | `online-list`, `login-history`, `mauth`, `offline` | operational state and offline control |
-| `service` | `binding`, `consume`, `mac`, `migrate` | broadband state and controlled writes |
-| `setting` | `person get`, `person update` | sanitized person-state reads and blocked update semantics |
-| `bill` | `month-pay`, `online-log`, `operator-log` | billing and usage records |
-| `portal` | `login`, `logout`, `login-801`, `logout-801` | Portal 802 primary flow and 801 admin probe |
-| `raw` | `get`, `post` | low-level debugging probes |
-| `guard` | `run`, `start`, `stop`, `status`, `once` | long-running guard runtime |
-
-<details>
-<summary>Full command tree</summary>
-
-```text
-njupt-net
-  self
-    login
-    logout
-    status
-    doctor
-  dashboard
-    online-list
-    login-history
-    refresh-account-raw
-    offline
-    mauth get
-    mauth toggle
-  service
-    binding get
-    binding set
-    consume get
-    consume set
-    mac list
-    migrate
-  setting
-    person get
-    person update
-  bill
-    month-pay
-    online-log
-    operator-log
-  portal
-    login
-    logout
-    login-801
-    logout-801
-  raw
-    get
-    post
-  guard
-    run
-    start
-    stop
-    status
-    once
-```
-
-</details>
-
-## Quick Start
-
-### 1. Get a binary
-
-You can:
-
-- download a prebuilt artifact from [Releases](https://github.com/hicancan/njupt-net/releases)
-- or build locally
+## ⚡ Quick Start
 
 ```bash
-go build ./...
+# 1. Download from Releases, or build locally
+go build -o njupt-net ./cmd/njupt-net
+
+# 2. Create your config (see template below)
+cp config.example.json config.json && vim config.json
+
+# 3. Login
+njupt-net self login --profile B
+
+# 4. Diagnose
+njupt-net self doctor --profile B
+
+# 5. Start the 24/7 guard
+njupt-net guard start --replace --yes
 ```
 
-Cross-platform builds:
+## 📦 Installation
+
+### Prebuilt Binaries (Recommended)
+
+Go to [**Releases**](https://github.com/hicancan/njupt-net/releases) and download for your platform:
+
+| Platform | Filename |
+|---|---|
+| Windows x64 | `njupt-net-windows-amd64.exe` |
+| Linux x64 | `njupt-net-linux-amd64` |
+| Linux ARM64 (router) | `njupt-net-linux-arm64` |
+| macOS ARM64 | `njupt-net-darwin-arm64` |
+
+### Build from Source
 
 ```bash
-bash ./scripts/build.sh all
+# Requires Go 1.26+
+git clone https://github.com/hicancan/njupt-net.git
+cd njupt-net
+
+# Current platform
+go build -o njupt-net ./cmd/njupt-net
+
+# Cross-platform
+bash ./scripts/build.sh all        # Linux/macOS
+.\scripts\build.ps1 -Mode all      # Windows PowerShell
 ```
 
-```powershell
-.\scripts\build.ps1 -Mode all
-```
+## 🔧 Configuration
 
-### 2. Create `config.json`
+Create `config.json` (already in `.gitignore` — never committed):
 
-Minimal example:
-
-```json
+```jsonc
 {
   "accounts": {
-    "B": {
-      "username": "your-student-id",
-      "password": "your-password"
-    },
-    "W": {
-      "username": "your-student-id",
-      "password": "your-password"
-    }
+    "B": { "username": "your-student-id", "password": "your-password" },
+    "W": { "username": "your-student-id", "password": "your-password" }
   },
   "cmcc": {
-    "account": "your-mobile-broadband-account",
+    "account": "your-mobile-broadband-number",
     "password": "your-mobile-broadband-password"
   },
-  "self": {
-    "baseURL": "http://10.10.244.240:8080",
-    "timeoutSeconds": 10
-  },
+  // All below have sensible defaults and can be omitted
   "portal": {
     "baseURL": "https://10.10.244.11:802/eportal/portal",
     "isp": "mobile",
-    "timeoutSeconds": 8,
     "insecureTLS": true
   },
   "guard": {
-    "stateDir": "dist/guard",
-    "probeIntervalSeconds": 3,
-    "bindingCheckIntervalSeconds": 180,
-    "timezone": "Asia/Shanghai",
     "schedule": {
       "dayProfile": "B",
       "nightProfile": "W",
@@ -269,200 +131,280 @@ Minimal example:
 }
 ```
 
-If you need an additional 802 fallback, configure `portal.fallbackBaseURLs` explicitly. Router deployments now default to the direct IP endpoint and no longer inject a domain fallback implicitly.
+<details>
+<summary>📄 Full Configuration Reference</summary>
 
-### 3. Common commands
+| Key | Default | Description |
+|---|---|---|
+| `self.baseURL` | `http://10.10.244.240:8080` | Self service endpoint |
+| `self.timeoutSeconds` | `10` | Self request timeout |
+| `portal.baseURL` | `https://10.10.244.11:802/eportal/portal` | Portal service endpoint |
+| `portal.fallbackBaseURLs` | `[]` | Portal fallback endpoints |
+| `portal.isp` | `mobile` | ISP type: `telecom` / `unicom` / `mobile` |
+| `portal.timeoutSeconds` | `8` | Portal request timeout |
+| `portal.insecureTLS` | `false` | Skip TLS certificate verification |
+| `guard.stateDir` | `dist/guard` | Guard state directory |
+| `guard.probeIntervalSeconds` | `3` | Connectivity probe interval |
+| `guard.bindingCheckIntervalSeconds` | `180` | Binding audit interval |
+| `guard.timezone` | `Asia/Shanghai` | Schedule timezone |
+| `output` | `human` | Default output mode: `human` / `json` |
+
+Override via environment variables: `NJUPT_NET_CONFIG`, `NJUPT_NET_OUTPUT`, `NJUPT_NET_SELF_BASE_URL`, `NJUPT_NET_PORTAL_BASE_URL`, etc.
+
+</details>
+
+## 📖 Features
+
+### Command Reference
+
+```
+njupt-net
+├── self            # Self authentication & diagnosis
+│   ├── login           authenticate
+│   ├── logout          end session
+│   ├── status          check session state
+│   └── doctor          full health check
+├── dashboard       # Dashboard operations
+│   ├── online-list     current online devices
+│   ├── login-history   login history records
+│   ├── offline         force-offline a session
+│   └── mauth           mauth state read/toggle
+├── service         # Service management
+│   ├── binding         broadband binding (get/set)
+│   ├── consume         consume protection (get/set)
+│   ├── mac             MAC address list
+│   └── migrate         cross-account broadband migration
+├── setting         # Personal settings
+│   └── person          person info (get/update)
+├── bill            # Billing queries
+│   ├── online-log      usage logs
+│   ├── month-pay       monthly billing
+│   └── operator-log    operator logs
+├── portal          # Portal protocol
+│   ├── login           802 login
+│   ├── logout          802 logout
+│   ├── login-801       801 admin probe
+│   └── logout-801      801 logout probe
+├── raw             # Low-level debugging
+│   ├── get             raw GET request
+│   └── post            raw POST request
+└── guard           # Guard engine
+    ├── run             foreground execution
+    ├── start           background daemon
+    ├── stop            stop guard
+    ├── status          view status
+    └── once            single cycle (debug)
+```
+
+### Usage Examples
 
 ```bash
+# Login and check status
 njupt-net self login --profile B
 njupt-net self status --profile B
+
+# View online devices
+njupt-net dashboard online-list --profile B
+
+# Check broadband binding
 njupt-net service binding get --profile B
+
+# Update consume protection limit (requires --yes)
+njupt-net service consume set --profile B --limit 50 --yes
+
+# Portal login (requires --ip)
 njupt-net portal login --profile B --ip 10.163.177.138
-njupt-net guard start --replace
+
+# Start guard (replace existing instance)
+njupt-net guard start --replace --yes
+
+# JSON output (for scripting)
 njupt-net guard status --output json
+njupt-net self doctor --profile B --output json
 ```
 
-### 4. Local validation
+## 🛡️ Guard Engine
 
-```powershell
-.\scripts\test-local.ps1
+The guard is a real runtime, not a `while true; sleep 3` script.
+
+### Recovery Flow
+
+```mermaid
+flowchart TD
+  A["⏱ Every 3 seconds"] --> B{"Day/night<br>profile switch?"}
+  B -- Yes --> C["🔄 Repair binding to target"]
+  C --> D["🌐 Portal login"]
+  D --> E["✅ Connectivity check"]
+  B -- No --> F{"Connected?"}
+  F -- Yes --> G{"Binding audit<br>due?"}
+  G -- No --> H["💚 Healthy"]
+  G -- Yes --> I["🔍 Run binding audit"]
+  I --> H
+  F -- No --> J["🌐 Portal login"]
+  J --> K{"Recovered?"}
+  K -- Yes --> H
+  K -- No --> L["🔄 Repair binding"]
+  L --> M["🌐 Portal login again"]
+  M --> N{"Recovered?"}
+  N -- Yes --> H
+  N -- No --> O["🟡 Degraded"]
 ```
 
-Read-only smoke:
+### Execution Modes
+
+| Mode | Command | Best For |
+|---|---|---|
+| **Foreground** | `guard run --yes` | Debugging, log inspection |
+| **Background** | `guard start --yes` | Desktop long-running |
+| **procd service** | `install-immortalwrt.ps1` | Router deployment |
+
+### Default Policy
+
+- ☀️ Day 07:00–23:30 → profile `B`
+- 🌙 Night 23:30–07:00 → profile `W`
+- **Immediate** recovery when connectivity fails
+- Binding correctness audit every 180 seconds
+- Graceful SIGTERM on stop, forced kill on timeout
+
+## 🌐 Router Deployment
+
+Deploy to OpenWrt/ImmortalWrt in one command:
 
 ```powershell
-.\scripts\test-local.ps1 -ReadOnly -SkipPortal
-```
-
-## Router / ImmortalWrt Deployment
-
-If you want to run the guard on a router, `scripts/install-immortalwrt.ps1` is now an officially supported deployment path.
-
-Deployment model:
-
-- local PowerShell script handles upload and install
-- router side uses `procd + guard run`
-- runtime state defaults to `/tmp` to avoid flash write churn
-
-Minimum requirements:
-
-- local `ssh` and `scp`
-- router architecture `aarch64` / `arm64`
-- direct SSH access such as `root@immortalwrt`, or an override via `-HostName`
-
-Common commands:
-
-```powershell
-.\scripts\install-immortalwrt.ps1
+# Build + upload + install + start
 .\scripts\install-immortalwrt.ps1 -Build
+
+# Update binary only (keep config)
 .\scripts\install-immortalwrt.ps1 -SkipConfigUpload
+
+# Custom hostname
+.\scripts\install-immortalwrt.ps1 -HostName myrouter -Build
 ```
 
-Useful commands on the router after deployment:
+**Requirements**: local `ssh`/`scp`, router must be `aarch64`/`arm64`.
 
-```sh
+<details>
+<summary>📋 Router-Side Commands</summary>
+
+```bash
+# Service management
 /etc/init.d/njupt-net status
 /etc/init.d/njupt-net restart
 /etc/init.d/njupt-net stop
-/usr/bin/njupt-net --config /etc/njupt-net/config.json --output json guard status --state-dir /tmp/njupt-net
+
+# Guard status
+njupt-net --config /etc/njupt-net/config.json --output json guard status
+
+# Logs
 logread -e njupt-net
 cat /tmp/njupt-net/status.json
 ```
 
-## Machine-Readable Contract
+</details>
 
-`--output json` is a supported long-term interface, not a debug convenience.
+## 🏗️ Architecture
 
-### Stable contract surface
+A **disciplined modular monolith**. No multi-repo, no plugin framework.
 
-- top-level `OperationResult`
-- `problems[].code`
-- `problems[].details`
-- nested `guard status`
-- `guard event.kind + details`
+```mermaid
+flowchart LR
+  CLI["<b>cmd/njupt-net</b><br/>Command wiring · Flags"] --> APP["<b>internal/app</b><br/>Config · Factories · Renderer"]
+  APP --> KERNEL["<b>internal/kernel</b><br/>Typed results · Problems<br/>Evidence levels · WriteFlow"]
+  APP --> WF["<b>internal/workflow</b><br/>doctor · migrate<br/>guard business logic"]
+  WF --> SELF["<b>internal/selfservice</b><br/>Self protocol"]
+  WF --> PORTAL["<b>internal/portal</b><br/>Portal 802/801 protocol"]
+  APP --> RT["<b>internal/runtime/guard</b><br/>Scheduler · Probe · Store<br/>Supervisor · Runner"]
+  RT --> WF
 
-### Not part of the compatibility promise
+  style KERNEL fill:#1a1a2e,color:#e94560,stroke:#e94560
+  style CLI fill:#16213e,color:#0f3460,stroke:#0f3460
+```
 
-- `message`
-- terminal-oriented human output
-- explanatory prose in the README
-- raw HTML from standard `setting person` results; sensitive page payloads are only exposed through controlled raw/debug paths
+### Design Principles
 
-### Operation envelope
+| Layer | Responsibility | Does NOT |
+|---|---|---|
+| `cmd/` | Command wiring, flag binding | Contain business logic |
+| `internal/app` | Config loading, client factories | Call HTTP directly |
+| `internal/kernel` | Typed results, problem model, evidence levels | Depend on any protocol package |
+| `internal/selfservice` | Self protocol requests & parsing | Construct workflows |
+| `internal/portal` | Portal JSONP/JSON parsing | Depend on Self |
+| `internal/workflow` | Use-case composition | Construct transport |
+| `internal/runtime/guard` | Scheduling, probing, state persistence | Contain protocol details |
 
-Every command returns a typed `OperationResult`:
+## 📐 Evidence Model
 
-- `level`
-- `success`
-- `message`
-- `data`
-- `problems`
-- `raw`
-
-### Problems
-
-Each problem exposes:
-
-- `code`
-- `message`
-- `details`
-
-Major typed families include:
-
-- portal problems
-- readback / restore / state-comparison problems
-- invalid-config problems
-- guarded / blocked capability problems
-
-### Guard status
-
-`guard status --output json` uses this stable nested structure:
-
-- `running`
-- `health`
-- `desiredProfile`
-- `scheduleWindow`
-- `binding`
-- `connectivity`
-- `portal`
-- `cycle`
-- `timing`
-- `log`
-
-### Guard events
-
-Guard runtime events are JSONL records with stable `kind` values:
-
-- `startup`
-- `schedule-switch`
-- `binding-audit`
-- `portal-login`
-- `binding-repair`
-- `degraded`
-- `shutdown`
-- `fatal`
-
-## Evidence Model
-
-Reverse-engineered certainty is part of the runtime API.
+Reverse-engineered certainty is **part of the runtime API**, not just documentation.
 
 | Level | Meaning | Examples |
-| --- | --- | --- |
-| `confirmed` | safe to ship as a supported capability | Self login chain, broadband binding write, Portal 802 |
-| `guarded` | exposed, but intentionally conservative | transitional states such as Portal 802 `AC999` already-online responses |
-| `blocked` | known endpoint exists, but semantics are not strong enough to promise as supported truth | `setting person update`, `portal login-801` admin-login probe |
+|---|---|---|
+| `confirmed` | Verified and supported | Self login, broadband binding, Portal 802 |
+| `guarded` | Available but conservative | Portal `AC999` already-online |
+| `blocked` | Endpoint exists but semantics insufficient | `setting person update`, `portal login-801` |
 
-## Quality Gates
+## 🔌 JSON API
 
-Local gates:
+`--output json` is a supported long-term interface.
 
 ```bash
-go test ./...
-go test -cover ./...
-go vet ./...
+njupt-net self doctor --profile B --output json | jq '.success'
+njupt-net guard status --output json | jq '.data.health'
 ```
 
-```powershell
-.\scripts\build.ps1 -Mode all
-.\scripts\test-local.ps1 -ReadOnly -SkipPortal
+<details>
+<summary>📋 OperationResult Structure</summary>
+
+```jsonc
+{
+  "level": "confirmed",     // Evidence level
+  "success": true,          // Whether operation succeeded
+  "message": "...",         // Human-readable (not part of contract)
+  "data": { ... },          // Typed business data
+  "problems": [             // Problem list
+    {
+      "code": "auth_failed",
+      "message": "...",
+      "details": { ... }
+    }
+  ],
+  "raw": { ... }            // Raw diagnostic data
+}
 ```
 
-GitHub Actions continuously enforces:
+</details>
 
-- `gofmt`
-- `go test`
-- `go test -cover`
-- `go vet`
-- `staticcheck`
-- cross-platform builds
-- PowerShell parsing for `install-immortalwrt.ps1`
+## ✅ Quality Gates
 
-## Project Layout
-
-```text
-.
-├── cmd/njupt-net
-├── doc
-├── internal/app
-├── internal/kernel
-├── internal/portal
-├── internal/runtime/guard
-├── internal/selfservice
-├── internal/workflow
-└── scripts
+```bash
+go test ./...          # Run all tests
+go vet ./...           # Static analysis
+gofmt -l .             # Format check
 ```
 
-## Documentation
+CI pipeline: `gofmt` → `go test -cover` → `go vet` → `staticcheck` → cross-platform builds.
 
-Source-of-truth and architecture references:
+## 📂 Project Layout
 
-- [doc/FINAL-SSOT.md](doc/FINAL-SSOT.md)
-- [doc/IMPLEMENTATION-TASK.md](doc/IMPLEMENTATION-TASK.md)
-- [doc/ARCHITECTURE-REVIEW.md](doc/ARCHITECTURE-REVIEW.md)
-- [doc/CAPABILITY-MATRIX.md](doc/CAPABILITY-MATRIX.md)
+```
+njupt-net/
+├── cmd/njupt-net/          # CLI entry point & command wiring
+├── internal/
+│   ├── app/                # Application context & factories
+│   ├── config/             # Config loading & validation
+│   ├── httpx/              # HTTP session client
+│   ├── kernel/             # Core types & error model
+│   ├── output/             # Output renderer (human/json)
+│   ├── portal/             # Portal protocol implementation
+│   ├── selfservice/        # Self protocol implementation
+│   ├── runtime/guard/      # Guard runtime
+│   └── workflow/           # Business workflows
+├── scripts/                # Build & deployment scripts
+├── doc/                    # Design documents
+├── .github/workflows/      # CI/CD
+├── go.mod
+└── LICENSE
+```
 
-## Notes
+## 📄 License
 
-- the supported product name is `njupt-net`
-- the current mainline is the Go CLI, typed kernel, and Go guard runtime
-- historical Python / PowerShell guard helpers are no longer the supported runtime path
+[MIT](LICENSE) © hicancan

@@ -1,263 +1,125 @@
+<div align="center">
+
 # njupt-net
+
+**NJUPT 校园网终端系统** — 登录 · 诊断 · 守护 · 一键部署路由器
+
+[![CI](https://github.com/hicancan/njupt-net/actions/workflows/release.yml/badge.svg)](https://github.com/hicancan/njupt-net/actions/workflows/release.yml)
+[![Go](https://img.shields.io/github/go-mod-go-version/hicancan/njupt-net)](go.mod)
+[![Release](https://img.shields.io/github/v/release/hicancan/njupt-net?color=%2300b4d8)](https://github.com/hicancan/njupt-net/releases)
+[![License](https://img.shields.io/github/license/hicancan/njupt-net?color=%23198754)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/hicancan/njupt-net?style=social)](https://github.com/hicancan/njupt-net/stargazers)
 
 中文 | [English](README.en.md)
 
-[![Verify](https://github.com/hicancan/njupt-net/actions/workflows/release.yml/badge.svg)](https://github.com/hicancan/njupt-net/actions/workflows/release.yml)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/hicancan/njupt-net)](https://github.com/hicancan/njupt-net/blob/main/go.mod)
-[![Latest Release](https://img.shields.io/github/v/release/hicancan/njupt-net)](https://github.com/hicancan/njupt-net/releases)
-[![License](https://img.shields.io/github/license/hicancan/njupt-net)](https://github.com/hicancan/njupt-net/blob/main/LICENSE)
-[![Repo Stars](https://img.shields.io/github/stars/hicancan/njupt-net?style=social)](https://github.com/hicancan/njupt-net/stargazers)
+一个 Go 二进制，解决 NJUPT 校园网登录、诊断、宽带绑定、消费保护、24 小时守护等全部痛点。<br>
+支持桌面 & OpenWrt/ImmortalWrt 路由器，`--output json` 原生支持自动化集成。
 
-> 把 NJUPT 校园网里最麻烦的事情，收进一个可脚本化、可守护、可部署到路由器的 Go 二进制。
+[**快速开始**](#-快速开始) · [**功能总览**](#-功能总览) · [**路由器部署**](#-路由器部署) · [**架构设计**](#-架构设计)
 
-`njupt-net` 是一个面向 NJUPT 校园网环境的 Go 终端系统。  
-它不是一个只会“点一下登录”的薄封装 CLI，而是一套完整的 typed kernel + workflow + guard runtime。
+</div>
 
-你可以用它做这些事：
+---
 
-- 在终端里稳定登录 Self 和 Portal
-- 查询在线状态、登录历史、账单、MAC 与宽带绑定信息
-- 安全地修改宽带绑定、消费保护、mauth，并且默认带 readback 验证
-- 在桌面或路由器上长期守护，白天守 `B`，夜间守 `W`
-- 用 `--output json` 接入脚本、自动化、监控或你自己的工具链
+## ✨ 核心特性
 
-## 为什么会有这个项目
+<table>
+<tr>
+<td width="50%">
 
-校园网最烦的从来不是“不会点网页登录”，而是这些边角问题：
+### 🔐 Self & Portal 双系统登录
+一条命令完成 Self 认证链或 Portal 802 JSONP 登录，<br>自动处理 checkcode、randomCode、重定向验证。
 
-- Self 和 Portal 是两套不同语义的系统
-- 一些能力能做，但成功语义并不总是稳定
-- 写操作如果没有 readback，很难知道到底有没有真正生效
-- 守护一旦只是脚本拼装，状态、日志、恢复链就会越来越混乱
-- 路由器部署如果没有统一 runtime，桌面和 OpenWrt 会变成两套世界
+### 📊 全维度查询
+在线设备 · 登录历史 · 账单明细 · MAC 列表 · 宽带绑定 · 消费保护 · 个人信息
 
-`njupt-net` 的目标，就是把这些问题变成一套清晰、可测试、可维护、可自动化的终端系统。
+### ✍️ 安全写操作
+所有修改默认 `readback-first`：拉取前置状态 → 提交 → 读回验证 → 可选回滚。
 
-## 项目亮点
+</td>
+<td width="50%">
 
-- **不是“网页登录脚本”，而是 typed kernel**
-  - 协议真相、错误模型、证据级别、写操作语义都在 Go 类型里，而不是散落在命令层字符串判断里。
-- **逆向确定性会体现在运行时**
-  - `confirmed / guarded / blocked` 不是文档注释，而是结果模型和命令行为的一部分。
-- **写操作默认 readback-first**
-  - 宽带绑定、消费保护、mauth 等修改统一走 `pre-state -> submit -> readback -> compare -> optional restore`。
-- **守护是正式 runtime，不是脚本循环**
-  - 桌面和路由器共用同一套调度、恢复链、状态文件、事件日志和 PID 管理。
-- **JSON 输出是长期支持接口**
-  - `OperationResult`、`problems[].code + details`、`guard status`、`guard events` 都是正式契约，不是调试副产物。
+### 🛡️ 7×24 守护引擎
+内置日夜调度、绑定审计、连通性探测、Portal 恢复链。<br>支持前台运行、后台 daemon、procd 服务三种模式。
 
-## 你大概会怎么用它
+### 🌐 路由器一键部署
+`install-immortalwrt.ps1` 自动编译、上传、安装 procd 服务。<br>状态文件走 `/tmp`，零闪存磨损。
 
-| 场景 | 最常用的命令 |
-| --- | --- |
-| 登录与诊断 | `self login` `self status` `self doctor` |
-| 查看在线设备和历史记录 | `dashboard online-list` `dashboard login-history` |
-| 管理宽带绑定、消费保护、MAC | `service binding` `service consume` `service mac` |
-| 查询账单与在线日志 | `bill month-pay` `bill online-log` `bill operator-log` |
-| 排查 Portal / Self 的低层问题 | `portal login` `portal logout` `raw get` `raw post` |
-| 在桌面或路由器上长期守护 | `guard start` `guard status` `guard once` |
+### 🤖 机器可读接口
+`--output json` 是正式契约：typed `OperationResult`、<br>`problems[].code`、guard status/events 全部可自动化。
 
-## 架构一眼看懂
+</td>
+</tr>
+</table>
 
-项目采用克制的模块化单体架构。  
-不拆多仓，不引入插件系统，也不把 Cobra 再包成一层自己的框架。
-
-```mermaid
-flowchart LR
-  CLI["cmd/njupt-net<br/>命令装配与 flag 解析"] --> APP["internal/app<br/>lazy config / renderer / factories"]
-  APP --> KERNEL["internal/kernel<br/>typed results / problems / writeflow"]
-  APP --> WORKFLOW["internal/workflow<br/>doctor / migrate / guard use-cases"]
-  WORKFLOW --> SELF["internal/selfservice<br/>Self 协议真相"]
-  WORKFLOW --> PORTAL["internal/portal<br/>Portal 802 / 801 协议真相"]
-  APP --> RUNTIME["internal/runtime/guard<br/>scheduler / probe / runner / supervisor / store"]
-  RUNTIME --> WORKFLOW
-```
-
-### 设计原则
-
-- `cmd/njupt-net`
-  - 只负责命令装配和参数解析
-- `internal/app`
-  - 负责 lazy config、输出模式、client factory、确认策略
-- `internal/kernel`
-  - 负责 evidence level、`OperationResult`、typed problem、writeflow 语义
-- `internal/selfservice`
-  - 负责 Self 的请求、解析、模型映射
-- `internal/portal`
-  - 负责 Portal 请求构建、JSONP 解析、`ret_code` 分类、模型映射
-- `internal/workflow`
-  - 只负责 use-case 组合，不直接构造 transport
-- `internal/runtime/guard`
-  - 负责守护状态机、调度、探测、状态文件、事件日志和后台运行
-
-## 守护恢复链
-
-`guard` 的目标不是“安静挂着”，而是“快速发现、快速恢复、状态可观测”。
-
-```mermaid
-flowchart TD
-  A["每 3 秒判定目标账号"] --> B{"需要切换日夜档位?"}
-  B -- "是" --> C["修绑定到目标账号"]
-  C --> D["Portal 登录"]
-  D --> E["连通性检查"]
-  B -- "否" --> F{"当前连通?"}
-  F -- "是" --> G{"到绑定审计周期了吗?"}
-  G -- "否" --> H["Healthy cycle"]
-  G -- "是" --> I["执行绑定审计"]
-  I --> H
-  F -- "否" --> J["Portal 登录"]
-  J --> K{"恢复了吗?"}
-  K -- "是" --> H
-  K -- "否" --> L["修绑定"]
-  L --> M["再次 Portal 登录"]
-  M --> N{"最终恢复了吗?"}
-  N -- "是" --> H
-  N -- "否" --> O["Degraded cycle"]
-```
-
-默认守护策略：
-
-- 白天守 `B`
-- 夜间守 `W`
-- 不主动 `logout`
-- 连通性失败后立即恢复
-- `stop` 先优雅退出，再超时强停
-
-## 功能清单
-
-当前 CLI 共有 **8 个功能域，32 个叶子命令**。
-
-### 顶层功能域
-
-- `self`
-- `dashboard`
-- `service`
-- `setting`
-- `bill`
-- `portal`
-- `raw`
-- `guard`
-
-### 功能域说明
-
-| 功能域 | 典型命令 | 作用 |
-| --- | --- | --- |
-| `self` | `login`, `logout`, `status`, `doctor` | Self 登录与诊断主路径 |
-| `dashboard` | `online-list`, `login-history`, `mauth`, `offline` | 在线会话、历史记录、离线控制 |
-| `service` | `binding`, `consume`, `mac`, `migrate` | 宽带绑定、消费保护、MAC、迁移工作流 |
-| `setting` | `person get`, `person update` | 脱敏个人资料读取与 blocked 更新面 |
-| `bill` | `month-pay`, `online-log`, `operator-log` | 账单与记录查询 |
-| `portal` | `login`, `logout`, `login-801`, `logout-801` | Portal 802 主链与 801 管理端探针 |
-| `raw` | `get`, `post` | 低层调试探针 |
-| `guard` | `run`, `start`, `stop`, `status`, `once` | Go 守护运行时 |
-
-<details>
-<summary>完整命令树</summary>
-
-```text
-njupt-net
-  self
-    login
-    logout
-    status
-    doctor
-  dashboard
-    online-list
-    login-history
-    refresh-account-raw
-    offline
-    mauth get
-    mauth toggle
-  service
-    binding get
-    binding set
-    consume get
-    consume set
-    mac list
-    migrate
-  setting
-    person get
-    person update
-  bill
-    month-pay
-    online-log
-    operator-log
-  portal
-    login
-    logout
-    login-801
-    logout-801
-  raw
-    get
-    post
-  guard
-    run
-    start
-    stop
-    status
-    once
-```
-
-</details>
-
-## 快速开始
-
-### 1. 获取二进制
-
-你可以：
-
-- 从 [Releases](https://github.com/hicancan/njupt-net/releases) 下载预编译二进制
-- 或者本地直接编译
+## ⚡ 30 秒上手
 
 ```bash
-go build ./...
+# 1. 下载 — 从 Releases 获取，或本地编译
+go build -o njupt-net ./cmd/njupt-net
+
+# 2. 创建配置文件（参考下方模板）
+cp config.example.json config.json && vim config.json
+
+# 3. 登录
+njupt-net self login --profile B
+
+# 4. 诊断
+njupt-net self doctor --profile B
+
+# 5. 启动 24 小时守护
+njupt-net guard start --replace --yes
 ```
 
-跨平台构建：
+## 📦 安装
+
+### 预编译二进制（推荐）
+
+前往 [**Releases**](https://github.com/hicancan/njupt-net/releases) 下载对应平台的二进制：
+
+| 平台 | 文件名 |
+|---|---|
+| Windows x64 | `njupt-net-windows-amd64.exe` |
+| Linux x64 | `njupt-net-linux-amd64` |
+| Linux ARM64（路由器） | `njupt-net-linux-arm64` |
+| macOS ARM64 | `njupt-net-darwin-arm64` |
+
+### 从源码编译
 
 ```bash
-bash ./scripts/build.sh all
+# 需要 Go 1.26+
+git clone https://github.com/hicancan/njupt-net.git
+cd njupt-net
+
+# 当前平台
+go build -o njupt-net ./cmd/njupt-net
+
+# 全平台交叉编译
+bash ./scripts/build.sh all        # Linux/macOS
+.\scripts\build.ps1 -Mode all      # Windows PowerShell
 ```
 
-```powershell
-.\scripts\build.ps1 -Mode all
-```
+## 🔧 配置
 
-### 2. 准备 `config.json`
+创建 `config.json`（此文件已在 `.gitignore` 中，不会被提交）：
 
-最小示例：
-
-```json
+```jsonc
 {
   "accounts": {
-    "B": {
-      "username": "你的学号",
-      "password": "你的密码"
-    },
-    "W": {
-      "username": "你的学号",
-      "password": "你的密码"
-    }
+    "B": { "username": "你的学号", "password": "你的密码" },
+    "W": { "username": "你的学号", "password": "你的密码" }
   },
   "cmcc": {
-    "account": "你的移动宽带账号",
-    "password": "你的移动宽带密码"
+    "account": "移动宽带手机号",
+    "password": "移动宽带密码"
   },
-  "self": {
-    "baseURL": "http://10.10.244.240:8080",
-    "timeoutSeconds": 10
-  },
+  // 以下均有合理默认值，可省略
   "portal": {
     "baseURL": "https://10.10.244.11:802/eportal/portal",
     "isp": "mobile",
-    "timeoutSeconds": 8,
     "insecureTLS": true
   },
   "guard": {
-    "stateDir": "dist/guard",
-    "probeIntervalSeconds": 3,
-    "bindingCheckIntervalSeconds": 180,
-    "timezone": "Asia/Shanghai",
     "schedule": {
       "dayProfile": "B",
       "nightProfile": "W",
@@ -268,198 +130,280 @@ bash ./scripts/build.sh all
 }
 ```
 
-如需额外的 802 fallback，可显式配置 `portal.fallbackBaseURLs`；路由器部署默认只依赖直连 IP，不再隐式补域名 fallback。
+<details>
+<summary>📄 完整配置项参考</summary>
 
-### 3. 常用命令
+| 配置项 | 默认值 | 说明 |
+|---|---|---|
+| `self.baseURL` | `http://10.10.244.240:8080` | Self 服务地址 |
+| `self.timeoutSeconds` | `10` | Self 请求超时 |
+| `portal.baseURL` | `https://10.10.244.11:802/eportal/portal` | Portal 服务地址 |
+| `portal.fallbackBaseURLs` | `[]` | Portal 备用地址 |
+| `portal.isp` | `mobile` | ISP 类型: `telecom` / `unicom` / `mobile` |
+| `portal.timeoutSeconds` | `8` | Portal 请求超时 |
+| `portal.insecureTLS` | `false` | 跳过 TLS 证书验证 |
+| `guard.stateDir` | `dist/guard` | 守护状态目录 |
+| `guard.probeIntervalSeconds` | `3` | 连通性探测间隔 |
+| `guard.bindingCheckIntervalSeconds` | `180` | 绑定审计间隔 |
+| `guard.timezone` | `Asia/Shanghai` | 调度时区 |
+| `output` | `human` | 默认输出模式: `human` / `json` |
+
+也可通过环境变量覆盖：`NJUPT_NET_CONFIG`、`NJUPT_NET_OUTPUT`、`NJUPT_NET_SELF_BASE_URL`、`NJUPT_NET_PORTAL_BASE_URL` 等。
+
+</details>
+
+## 📖 功能总览
+
+### 命令速查
+
+```
+njupt-net
+├── self            # Self 认证与诊断
+│   ├── login           登录
+│   ├── logout          登出
+│   ├── status          会话状态检查
+│   └── doctor          完整健康诊断
+├── dashboard       # 仪表盘
+│   ├── online-list     在线设备列表
+│   ├── login-history   登录历史
+│   ├── offline         强制下线指定会话
+│   └── mauth           mauth 状态读取/切换
+├── service         # 业务管理
+│   ├── binding         宽带绑定 (get/set)
+│   ├── consume         消费保护 (get/set)
+│   ├── mac             MAC 列表
+│   └── migrate         跨账号宽带迁移
+├── setting         # 个人设置
+│   └── person          个人信息 (get/update)
+├── bill            # 账单查询
+│   ├── online-log      上网日志
+│   ├── month-pay       月度账单
+│   └── operator-log    运营商日志
+├── portal          # Portal 协议
+│   ├── login           802 登录
+│   ├── logout          802 登出
+│   ├── login-801       801 管理端探针
+│   └── logout-801      801 登出探针
+├── raw             # 低层调试
+│   ├── get             原始 GET 请求
+│   └── post            原始 POST 请求
+└── guard           # 守护引擎
+    ├── run             前台运行
+    ├── start           后台启动
+    ├── stop            停止守护
+    ├── status          查看状态
+    └── once            单次循环（调试用）
+```
+
+### 常用场景示例
 
 ```bash
+# 登录并查看状态
 njupt-net self login --profile B
 njupt-net self status --profile B
+
+# 查看在线设备
+njupt-net dashboard online-list --profile B
+
+# 查看宽带绑定
 njupt-net service binding get --profile B
+
+# 修改消费保护额度（需 --yes 确认）
+njupt-net service consume set --profile B --limit 50 --yes
+
+# Portal 登录（需指定 IP）
 njupt-net portal login --profile B --ip 10.163.177.138
-njupt-net guard start --replace
+
+# 启动守护（替换已有实例）
+njupt-net guard start --replace --yes
+
+# JSON 输出（用于脚本集成）
 njupt-net guard status --output json
+njupt-net self doctor --profile B --output json
 ```
 
-### 4. 本地验证
+## 🛡️ 守护引擎
 
-```powershell
-.\scripts\test-local.ps1
+Guard 是一个完整的 runtime，而不是 `while true; sleep 3` 的脚本。
+
+### 守护恢复流程
+
+```mermaid
+flowchart TD
+  A["⏱ 每 3 秒执行一轮"] --> B{"需要切换<br>日/夜账号?"}
+  B -- 是 --> C["🔄 修正绑定到目标账号"]
+  C --> D["🌐 Portal 登录"]
+  D --> E["✅ 连通性验证"]
+  B -- 否 --> F{"当前有网?"}
+  F -- 是 --> G{"到绑定<br>审计周期?"}
+  G -- 否 --> H["💚 Healthy"]
+  G -- 是 --> I["🔍 执行绑定审计"]
+  I --> H
+  F -- 否 --> J["🌐 Portal 登录"]
+  J --> K{"恢复了?"}
+  K -- 是 --> H
+  K -- 否 --> L["🔄 修正绑定"]
+  L --> M["🌐 再次 Portal 登录"]
+  M --> N{"恢复了?"}
+  N -- 是 --> H
+  N -- 否 --> O["🟡 Degraded"]
 ```
 
-只读 smoke：
+### 三种运行模式
+
+| 模式 | 命令 | 适用场景 |
+|---|---|---|
+| **前台** | `guard run --yes` | 调试、日志观察 |
+| **后台** | `guard start --yes` | 桌面长期守护 |
+| **procd 服务** | `install-immortalwrt.ps1` | 路由器部署 |
+
+### 默认策略
+
+- ☀️ 白天 07:00–23:30 → 守护账号 `B`
+- 🌙 夜间 23:30–07:00 → 守护账号 `W`
+- 连通性断开后**立即**触发恢复链
+- 每 180 秒执行一次绑定正确性审计
+- `stop` 先发 SIGTERM 优雅退出，超时后强制终止
+
+## 🌐 路由器部署
+
+一条命令将 `njupt-net` 部署到 OpenWrt/ImmortalWrt 路由器：
 
 ```powershell
-.\scripts\test-local.ps1 -ReadOnly -SkipPortal
-```
-
-## Router / ImmortalWrt 部署
-
-如果你想把守护跑在路由器上，`scripts/install-immortalwrt.ps1` 已经是正式支持路径。
-
-部署模型：
-
-- 本机 PowerShell 脚本负责上传与安装
-- 路由器侧使用 `procd + guard run`
-- 状态目录默认走 `/tmp`，避免高频写闪存
-
-最低要求：
-
-- 本机可用 `ssh` 与 `scp`
-- 路由器架构为 `aarch64` / `arm64`
-- 路由器能以 `root@immortalwrt` 直接 SSH 连接，或通过 `-HostName` 指定
-
-常用命令：
-
-```powershell
-.\scripts\install-immortalwrt.ps1
+# 编译 + 上传 + 安装 + 启动
 .\scripts\install-immortalwrt.ps1 -Build
+
+# 仅更新二进制（保留配置）
 .\scripts\install-immortalwrt.ps1 -SkipConfigUpload
+
+# 自定义主机名
+.\scripts\install-immortalwrt.ps1 -HostName myrouter -Build
 ```
 
-部署后，路由器上常用命令：
+**要求**：本机可用 `ssh`/`scp`，路由器为 `aarch64`/`arm64` 架构。
 
-```sh
+<details>
+<summary>📋 路由器端常用命令</summary>
+
+```bash
+# 服务管理
 /etc/init.d/njupt-net status
 /etc/init.d/njupt-net restart
 /etc/init.d/njupt-net stop
-/usr/bin/njupt-net --config /etc/njupt-net/config.json --output json guard status --state-dir /tmp/njupt-net
+
+# 查看守护状态
+njupt-net --config /etc/njupt-net/config.json --output json guard status
+
+# 查看日志
 logread -e njupt-net
 cat /tmp/njupt-net/status.json
 ```
 
-## 机器可读契约
+</details>
 
-`--output json` 是正式支持的长期接口，不是调试附属品。
+## 🏗️ 架构设计
 
-### 稳定契约
+项目采用**克制的模块化单体**架构。不拆多仓，不引入插件系统。
 
-- 顶层 `OperationResult`
-- `problems[].code`
-- `problems[].details`
-- `guard status` 的嵌套字段结构
-- `guard event.kind + details`
+```mermaid
+flowchart LR
+  CLI["<b>cmd/njupt-net</b><br/>命令装配 · flag 解析"] --> APP["<b>internal/app</b><br/>配置 · 工厂 · 渲染器"]
+  APP --> KERNEL["<b>internal/kernel</b><br/>类型化结果 · 问题模型<br/>证据等级 · WriteFlow"]
+  APP --> WF["<b>internal/workflow</b><br/>doctor · migrate<br/>guard 业务逻辑"]
+  WF --> SELF["<b>internal/selfservice</b><br/>Self 协议实现"]
+  WF --> PORTAL["<b>internal/portal</b><br/>Portal 802/801 协议"]
+  APP --> RT["<b>internal/runtime/guard</b><br/>调度 · 探测 · 状态<br/>Supervisor · Runner"]
+  RT --> WF
 
-### 不属于机器兼容承诺的部分
+  style KERNEL fill:#1a1a2e,color:#e94560,stroke:#e94560
+  style CLI fill:#16213e,color:#0f3460,stroke:#0f3460
+```
 
-- `message`
-- 人类可读终端文本
-- README 中的解释性示例
-- 标准 `setting person` 结果中的原始 HTML；敏感页面内容仅保留在受控 raw / 调试路径中
+### 设计原则
 
-### 顶层结果结构
+| 层 | 职责 | 不做什么 |
+|---|---|---|
+| `cmd/` | 命令装配、flag 绑定 | 不含业务逻辑 |
+| `internal/app` | 配置加载、client 工厂 | 不直接调用 HTTP |
+| `internal/kernel` | 类型化结果、问题模型、证据等级 | 不依赖任何协议包 |
+| `internal/selfservice` | Self 协议请求与解析 | 不构造 workflow |
+| `internal/portal` | Portal JSONP/JSON 解析 | 不依赖 Self |
+| `internal/workflow` | 组合用例（doctor、migrate、guard） | 不构造 transport |
+| `internal/runtime/guard` | 调度、探测、状态持久化 | 不含协议细节 |
 
-所有命令都返回 typed `OperationResult`：
+## 📐 证据等级模型
 
-- `level`
-- `success`
-- `message`
-- `data`
-- `problems`
-- `raw`
+逆向工程的确定性是**运行时 API 的一部分**，不只是文档注释。
 
-### Problems
+| 等级 | 含义 | 示例 |
+|---|---|---|
+| `confirmed` | 已确认可作为正式能力 | Self 登录、宽带绑定写入、Portal 802 |
+| `guarded` | 可用但需保守处理 | Portal `AC999` 已在线态 |
+| `blocked` | 接口存在但语义不足以承诺 | `setting person update`、`portal login-801` |
 
-问题对象由这三部分构成：
+## 🔌 JSON 接口
 
-- `code`
-- `message`
-- `details`
-
-当前重点的 typed family 包括：
-
-- Portal 问题
-- readback / restore / state-comparison 问题
-- invalid-config 问题
-- guarded / blocked capability 问题
-
-### Guard Status
-
-`guard status --output json` 使用稳定嵌套结构：
-
-- `running`
-- `health`
-- `desiredProfile`
-- `scheduleWindow`
-- `binding`
-- `connectivity`
-- `portal`
-- `cycle`
-- `timing`
-- `log`
-
-### Guard Events
-
-守护事件采用 JSONL 输出，稳定的 `kind` 包括：
-
-- `startup`
-- `schedule-switch`
-- `binding-audit`
-- `portal-login`
-- `binding-repair`
-- `degraded`
-- `shutdown`
-- `fatal`
-
-## 证据级别模型
-
-逆向确定性模型是运行时 API 的一部分。
-
-| 级别 | 含义 | 例子 |
-| --- | --- | --- |
-| `confirmed` | 已确认，可作为正式能力实现 | Self 登录主链、宽带绑定写入、Portal 802 |
-| `guarded` | 可暴露，但必须保守处理 | Portal 802 的 `AC999` 已在线态、部分环境漂移态 |
-| `blocked` | 已知接口存在，但成功语义不足以正式承诺 | `setting person update`、`portal login-801` 管理端探针 |
-
-## 质量保证
-
-本地门禁：
+`--output json` 是正式支持的长期接口。
 
 ```bash
-go test ./...
-go test -cover ./...
-go vet ./...
+njupt-net self doctor --profile B --output json | jq '.success'
+njupt-net guard status --output json | jq '.data.health'
 ```
 
-```powershell
-.\scripts\build.ps1 -Mode all
-.\scripts\test-local.ps1 -ReadOnly -SkipPortal
+<details>
+<summary>📋 OperationResult 结构</summary>
+
+```jsonc
+{
+  "level": "confirmed",     // 证据等级
+  "success": true,          // 操作是否成功
+  "message": "...",         // 人类可读消息（非契约）
+  "data": { ... },          // 类型化业务数据
+  "problems": [             // 问题列表
+    {
+      "code": "auth_failed",
+      "message": "...",
+      "details": { ... }
+    }
+  ],
+  "raw": { ... }            // 原始诊断数据
+}
 ```
 
-GitHub Actions 持续强制：
+</details>
 
-- `gofmt`
-- `go test`
-- `go test -cover`
-- `go vet`
-- `staticcheck`
-- 多平台构建
-- `install-immortalwrt.ps1` PowerShell 语法解析检查
+## ✅ 质量保证
 
-## 项目结构
-
-```text
-.
-├── cmd/njupt-net
-├── doc
-├── internal/app
-├── internal/kernel
-├── internal/portal
-├── internal/runtime/guard
-├── internal/selfservice
-├── internal/workflow
-└── scripts
+```bash
+go test ./...          # 运行全部测试
+go vet ./...           # 静态分析
+gofmt -l .             # 格式检查
 ```
 
-## 相关文档
+CI 管线自动执行：`gofmt` → `go test -cover` → `go vet` → `staticcheck` → 多平台构建。
 
-- [doc/FINAL-SSOT.md](doc/FINAL-SSOT.md)
-- [doc/IMPLEMENTATION-TASK.md](doc/IMPLEMENTATION-TASK.md)
-- [doc/ARCHITECTURE-REVIEW.md](doc/ARCHITECTURE-REVIEW.md)
-- [doc/CAPABILITY-MATRIX.md](doc/CAPABILITY-MATRIX.md)
+## 📂 项目结构
 
-## 说明
+```
+njupt-net/
+├── cmd/njupt-net/          # CLI 入口与命令装配
+├── internal/
+│   ├── app/                # 应用上下文与工厂
+│   ├── config/             # 配置加载与验证
+│   ├── httpx/              # HTTP 会话客户端
+│   ├── kernel/             # 核心类型与错误模型
+│   ├── output/             # 输出渲染器 (human/json)
+│   ├── portal/             # Portal 协议实现
+│   ├── selfservice/        # Self 协议实现
+│   ├── runtime/guard/      # 守护运行时
+│   └── workflow/           # 业务工作流
+├── scripts/                # 构建与部署脚本
+├── doc/                    # 设计文档
+├── .github/workflows/      # CI/CD
+├── go.mod
+└── LICENSE
+```
 
-- 正式产品名是 `njupt-net`
-- 当前主线是 Go CLI、typed kernel、Go guard runtime
-- 历史 Python / PowerShell 守护脚本不再是正式支持路径
+## 📄 License
+
+[MIT](LICENSE) © hicancan
