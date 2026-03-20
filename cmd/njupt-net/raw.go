@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -97,25 +96,4 @@ func newRawPostCmd() *cobra.Command {
 	cmd.Flags().StringArrayVarP(&formPairs, "form", "f", nil, "Form field pair in key=value format; can be repeated")
 	cmd.Flags().BoolVar(&login, "login", false, "Perform authoritative Self login before sending the raw request")
 	return cmd
-}
-
-func parseFormPairs(pairs []string) (map[string]string, error) {
-	form := map[string]string{}
-	for _, pair := range pairs {
-		trimmed := strings.TrimSpace(pair)
-		if trimmed == "" {
-			continue
-		}
-		idx := strings.Index(trimmed, "=")
-		if idx <= 0 {
-			return nil, fmt.Errorf("raw post: invalid --form value %q, expected key=value", pair)
-		}
-		key := strings.TrimSpace(trimmed[:idx])
-		value := trimmed[idx+1:]
-		if key == "" {
-			return nil, fmt.Errorf("raw post: empty form key in %q", pair)
-		}
-		form[key] = value
-	}
-	return form, nil
 }

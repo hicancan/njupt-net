@@ -2,6 +2,7 @@ package main
 
 import (
 	"io"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -105,9 +106,9 @@ func newSelfStatusCmd() *cobra.Command {
 				}
 				return printKV(w,
 					statusResult.Message,
-					"loggedIn="+boolString(statusResult.Data.LoggedIn),
-					"dashboardReadable="+boolString(statusResult.Data.DashboardReadable),
-					"serviceReadable="+boolString(statusResult.Data.ServiceReadable),
+					"loggedIn="+strconv.FormatBool(statusResult.Data.LoggedIn),
+					"dashboardReadable="+strconv.FormatBool(statusResult.Data.DashboardReadable),
+					"serviceReadable="+strconv.FormatBool(statusResult.Data.ServiceReadable),
 				)
 			}); err != nil {
 				return err
@@ -143,7 +144,7 @@ func newSelfDoctorCmd() *cobra.Command {
 			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				lines := []string{result.Message}
 				if result.Data != nil && result.Data.Status != nil && result.Data.Status.Data != nil {
-					lines = append(lines, "loggedIn="+boolString(result.Data.Status.Data.LoggedIn))
+					lines = append(lines, "loggedIn="+strconv.FormatBool(result.Data.Status.Data.LoggedIn))
 				}
 				return printKV(w, lines...)
 			})
@@ -151,11 +152,4 @@ func newSelfDoctorCmd() *cobra.Command {
 	}
 	bindAuthFlags(cmd, &flags)
 	return cmd
-}
-
-func boolString(v bool) string {
-	if v {
-		return "true"
-	}
-	return "false"
 }

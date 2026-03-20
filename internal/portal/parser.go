@@ -26,15 +26,6 @@ func parseJSONPPayload(raw string) (map[string]any, error) {
 	return payload, nil
 }
 
-func toString(v any) string {
-	switch val := v.(type) {
-	case string:
-		return strings.TrimSpace(val)
-	default:
-		return strings.TrimSpace(fmt.Sprint(val))
-	}
-}
-
 func isPortal802AlreadyOnline(retCode, msg string) bool {
 	return strings.TrimSpace(retCode) == "2" && strings.EqualFold(strings.TrimSpace(msg), "AC999")
 }
@@ -69,7 +60,7 @@ func parseLogin801Response(raw string, endpoint string, adminConsoleDetected boo
 	}
 
 	if data, ok := payload.Data.(map[string]any); ok {
-		if token := toString(data["token"]); token != "" {
+		if token := kernel.ToString(data["token"]); token != "" {
 			result.TokenPresent = true
 		}
 		result.ChangePass = truthy(data["changepass"])

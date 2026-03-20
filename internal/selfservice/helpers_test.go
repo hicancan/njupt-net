@@ -16,10 +16,10 @@ func TestLooksLikeErrorMessage(t *testing.T) {
 }
 
 func TestToStringAndBoolFromJSON(t *testing.T) {
-	if got := toString(12); got != "12" {
+	if got := kernel.ToString(12); got != "12" {
 		t.Fatalf("unexpected toString int: %q", got)
 	}
-	if got := toString(float64(1.5)); got != "1.5" {
+	if got := kernel.ToString(float64(1.5)); got != "1.5" {
 		t.Fatalf("unexpected toString float: %q", got)
 	}
 	if !boolFromJSON(true) || !boolFromJSON("1") || !boolFromJSON("true") {
@@ -35,11 +35,11 @@ func TestEnsureSessionAndRawCapture(t *testing.T) {
 	if err := client.ensureSession("self.test"); err == nil {
 		t.Fatal("expected nil session error")
 	}
-	if rawCapture(nil) != nil {
+	if kernel.CaptureRaw(nil) != nil {
 		t.Fatal("expected nil raw capture for nil response")
 	}
 	resp := &kernel.SessionResponse{StatusCode: 200, FinalURL: "/done", Body: []byte("body")}
-	if capture := rawCapture(resp); capture == nil || capture.Status != 200 || capture.Body != "body" {
+	if capture := kernel.CaptureRaw(resp); capture == nil || capture.Status != 200 || capture.Body != "body" {
 		t.Fatalf("unexpected raw capture: %#v", capture)
 	}
 }

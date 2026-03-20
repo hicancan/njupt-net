@@ -31,7 +31,7 @@ func (c *Client) GetOperatorBinding(ctx context.Context) (*kernel.OperationResul
 		Success: true,
 		Message: "operator binding loaded",
 		Data:    &binding,
-		Raw:     rawCapture(resp),
+		Raw:     kernel.CaptureRaw(resp),
 	}, nil
 }
 
@@ -70,7 +70,7 @@ func (c *Client) BindOperator(ctx context.Context, target map[string]string, rea
 				Success: false,
 				Message: submitMessage,
 				Data:    writeResult,
-				Raw:     rawCapture(resp),
+				Raw:     kernel.CaptureRaw(resp),
 				Problems: []kernel.Problem{kernel.NormalizeProblem(kernel.Problem{
 					Code:    kernel.ProblemBusinessFailed,
 					Message: submitMessage,
@@ -98,7 +98,7 @@ func (c *Client) BindOperator(ctx context.Context, target map[string]string, rea
 							Success: false,
 							Message: submitMessage,
 							Data:    writeResult,
-							Raw:     rawCapture(resp),
+							Raw:     kernel.CaptureRaw(resp),
 							Problems: []kernel.Problem{kernel.NormalizeProblem(kernel.Problem{
 								Code:    kernel.ProblemBusinessFailed,
 								Message: submitMessage,
@@ -116,7 +116,7 @@ func (c *Client) BindOperator(ctx context.Context, target map[string]string, rea
 						Success: false,
 						Message: fmt.Sprintf("binding readback mismatch for %s", field),
 						Data:    writeResult,
-						Raw:     rawCapture(resp),
+						Raw:     kernel.CaptureRaw(resp),
 					}, &kernel.OpError{
 						Op:      "service.binding.set",
 						Message: fmt.Sprintf("%s expected=%q got=%q", field, expected, postState[field]),
@@ -149,7 +149,7 @@ func (c *Client) BindOperator(ctx context.Context, target map[string]string, rea
 						Success: false,
 						Message: "binding restore failed",
 						Data:    writeResult,
-						Raw:     rawCapture(resp),
+						Raw:     kernel.CaptureRaw(resp),
 					}, &kernel.OpError{
 						Op:      "service.binding.restore",
 						Message: fmt.Sprintf("%s expected=%q got=%q", field, expected, restored[field]),
@@ -169,7 +169,7 @@ func (c *Client) BindOperator(ctx context.Context, target map[string]string, rea
 		Success: true,
 		Message: "operator binding updated",
 		Data:    writeResult,
-		Raw:     rawCapture(resp),
+		Raw:     kernel.CaptureRaw(resp),
 	}, nil
 }
 
@@ -187,7 +187,7 @@ func (c *Client) GetConsumeProtect(ctx context.Context) (*kernel.OperationResult
 		Success: true,
 		Message: "consume protect state loaded",
 		Data:    state,
-		Raw:     rawCapture(resp),
+		Raw:     kernel.CaptureRaw(resp),
 	}, nil
 }
 
@@ -226,7 +226,7 @@ func (c *Client) ChangeConsumeProtect(ctx context.Context, limit string, readbac
 					Success: false,
 					Message: "consume protect readback mismatch",
 					Data:    writeResult,
-					Raw:     rawCapture(resp),
+					Raw:     kernel.CaptureRaw(resp),
 				}, &kernel.OpError{
 					Op:      "service.consume.set",
 					Message: fmt.Sprintf("installmentFlag expected=%q got=%q", limit, post.InstallmentFlag),
@@ -256,7 +256,7 @@ func (c *Client) ChangeConsumeProtect(ctx context.Context, limit string, readbac
 					Success: false,
 					Message: "consume protect restore failed",
 					Data:    writeResult,
-					Raw:     rawCapture(resp),
+					Raw:     kernel.CaptureRaw(resp),
 				}, &kernel.OpError{
 					Op:      "service.consume.restore",
 					Message: fmt.Sprintf("installmentFlag expected=%q got=%q", state.InstallmentFlag, restored.InstallmentFlag),
@@ -275,7 +275,7 @@ func (c *Client) ChangeConsumeProtect(ctx context.Context, limit string, readbac
 		Success: true,
 		Message: "consume protect updated",
 		Data:    writeResult,
-		Raw:     rawCapture(resp),
+		Raw:     kernel.CaptureRaw(resp),
 	}, nil
 }
 
@@ -308,7 +308,7 @@ func (c *Client) GetMacList(ctx context.Context) (*kernel.OperationResult[kernel
 			Success: true,
 			Message: "mac list endpoint returned empty body; treating as zero rows",
 			Data:    data,
-			Raw:     rawCapture(resp),
+			Raw:     kernel.CaptureRaw(resp),
 		}, nil
 	}
 
@@ -320,14 +320,14 @@ func (c *Client) GetMacList(ctx context.Context) (*kernel.OperationResult[kernel
 		return nil, &kernel.OpError{Op: "service.mac.list", Message: "parse json failed", Err: err}
 	}
 
-	total, _ := strconv.Atoi(toString(payload.Total))
+	total, _ := strconv.Atoi(kernel.ToString(payload.Total))
 	data := &kernel.MacListResult{Total: total, Rows: payload.Rows}
 	return &kernel.OperationResult[kernel.MacListResult]{
 		Level:   kernel.EvidenceConfirmed,
 		Success: true,
 		Message: fmt.Sprintf("loaded %d mac rows", len(payload.Rows)),
 		Data:    data,
-		Raw:     rawCapture(resp),
+		Raw:     kernel.CaptureRaw(resp),
 	}, nil
 }
 

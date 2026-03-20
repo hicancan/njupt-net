@@ -3,8 +3,6 @@ package selfservice
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
@@ -55,25 +53,6 @@ func extractText(doc *goquery.Document, selectors ...string) string {
 
 func normalizeText(s string) string {
 	return strings.TrimSpace(strings.Join(strings.Fields(s), " "))
-}
-
-func toString(v interface{}) string {
-	switch val := v.(type) {
-	case string:
-		return strings.TrimSpace(val)
-	case float64:
-		return strconv.FormatFloat(val, 'f', -1, 64)
-	case float32:
-		return strconv.FormatFloat(float64(val), 'f', -1, 64)
-	case int:
-		return strconv.Itoa(val)
-	case int64:
-		return strconv.FormatInt(val, 10)
-	case json.Number:
-		return val.String()
-	default:
-		return strings.TrimSpace(fmt.Sprint(val))
-	}
 }
 
 func boolFromJSON(v interface{}) bool {

@@ -57,6 +57,6 @@ func (c *Client) getBillList(ctx context.Context, op, path, startTime, endTime s
 		Success: true,
 		Message: fmt.Sprintf("loaded %d bill rows", len(data.Rows)),
 		Data:    data,
-		Raw:     rawCapture(resp),
+		Raw:     kernel.CaptureRaw(resp),
 	}, nil
 }

@@ -21,7 +21,7 @@ func parseBillListResult(body []byte) (*kernel.BillListResult, error) {
 	if payload.Rows == nil {
 		payload.Rows = []map[string]interface{}{}
 	}
-	total, _ := strconv.Atoi(toString(payload.Total))
+	total, _ := strconv.Atoi(kernel.ToString(payload.Total))
 	return &kernel.BillListResult{
 		Summary: payload.Summary,
 		Total:   total,

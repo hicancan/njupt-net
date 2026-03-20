@@ -48,8 +48,6 @@ func NewSessionClient(opts Options) (*SessionClient, error) {
 		},
 		Timeout: timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			_ = req
-			_ = via
 			return http.ErrUseLastResponse
 		},
 	}
@@ -58,15 +56,6 @@ func NewSessionClient(opts Options) (*SessionClient, error) {
 		baseURL: strings.TrimSpace(opts.BaseURL),
 		http:    client,
 	}, nil
-}
-
-// NewDefaultSessionClient is kept as a compatibility wrapper for older code paths.
-func NewDefaultSessionClient(baseURL string) (*SessionClient, error) {
-	return NewSessionClient(Options{
-		BaseURL:     baseURL,
-		Timeout:     30 * time.Second,
-		InsecureTLS: true,
-	})
 }
 
 // ResetCookies drops the current cookie jar so follow-up requests observe a fresh session.

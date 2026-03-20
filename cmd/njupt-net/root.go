@@ -18,18 +18,19 @@ type rootOptions struct {
 }
 
 type commandEnv struct {
-	opts     rootOptions
 	appCtx   *app.Context
+	appOpts  rootOptions
 	renderer *output.Renderer
+	rendered rootOptions
 }
 
 type commandEnvKey struct{}
 
-func newCommandEnv(opts rootOptions) *commandEnv {
-	return &commandEnv{opts: opts}
+func newCommandEnv() *commandEnv {
+	return &commandEnv{}
 }
 
-func (env *commandEnv) rendererFor(out io.Writer) (*output.Renderer, error) {
+func (env *commandEnv) rendererFor(cmd *cobra.Command, out io.Writer) (*output.Renderer, error) {
 	if env == nil {
 		return nil, &kernel.OpError{
 			Op:      "cmd.context",
@@ -44,18 +45,23 @@ func (env *commandEnv) rendererFor(out io.Writer) (*output.Renderer, error) {
 	if env.appCtx != nil && env.appCtx.Renderer != nil {
 		return env.appCtx.Renderer, nil
 	}
-	if env.renderer != nil {
+	opts, err := currentRootOptions(cmd)
+	if err != nil {
+		return nil, err
+	}
+	if env.renderer != nil && env.rendered == opts {
 		return env.renderer, nil
 	}
-	renderer, err := output.NewRenderer(out, env.opts.OutputMode)
+	renderer, err := output.NewRenderer(out, opts.OutputMode)
 	if err != nil {
 		return nil, err
 	}
 	env.renderer = renderer
+	env.rendered = opts
 	return renderer, nil
 }
 
-func (env *commandEnv) appContext(out io.Writer) (*app.Context, error) {
+func (env *commandEnv) appContext(cmd *cobra.Command, out io.Writer) (*app.Context, error) {
 	if env == nil {
 		return nil, &kernel.OpError{
 			Op:      "cmd.context",
@@ -68,18 +74,29 @@ func (env *commandEnv) appContext(out io.Writer) (*app.Context, error) {
 		}
 	}
 	if env.appCtx != nil {
-		return env.appCtx, nil
+		opts, err := currentRootOptions(cmd)
+		if err != nil {
+			return nil, err
+		}
+		if env.appOpts == opts {
+			return env.appCtx, nil
+		}
+	}
+	opts, err := currentRootOptions(cmd)
+	if err != nil {
+		return nil, err
 	}
 	appCtx, err := app.Load(app.Options{
-		ConfigPath:  env.opts.ConfigPath,
-		OutputMode:  env.opts.OutputMode,
-		AssumeYes:   env.opts.AssumeYes,
-		InsecureTLS: env.opts.InsecureTLS,
+		ConfigPath:  opts.ConfigPath,
+		OutputMode:  opts.OutputMode,
+		AssumeYes:   opts.AssumeYes,
+		InsecureTLS: opts.InsecureTLS,
 	}, out)
 	if err != nil {
 		return nil, err
 	}
 	env.appCtx = appCtx
+	env.appOpts = opts
 	return env.appCtx, nil
 }
 
@@ -93,7 +110,7 @@ func newRootCmd() *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	cmd.SetContext(context.WithValue(context.Background(), commandEnvKey{}, newCommandEnv(*opts)))
+	cmd.SetContext(context.WithValue(context.Background(), commandEnvKey{}, newCommandEnv()))
 
 	cmd.PersistentFlags().StringVar(&opts.ConfigPath, "config", "", "Path to config.json")
 	cmd.PersistentFlags().StringVar(&opts.OutputMode, "output", "", "Output mode: human|json")
@@ -123,10 +140,6 @@ func getCommandEnv(cmd *cobra.Command) (*commandEnv, error) {
 	}
 	env, ok := value.(*commandEnv)
 	if ok && env != nil {
-		env.opts.ConfigPath, _ = cmd.Root().Flags().GetString("config")
-		env.opts.OutputMode, _ = cmd.Root().Flags().GetString("output")
-		env.opts.AssumeYes, _ = cmd.Root().Flags().GetBool("yes")
-		env.opts.InsecureTLS, _ = cmd.Root().Flags().GetBool("insecure-tls")
 		return env, nil
 	}
 	return nil, &kernel.OpError{
@@ -138,4 +151,27 @@ func getCommandEnv(cmd *cobra.Command) (*commandEnv, error) {
 			Hint:  "use the root command context provided by newRootCmd",
 		},
 	}
+}
+
+func currentRootOptions(cmd *cobra.Command) (rootOptions, error) {
+	root := cmd
+	if root == nil {
+		return rootOptions{}, &kernel.OpError{
+			Op:      "cmd.context",
+			Message: "command is nil",
+			Err:     kernel.ErrInvalidConfig,
+			ProblemDetails: kernel.ConfigProblemDetails{
+				Field: "command",
+			},
+		}
+	}
+	if root.Root() != nil {
+		root = root.Root()
+	}
+	opts := rootOptions{}
+	opts.ConfigPath, _ = root.Flags().GetString("config")
+	opts.OutputMode, _ = root.Flags().GetString("output")
+	opts.AssumeYes, _ = root.Flags().GetBool("yes")
+	opts.InsecureTLS, _ = root.Flags().GetBool("insecure-tls")
+	return opts, nil
 }

@@ -10,16 +10,16 @@ func parseOnlineSessions(rows []map[string]interface{}) []kernel.OnlineSession {
 	sessions := make([]kernel.OnlineSession, 0, len(rows))
 	for _, row := range rows {
 		sessions = append(sessions, kernel.OnlineSession{
-			BRASID:       toString(row["brasid"]),
-			IP:           toString(row["ip"]),
-			LoginTime:    toString(row["loginTime"]),
-			MAC:          toString(row["mac"]),
-			SessionID:    toString(row["sessionId"]),
-			TerminalType: toString(row["terminalType"]),
-			UpFlow:       toString(row["upFlow"]),
-			DownFlow:     toString(row["downFlow"]),
-			UseTime:      toString(row["useTime"]),
-			UserID:       toString(row["userId"]),
+			BRASID:       kernel.ToString(row["brasid"]),
+			IP:           kernel.ToString(row["ip"]),
+			LoginTime:    kernel.ToString(row["loginTime"]),
+			MAC:          kernel.ToString(row["mac"]),
+			SessionID:    kernel.ToString(row["sessionId"]),
+			TerminalType: kernel.ToString(row["terminalType"]),
+			UpFlow:       kernel.ToString(row["upFlow"]),
+			DownFlow:     kernel.ToString(row["downFlow"]),
+			UseTime:      kernel.ToString(row["useTime"]),
+			UserID:       kernel.ToString(row["userId"]),
 		})
 	}
 	return sessions
@@ -30,22 +30,22 @@ func parseLoginHistoryEntries(rows [][]interface{}) []kernel.LoginHistoryEntry {
 	for _, row := range rows {
 		entry := kernel.LoginHistoryEntry{Raw: row}
 		if len(row) > 0 {
-			entry.LoginTime = toString(row[0])
+			entry.LoginTime = kernel.ToString(row[0])
 		}
 		if len(row) > 1 {
-			entry.LogoutTime = toString(row[1])
+			entry.LogoutTime = kernel.ToString(row[1])
 		}
 		if len(row) > 2 {
-			entry.IP = toString(row[2])
+			entry.IP = kernel.ToString(row[2])
 		}
 		if len(row) > 3 {
-			entry.MAC = toString(row[3])
+			entry.MAC = kernel.ToString(row[3])
 		}
 		if len(row) > 9 {
-			entry.TerminalFlag = toString(row[9])
+			entry.TerminalFlag = kernel.ToString(row[9])
 		}
 		if len(row) > 10 {
-			entry.TerminalType = toString(row[10])
+			entry.TerminalType = kernel.ToString(row[10])
 		}
 		entries = append(entries, entry)
 	}

@@ -41,9 +41,6 @@ func newDashboardOnlineListCmd() *cobra.Command {
 			}
 			result, opErr := client.GetOnlineList(cmd.Context())
 			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
-				if result.Data == nil {
-					return printKV(w, result.Message)
-				}
 				return printKV(w, result.Message)
 			})
 		},

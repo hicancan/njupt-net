@@ -98,7 +98,7 @@ func newGuardRunCmd() *cobra.Command {
 			return runner.Run(ctx, flags.Replace)
 		},
 	}
-	bindGuardFlags(cmd, &flags)
+	bindGuardRuntimeFlags(cmd, &flags)
 	cmd.Flags().StringVar(&flags.LogFile, "log-file", "", "Internal log file path override")
 	_ = cmd.Flags().MarkHidden("log-file")
 	return cmd
@@ -156,7 +156,7 @@ func newGuardStartCmd() *cobra.Command {
 			})
 		},
 	}
-	bindGuardFlags(cmd, &flags)
+	bindGuardRuntimeFlags(cmd, &flags)
 	return cmd
 }
 
@@ -186,7 +186,7 @@ func newGuardStopCmd() *cobra.Command {
 			})
 		},
 	}
-	bindGuardFlags(cmd, &flags)
+	bindGuardStateDirFlag(cmd, &flags)
 	return cmd
 }
 
@@ -251,7 +251,7 @@ func newGuardStatusCmd() *cobra.Command {
 			})
 		},
 	}
-	bindGuardFlags(cmd, &flags)
+	bindGuardStateDirFlag(cmd, &flags)
 	return cmd
 }
 
@@ -296,12 +296,16 @@ func newGuardOnceCmd() *cobra.Command {
 			})
 		},
 	}
-	bindGuardFlags(cmd, &flags)
+	bindGuardRuntimeFlags(cmd, &flags)
 	return cmd
 }
 
-func bindGuardFlags(cmd *cobra.Command, flags *guardFlags) {
+func bindGuardStateDirFlag(cmd *cobra.Command, flags *guardFlags) {
 	cmd.Flags().StringVar(&flags.StateDir, "state-dir", "", "Guard state directory")
+}
+
+func bindGuardRuntimeFlags(cmd *cobra.Command, flags *guardFlags) {
+	bindGuardStateDirFlag(cmd, flags)
 	cmd.Flags().IntVar(&flags.ProbeInterval, "probe-interval", 0, "Connectivity probe interval in seconds")
 	cmd.Flags().IntVar(&flags.BindingCheckInterval, "binding-check-interval", 0, "Binding audit interval in seconds")
 	cmd.Flags().StringVar(&flags.Timezone, "timezone", "", "IANA timezone for schedule evaluation")
@@ -353,12 +357,12 @@ func loadGuardStore(cmd *cobra.Command, stateDir string) (*runtimeguard.StateSto
 
 func buildGuardRootArgs(cmd *cobra.Command) []string {
 	args := []string{}
-	env, err := getCommandEnv(cmd)
+	opts, err := currentRootOptions(cmd)
 	if err == nil {
-		if strings.TrimSpace(env.opts.ConfigPath) != "" {
-			args = append(args, "--config", env.opts.ConfigPath)
+		if strings.TrimSpace(opts.ConfigPath) != "" {
+			args = append(args, "--config", opts.ConfigPath)
 		}
-		if env.opts.InsecureTLS {
+		if opts.InsecureTLS {
 			args = append(args, "--insecure-tls")
 		}
 	}

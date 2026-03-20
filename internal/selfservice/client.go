@@ -55,18 +55,6 @@ func (c *Client) readDocument(ctx context.Context, path string, opts kernel.Requ
 	return doc, resp, nil
 }
 
-func rawCapture(resp *kernel.SessionResponse) *kernel.RawCapture {
-	if resp == nil {
-		return nil
-	}
-	return &kernel.RawCapture{
-		Status:   resp.StatusCode,
-		Headers:  resp.Headers,
-		Body:     string(resp.Body),
-		FinalURL: resp.FinalURL,
-	}
-}
-
 func timestampQuery() map[string]string {
 	ts := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	return map[string]string{"t": ts, "_": ts}

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -30,7 +31,7 @@ func appContext(cmd *cobra.Command) (*app.Context, error) {
 	if err != nil {
 		return nil, err
 	}
-	return env.appContext(cmd.OutOrStdout())
+	return env.appContext(cmd, cmd.OutOrStdout())
 }
 
 func resolveAccount(cmd *cobra.Command, flags authFlags) (*config.AccountConfig, error) {
@@ -69,7 +70,7 @@ func render(cmd *cobra.Command, payload any, human func(io.Writer) error) error 
 	if payload == nil {
 		return nil
 	}
-	renderer, err := env.rendererFor(cmd.OutOrStdout())
+	renderer, err := env.rendererFor(cmd, cmd.OutOrStdout())
 	if err != nil {
 		return err
 	}
@@ -77,11 +78,11 @@ func render(cmd *cobra.Command, payload any, human func(io.Writer) error) error 
 }
 
 func requireYes(cmd *cobra.Command, action string) error {
-	env, err := getCommandEnv(cmd)
+	opts, err := currentRootOptions(cmd)
 	if err != nil {
 		return err
 	}
-	if env.opts.AssumeYes {
+	if opts.AssumeYes {
 		return nil
 	}
 	return (&app.Context{AssumeYes: false}).MustConfirm(action)
@@ -104,4 +105,33 @@ func printKV(w io.Writer, pairs ...string) error {
 		}
 	}
 	return nil
+}
+
+type usageError struct {
+	message string
+}
+
+func (e *usageError) Error() string {
+	return e.message
+}
+
+func parseFormPairs(pairs []string) (map[string]string, error) {
+	form := map[string]string{}
+	for _, pair := range pairs {
+		trimmed := strings.TrimSpace(pair)
+		if trimmed == "" {
+			continue
+		}
+		idx := strings.Index(trimmed, "=")
+		if idx <= 0 {
+			return nil, fmt.Errorf("raw post: invalid --form value %q, expected key=value", pair)
+		}
+		key := strings.TrimSpace(trimmed[:idx])
+		value := trimmed[idx+1:]
+		if key == "" {
+			return nil, fmt.Errorf("raw post: empty form key in %q", pair)
+		}
+		form[key] = value
+	}
+	return form, nil
 }

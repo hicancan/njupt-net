@@ -41,7 +41,7 @@ func (c *Client) GetOnlineList(ctx context.Context) (*kernel.OperationResult[[]k
 		Success: true,
 		Message: fmt.Sprintf("loaded %d online sessions", len(sessions)),
 		Data:    &sessions,
-		Raw:     rawCapture(resp),
+		Raw:     kernel.CaptureRaw(resp),
 	}, nil
 }
 
@@ -69,7 +69,7 @@ func (c *Client) GetLoginHistory(ctx context.Context) (*kernel.OperationResult[[
 		Success: true,
 		Message: fmt.Sprintf("loaded %d login history rows", len(entries)),
 		Data:    &entries,
-		Raw:     rawCapture(resp),
+		Raw:     kernel.CaptureRaw(resp),
 	}, nil
 }
 
@@ -90,7 +90,7 @@ func (c *Client) RefreshAccountRaw(ctx context.Context) (*kernel.OperationResult
 		Success: true,
 		Message: "refresh-account raw probe completed",
 		Data:    &data,
-		Raw:     rawCapture(resp),
+		Raw:     kernel.CaptureRaw(resp),
 	}, nil
 }
 
@@ -112,7 +112,7 @@ func (c *Client) GetMauthState(ctx context.Context) (*kernel.OperationResult[ker
 			Success: false,
 			Message: "session not authenticated",
 			Data:    &state,
-			Raw:     rawCapture(resp),
+			Raw:     kernel.CaptureRaw(resp),
 		}, &kernel.OpError{Op: "dashboard.mauth.get", Message: "refreshMauthType returned login page", Err: kernel.ErrAuth}
 	}
 
@@ -124,7 +124,7 @@ func (c *Client) GetMauthState(ctx context.Context) (*kernel.OperationResult[ker
 		Success: state != kernel.MauthUnknown,
 		Message: fmt.Sprintf("mauth state is %s", state),
 		Data:    &state,
-		Raw:     rawCapture(resp),
+		Raw:     kernel.CaptureRaw(resp),
 	}, nil
 }
 
@@ -159,7 +159,7 @@ func (c *Client) ToggleMauth(ctx context.Context) (*kernel.OperationResult[kerne
 			Success: false,
 			Message: "mauth state did not flip after toggle",
 			Data:    after.Data,
-			Raw:     rawCapture(resp),
+			Raw:     kernel.CaptureRaw(resp),
 			Problems: []kernel.Problem{kernel.NormalizeProblem(kernel.Problem{
 				Code:    kernel.ProblemReadbackMismatch,
 				Message: "mauth state did not flip after toggle",
@@ -176,7 +176,7 @@ func (c *Client) ToggleMauth(ctx context.Context) (*kernel.OperationResult[kerne
 		Success: true,
 		Message: fmt.Sprintf("mauth toggled to %s", *after.Data),
 		Data:    after.Data,
-		Raw:     rawCapture(resp),
+		Raw:     kernel.CaptureRaw(resp),
 	}, nil
 }
 
@@ -249,7 +249,7 @@ func (c *Client) ForceOffline(ctx context.Context, sessionID string) (*kernel.Op
 				Success: true,
 				Message: message,
 				Data:    &data,
-				Raw:     rawCapture(resp),
+				Raw:     kernel.CaptureRaw(resp),
 			}, nil
 		}
 	}
@@ -265,7 +265,7 @@ func (c *Client) ForceOffline(ctx context.Context, sessionID string) (*kernel.Op
 			Success: false,
 			Message: "target session still present after offline request verification",
 			Data:    &data,
-			Raw:     rawCapture(resp),
+			Raw:     kernel.CaptureRaw(resp),
 			Problems: []kernel.Problem{kernel.NormalizeProblem(kernel.Problem{
 				Code:    kernel.ProblemReadbackMismatch,
 				Message: "target session still present after offline request verification",

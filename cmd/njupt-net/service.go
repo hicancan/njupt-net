@@ -1,8 +1,8 @@
 package main
 
 import (
-	"fmt"
 	"io"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -264,7 +264,7 @@ func newServiceMacListCmd() *cobra.Command {
 				if result.Data == nil {
 					return printKV(w, result.Message)
 				}
-				return printKV(w, result.Message, "total="+itoa(result.Data.Total))
+				return printKV(w, result.Message, "total="+strconv.Itoa(result.Data.Total))
 			})
 		},
 	}
@@ -346,16 +346,4 @@ func newServiceMigrateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&mobileAccount, "mobile-account", "", "Target FLDEXTRA3 value")
 	cmd.Flags().StringVar(&mobilePassword, "mobile-password", "", "Target FLDEXTRA4 value")
 	return cmd
-}
-
-type usageError struct {
-	message string
-}
-
-func (e *usageError) Error() string {
-	return e.message
-}
-
-func itoa(v int) string {
-	return fmt.Sprintf("%d", v)
 }

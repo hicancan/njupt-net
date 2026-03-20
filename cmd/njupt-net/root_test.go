@@ -119,6 +119,50 @@ func TestGuardStopWithExplicitStateDirDoesNotRequireConfig(t *testing.T) {
 	}
 }
 
+func TestGuardStatusHelpOnlyShowsStateDirFlag(t *testing.T) {
+	cmd := newRootCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"guard", "status", "--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("guard status help failed: %v", err)
+	}
+
+	help := stdout.String()
+	if !strings.Contains(help, "--state-dir") {
+		t.Fatalf("expected state-dir flag in help: %s", help)
+	}
+	for _, unexpected := range []string{"--probe-interval", "--night-start", "--night-end", "--day-profile", "--replace"} {
+		if strings.Contains(help, unexpected) {
+			t.Fatalf("did not expect %s in guard status help: %s", unexpected, help)
+		}
+	}
+}
+
+func TestGuardStopHelpOnlyShowsStateDirFlag(t *testing.T) {
+	cmd := newRootCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"guard", "stop", "--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("guard stop help failed: %v", err)
+	}
+
+	help := stdout.String()
+	if !strings.Contains(help, "--state-dir") {
+		t.Fatalf("expected state-dir flag in help: %s", help)
+	}
+	for _, unexpected := range []string{"--probe-interval", "--night-start", "--night-end", "--day-profile"} {
+		if strings.Contains(help, unexpected) {
+			t.Fatalf("did not expect %s in guard stop help: %s", unexpected, help)
+		}
+	}
+}
+
 func TestCommandSurfaceMatchesREADME(t *testing.T) {
 	expectedLeafCommands := []string{
 		"self login",

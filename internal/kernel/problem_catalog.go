@@ -1,10 +1,5 @@
 package kernel
 
-import (
-	"fmt"
-	"strings"
-)
-
 // PortalProblemDetails is the typed machine-readable payload for Portal failures.
 type PortalProblemDetails struct {
 	Endpoint string                `json:"endpoint,omitempty"`
@@ -103,18 +98,18 @@ func normalizePortalProblemDetails(details any) any {
 		}
 	case map[string]any:
 		details := PortalProblemDetails{
-			Endpoint: toString(value["endpoint"]),
-			Msg:      toString(value["msg"]),
-			Result:   toString(value["result"]),
-			RetCode:  toString(value["retCode"]),
+			Endpoint: ToString(value["endpoint"]),
+			Msg:      ToString(value["msg"]),
+			Result:   ToString(value["result"]),
+			RetCode:  ToString(value["retCode"]),
 		}
 		if attempts, ok := value["attempts"].([]any); ok {
 			details.Attempts = make([]PortalAttemptDetail, 0, len(attempts))
 			for _, attempt := range attempts {
 				if mapped, ok := attempt.(map[string]any); ok {
 					details.Attempts = append(details.Attempts, PortalAttemptDetail{
-						Endpoint: toString(mapped["endpoint"]),
-						Error:    toString(mapped["error"]),
+						Endpoint: ToString(mapped["endpoint"]),
+						Error:    ToString(mapped["error"]),
 					})
 				}
 			}
@@ -146,11 +141,11 @@ func normalizeStateComparisonProblemDetails(details any) any {
 		}
 	case map[string]any:
 		return StateComparisonProblemDetails{
-			Field:    toString(value["field"]),
-			Expected: toString(value["expected"]),
-			Actual:   toString(value["actual"]),
-			Before:   toString(value["before"]),
-			After:    toString(value["after"]),
+			Field:    ToString(value["field"]),
+			Expected: ToString(value["expected"]),
+			Actual:   ToString(value["actual"]),
+			Before:   ToString(value["before"]),
+			After:    ToString(value["after"]),
 		}
 	default:
 		return nil
@@ -176,9 +171,9 @@ func normalizeConfigProblemDetails(details any) any {
 		}
 	case map[string]any:
 		return ConfigProblemDetails{
-			Field: toString(value["field"]),
-			Hint:  toString(value["hint"]),
-			Value: toString(value["value"]),
+			Field: ToString(value["field"]),
+			Hint:  ToString(value["hint"]),
+			Value: ToString(value["value"]),
 		}
 	default:
 		return nil
@@ -203,14 +198,10 @@ func normalizeCapabilityProblemDetails(details any) any {
 		}
 	case map[string]any:
 		return CapabilityProblemDetails{
-			Capability: toString(value["capability"]),
-			Reason:     toString(value["reason"]),
+			Capability: ToString(value["capability"]),
+			Reason:     ToString(value["reason"]),
 		}
 	default:
 		return nil
 	}
-}
-
-func toString(value any) string {
-	return strings.TrimSpace(fmt.Sprint(value))
 }

@@ -95,8 +95,6 @@ func newPortalLogoutCmd() *cobra.Command {
 
 func newPortalLogin801Cmd() *cobra.Command {
 	var flags authFlags
-	var ip string
-	var ipv6 string
 	cmd := &cobra.Command{
 		Use:   "login-801",
 		Short: "Run the Portal 801 admin-login probe",
@@ -105,22 +103,17 @@ func newPortalLogin801Cmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if ip == "" {
-				return &usageError{message: "portal login-801 requires --ip"}
-			}
 			client, err := newPortalClient(cmd)
 			if err != nil {
 				return err
 			}
-			result, opErr := client.Login801(cmd.Context(), account.Username, account.Password, ip, ipv6)
+			result, opErr := client.Login801(cmd.Context(), account.Username, account.Password)
 			return renderOperation(cmd, result, opErr, func(w io.Writer) error {
 				return printKV(w, result.Message)
 			})
 		},
 	}
 	bindAuthFlags(cmd, &flags)
-	cmd.Flags().StringVar(&ip, "ip", "", "Current WLAN IPv4")
-	cmd.Flags().StringVar(&ipv6, "ipv6", "", "Current WLAN IPv6")
 	return cmd
 }
 

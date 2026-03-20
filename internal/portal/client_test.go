@@ -213,7 +213,7 @@ func TestLogin801ReturnsBlockedAdminConsoleResultWhenTokenMissing(t *testing.T) 
 		},
 	}, "https://portal.example", "")
 
-	result, err := client.Login801(context.Background(), "user", "pass", "10.0.0.1", "")
+	result, err := client.Login801(context.Background(), "user", "pass")
 	if err == nil {
 		t.Fatal("expected blocked admin-console error")
 	}
@@ -248,7 +248,7 @@ func TestLogin801ReturnsConfirmedSuccessWhenTokenPresent(t *testing.T) {
 		},
 	}, "https://portal.example", "")
 
-	result, err := client.Login801(context.Background(), "user", "pass", "10.0.0.1", "")
+	result, err := client.Login801(context.Background(), "user", "pass")
 	if err != nil {
 		t.Fatalf("expected confirmed success, got %v", err)
 	}

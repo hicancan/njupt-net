@@ -27,7 +27,7 @@ func (c *Client) RawGet(ctx context.Context, path string) (*kernel.OperationResu
 		Success: true,
 		Message: fmt.Sprintf("raw GET completed for %s", path),
 		Data:    &data,
-		Raw:     rawCapture(resp),
+		Raw:     kernel.CaptureRaw(resp),
 	}, nil
 }
 
@@ -51,6 +51,6 @@ func (c *Client) RawPost(ctx context.Context, path string, form map[string]strin
 		Success: true,
 		Message: fmt.Sprintf("raw POST completed for %s", path),
 		Data:    &data,
-		Raw:     rawCapture(resp),
+		Raw:     kernel.CaptureRaw(resp),
 	}, nil
 }

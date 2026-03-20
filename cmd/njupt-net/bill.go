@@ -2,6 +2,7 @@ package main
 
 import (
 	"io"
+	"strconv"
 
 	"github.com/spf13/cobra"
 )
@@ -44,7 +45,7 @@ func newBillOnlineLogCmd() *cobra.Command {
 				if result.Data == nil {
 					return printKV(w, result.Message)
 				}
-				return printKV(w, result.Message, "total="+itoa(result.Data.Total))
+				return printKV(w, result.Message, "total="+strconv.Itoa(result.Data.Total))
 			})
 		},
 	}
@@ -78,7 +79,7 @@ func newBillMonthPayCmd() *cobra.Command {
 				if result.Data == nil {
 					return printKV(w, result.Message)
 				}
-				return printKV(w, result.Message, "total="+itoa(result.Data.Total))
+				return printKV(w, result.Message, "total="+strconv.Itoa(result.Data.Total))
 			})
 		},
 	}
@@ -112,7 +113,7 @@ func newBillOperatorLogCmd() *cobra.Command {
 				if result.Data == nil {
 					return printKV(w, result.Message)
 				}
-				return printKV(w, result.Message, "total="+itoa(result.Data.Total))
+				return printKV(w, result.Message, "total="+strconv.Itoa(result.Data.Total))
 			})
 		},
 	}

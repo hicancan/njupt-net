@@ -33,7 +33,7 @@ func (c *Client) Login(ctx context.Context, account, password string) (*kernel.O
 			Success: false,
 			Message: "missing checkcode token",
 			Data:    result,
-			Raw:     rawCapture(loginResp),
+			Raw:     kernel.CaptureRaw(loginResp),
 		}, &kernel.OpError{Op: "self.login.preflight", Message: "missing checkcode token", Err: kernel.ErrNeedFreshLoginPage}
 	}
 
@@ -72,7 +72,7 @@ func (c *Client) Login(ctx context.Context, account, password string) (*kernel.O
 		Success: result.DashboardReadable && result.SessionAlive,
 		Message: "self login succeeded",
 		Data:    result,
-		Raw:     rawCapture(verifyResp),
+		Raw:     kernel.CaptureRaw(verifyResp),
 	}
 	if opResult.Success {
 		return opResult, nil
@@ -104,7 +104,7 @@ func (c *Client) Logout(ctx context.Context) (*kernel.OperationResult[kernel.Sel
 	status, statusErr := c.Status(ctx)
 	if statusErr == nil && status != nil && status.Data != nil && !status.Data.LoggedIn {
 		status.Message = "self logout succeeded"
-		status.Raw = rawCapture(resp)
+		status.Raw = kernel.CaptureRaw(resp)
 		return status, nil
 	}
 	if strings.Contains(strings.ToLower(strings.TrimSpace(resp.FinalURL)), "/self/") {
@@ -112,7 +112,7 @@ func (c *Client) Logout(ctx context.Context) (*kernel.OperationResult[kernel.Sel
 			Level:   kernel.EvidenceGuarded,
 			Success: true,
 			Message: "self logout request completed; follow-up verification remained ambiguous",
-			Raw:     rawCapture(resp),
+			Raw:     kernel.CaptureRaw(resp),
 		}
 		if status != nil {
 			result.Data = status.Data
@@ -124,7 +124,7 @@ func (c *Client) Logout(ctx context.Context) (*kernel.OperationResult[kernel.Sel
 		Level:   kernel.EvidenceConfirmed,
 		Success: false,
 		Message: "logout could not be verified",
-		Raw:     rawCapture(resp),
+		Raw:     kernel.CaptureRaw(resp),
 	}
 	if status != nil {
 		result.Data = status.Data
@@ -163,6 +163,6 @@ func (c *Client) Status(ctx context.Context) (*kernel.OperationResult[kernel.Sel
 		Success: true,
 		Message: status.Reason,
 		Data:    status,
-		Raw:     rawCapture(dashboardResp),
+		Raw:     kernel.CaptureRaw(dashboardResp),
 	}, nil
 }
