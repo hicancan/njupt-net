@@ -1,6 +1,6 @@
 param(
     [string]$ExePath = "./dist/njupt-net-windows-amd64.exe",
-    [string]$CredentialsPath = "./credentials.json",
+    [string]$ConfigPath = "./config.json",
     [string]$IP = "",
     [switch]$IncludeWriteOps,
     [switch]$IncludeGuardOps,
@@ -88,10 +88,10 @@ function Exec-Cli {
 
 Write-Section "Precheck"
 Require-File $ExePath
-Require-File $CredentialsPath
+Require-File $ConfigPath
 
 $script:Exe = (Resolve-Path $ExePath).Path
-$cred = Get-Content $CredentialsPath -Raw | ConvertFrom-Json
+$cred = Get-Content $ConfigPath -Raw | ConvertFrom-Json
 
 if ([string]::IsNullOrWhiteSpace($IP)) {
     $IP = Detect-WifiIPv4
@@ -119,59 +119,59 @@ Invoke-Step "guard help" { Exec-Cli -CliArgs @("guard", "--help") }
 
 Write-Section "Self"
 Invoke-Step "self login (W)" {
-    Exec-Cli -CliArgs @("--config", $CredentialsPath, "self", "login", "--profile", "W")
+    Exec-Cli -CliArgs @("--config", $ConfigPath, "self", "login", "--profile", "W")
 }
 Invoke-Step "self status (W)" {
-    Exec-Cli -CliArgs @("--config", $CredentialsPath, "self", "status", "--profile", "W")
+    Exec-Cli -CliArgs @("--config", $ConfigPath, "self", "status", "--profile", "W")
 }
 Invoke-Step "self doctor (W)" {
-    Exec-Cli -CliArgs @("--config", $CredentialsPath, "self", "doctor", "--profile", "W")
+    Exec-Cli -CliArgs @("--config", $ConfigPath, "self", "doctor", "--profile", "W")
 }
 
 Write-Section "Dashboard"
 Invoke-Step "dashboard online-list (W)" {
-    Exec-Cli -CliArgs @("--config", $CredentialsPath, "dashboard", "online-list", "--profile", "W")
+    Exec-Cli -CliArgs @("--config", $ConfigPath, "dashboard", "online-list", "--profile", "W")
 }
 Invoke-Step "dashboard login-history (W)" {
-    Exec-Cli -CliArgs @("--config", $CredentialsPath, "dashboard", "login-history", "--profile", "W")
+    Exec-Cli -CliArgs @("--config", $ConfigPath, "dashboard", "login-history", "--profile", "W")
 }
 Invoke-Step "dashboard mauth get (W)" {
-    Exec-Cli -CliArgs @("--config", $CredentialsPath, "dashboard", "mauth", "get", "--profile", "W")
+    Exec-Cli -CliArgs @("--config", $ConfigPath, "dashboard", "mauth", "get", "--profile", "W")
 }
 
 Write-Section "Service"
 Invoke-Step "service binding get (W)" {
-    Exec-Cli -CliArgs @("--config", $CredentialsPath, "service", "binding", "get", "--profile", "W")
+    Exec-Cli -CliArgs @("--config", $ConfigPath, "service", "binding", "get", "--profile", "W")
 }
 Invoke-Step "service consume get (W)" {
-    Exec-Cli -CliArgs @("--config", $CredentialsPath, "service", "consume", "get", "--profile", "W")
+    Exec-Cli -CliArgs @("--config", $ConfigPath, "service", "consume", "get", "--profile", "W")
 }
 Invoke-Step "service mac list (W)" {
-    Exec-Cli -CliArgs @("--config", $CredentialsPath, "service", "mac", "list", "--profile", "W")
+    Exec-Cli -CliArgs @("--config", $ConfigPath, "service", "mac", "list", "--profile", "W")
 }
 
 Write-Section "Bill"
 Invoke-Step "bill online-log (W)" {
-    Exec-Cli -CliArgs @("--config", $CredentialsPath, "bill", "online-log", "--profile", "W")
+    Exec-Cli -CliArgs @("--config", $ConfigPath, "bill", "online-log", "--profile", "W")
 }
 
 Write-Section "Setting"
 Invoke-Step "setting person get (W)" {
-    Exec-Cli -CliArgs @("--config", $CredentialsPath, "setting", "person", "get", "--profile", "W")
+    Exec-Cli -CliArgs @("--config", $ConfigPath, "setting", "person", "get", "--profile", "W")
 }
 
 Write-Section "Raw"
 Invoke-Step "raw get login page" {
-    Exec-Cli -CliArgs @("--config", $CredentialsPath, "raw", "get", "/Self/login/?302=LI")
+    Exec-Cli -CliArgs @("--config", $ConfigPath, "raw", "get", "/Self/login/?302=LI")
 }
 Invoke-Step "raw get dashboard with login" {
-    Exec-Cli -CliArgs @("--config", $CredentialsPath, "raw", "get", "/Self/dashboard", "--profile", "W", "--login")
+    Exec-Cli -CliArgs @("--config", $ConfigPath, "raw", "get", "/Self/dashboard", "--profile", "W", "--login")
 }
 
 if (-not $ReadOnly -and -not $SkipPortal) {
     Write-Section "Portal"
     Invoke-Step "portal login (W, mobile)" {
-        Exec-Cli -CliArgs @("--config", $CredentialsPath, "portal", "login", "--profile", "W", "--ip", $IP, "--isp", "mobile")
+        Exec-Cli -CliArgs @("--config", $ConfigPath, "portal", "login", "--profile", "W", "--ip", $IP, "--isp", "mobile")
     }
 }
 elseif (-not $SkipPortal) {
@@ -185,7 +185,7 @@ if ($IncludeWriteOps -and -not $ReadOnly) {
     Write-Section "Write Ops"
     Invoke-Step "service binding set (W mobile fields)" {
         Exec-Cli -CliArgs @(
-            "--config", $CredentialsPath,
+            "--config", $ConfigPath,
             "--yes",
             "service", "binding", "set",
             "--profile", "W",
@@ -196,7 +196,7 @@ if ($IncludeWriteOps -and -not $ReadOnly) {
 
     Invoke-Step "service migrate (W -> B)" {
         Exec-Cli -CliArgs @(
-            "--config", $CredentialsPath,
+            "--config", $ConfigPath,
             "--yes",
             "service", "migrate",
             "--from-profile", "W",
@@ -213,17 +213,17 @@ elseif ($IncludeWriteOps -and $ReadOnly) {
 if ($IncludeGuardOps -and -not $ReadOnly) {
     Write-Section "Guard"
     Invoke-Step "guard once" {
-        Exec-Cli -CliArgs @("--config", $CredentialsPath, "--yes", "guard", "once")
+        Exec-Cli -CliArgs @("--config", $ConfigPath, "--yes", "guard", "once")
     }
     Invoke-Step "guard start --replace" {
-        Exec-Cli -CliArgs @("--config", $CredentialsPath, "--yes", "guard", "start", "--replace")
+        Exec-Cli -CliArgs @("--config", $ConfigPath, "--yes", "guard", "start", "--replace")
     }
     Start-Sleep -Seconds 2
     Invoke-Step "guard status" {
-        Exec-Cli -CliArgs @("--config", $CredentialsPath, "guard", "status")
+        Exec-Cli -CliArgs @("--config", $ConfigPath, "guard", "status")
     }
     Invoke-Step "guard stop" {
-        Exec-Cli -CliArgs @("--config", $CredentialsPath, "--yes", "guard", "stop")
+        Exec-Cli -CliArgs @("--config", $ConfigPath, "--yes", "guard", "stop")
     }
 }
 elseif ($IncludeGuardOps -and $ReadOnly) {

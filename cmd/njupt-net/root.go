@@ -95,7 +95,7 @@ func newRootCmd() *cobra.Command {
 	}
 	cmd.SetContext(context.WithValue(context.Background(), commandEnvKey{}, newCommandEnv(*opts)))
 
-	cmd.PersistentFlags().StringVar(&opts.ConfigPath, "config", "", "Path to credentials.json or compatible config")
+	cmd.PersistentFlags().StringVar(&opts.ConfigPath, "config", "", "Path to config.json")
 	cmd.PersistentFlags().StringVar(&opts.OutputMode, "output", "", "Output mode: human|json")
 	cmd.PersistentFlags().BoolVar(&opts.AssumeYes, "yes", false, "Allow side-effecting operations without confirmation")
 	cmd.PersistentFlags().BoolVar(&opts.InsecureTLS, "insecure-tls", false, "Allow insecure TLS certificates for Portal requests")

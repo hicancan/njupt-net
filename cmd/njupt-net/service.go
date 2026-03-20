@@ -335,10 +335,10 @@ func newServiceMigrateCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&from.Profile, "from-profile", "", "Configured source profile from credentials.json")
+	cmd.Flags().StringVar(&from.Profile, "from-profile", "", "Configured source profile from config.json")
 	cmd.Flags().StringVar(&from.Username, "from-username", "", "Explicit source username")
 	cmd.Flags().StringVar(&from.Password, "from-password", "", "Explicit source password")
-	cmd.Flags().StringVar(&to.Profile, "to-profile", "", "Configured target profile from credentials.json")
+	cmd.Flags().StringVar(&to.Profile, "to-profile", "", "Configured target profile from config.json")
 	cmd.Flags().StringVar(&to.Username, "to-username", "", "Explicit target username")
 	cmd.Flags().StringVar(&to.Password, "to-password", "", "Explicit target password")
 	cmd.Flags().StringVar(&telecomAccount, "telecom-account", "", "Target FLDEXTRA1 value")

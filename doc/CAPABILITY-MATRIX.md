@@ -76,5 +76,5 @@ These JSON shapes are now treated as frozen compatibility contracts. Future work
 - cross-platform Go guard runtime
 - official ImmortalWrt router deployment through `scripts/install-immortalwrt.ps1` with router-side `procd + guard run`
   - binary: `/usr/bin/njupt-net`
-  - config: `/root/credentials.json`
-  - state dir: `/tmp/njupt-net-guard`
+  - config: `/etc/njupt-net/config.json`
+  - state dir: `/tmp/njupt-net`

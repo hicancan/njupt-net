@@ -14,6 +14,7 @@ import (
 const (
 	defaultSelfBaseURL   = "http://10.10.244.240:8080"
 	defaultPortalBaseURL = "https://10.10.244.11:802/eportal/portal"
+	defaultConfigName    = "config.json"
 )
 
 // AccountConfig resolves profile-based login for Self and Portal.
@@ -70,7 +71,7 @@ type Config struct {
 	Guard    GuardConfig              `json:"guard"`
 }
 
-// Load resolves config from the given path or the default credentials.json.
+// Load resolves config from the given path or the default config.json.
 func Load(path string) (*Config, error) {
 	cfgPath, err := resolvePath(path)
 	if err != nil {
@@ -105,7 +106,7 @@ func resolvePath(path string) (string, error) {
 	if env := strings.TrimSpace(os.Getenv("NJUPT_NET_CONFIG")); env != "" {
 		candidates = append(candidates, env)
 	}
-	candidates = append(candidates, "credentials.json")
+	candidates = append(candidates, defaultConfigName)
 
 	for _, candidate := range candidates {
 		if candidate == "" {
@@ -122,11 +123,11 @@ func resolvePath(path string) (string, error) {
 
 	return "", &kernel.OpError{
 		Op:      "config.load",
-		Message: "no config file found; pass --config or create credentials.json",
+		Message: "no config file found; pass --config or create config.json",
 		Err:     kernel.ErrInvalidConfig,
 		ProblemDetails: kernel.ConfigProblemDetails{
 			Field: "configPath",
-			Hint:  "pass --config or create credentials.json",
+			Hint:  "pass --config or create config.json",
 		},
 	}
 }

@@ -20,7 +20,7 @@ type authFlags struct {
 }
 
 func bindAuthFlags(cmd *cobra.Command, flags *authFlags) {
-	cmd.Flags().StringVar(&flags.Profile, "profile", "", "Configured account profile from credentials.json")
+	cmd.Flags().StringVar(&flags.Profile, "profile", "", "Configured account profile from config.json")
 	cmd.Flags().StringVar(&flags.Username, "username", "", "Explicit username override")
 	cmd.Flags().StringVar(&flags.Password, "password", "", "Explicit password override")
 }

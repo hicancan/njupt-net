@@ -4,8 +4,8 @@ Deploy njupt-net to an ImmortalWrt/OpenWrt arm64 router and install it as a proc
 
 .DESCRIPTION
 This script runs on the local machine. It uploads the linux/arm64 binary and optionally
-credentials.json to the remote router over scp/ssh, installs the binary under /usr/bin,
-creates /etc/init.d/njupt-net, enables it, restarts it, and verifies guard status.
+config.json to the remote router over scp/ssh, installs the binary under /usr/bin, creates
+/etc/init.d/njupt-net, enables it, restarts it, and verifies guard status.
 
 The supported runtime model on the router is:
 - procd service
@@ -25,10 +25,10 @@ param(
 	[string]$HostName = "immortalwrt",
 	[string]$User = "root",
 	[string]$BinaryPath = ".\dist\njupt-net-linux-arm64",
-	[string]$ConfigPath = ".\credentials.json",
+	[string]$ConfigPath = "",
     [string]$RemoteBinaryPath = "/usr/bin/njupt-net",
-    [string]$RemoteConfigPath = "/root/credentials.json",
-    [string]$StateDir = "/tmp/njupt-net-guard",
+    [string]$RemoteConfigPath = "/etc/njupt-net/config.json",
+    [string]$StateDir = "/tmp/njupt-net",
     [string]$ServiceName = "njupt-net",
     [string]$RemoteTempDir = "/tmp/njupt-net-deploy",
     [bool]$UseInsecureTLS = $true,
@@ -63,6 +63,19 @@ function Resolve-InputPath {
 		throw "$Label not found: $Path"
 	}
 	return (Resolve-Path $Path).Path
+}
+
+function Resolve-ConfigPath {
+	param([string]$Path)
+	if (-not [string]::IsNullOrWhiteSpace($Path)) {
+		return Resolve-InputPath -Path $Path -Label "Config"
+	}
+
+	if (Test-Path ".\config.json") {
+		return (Resolve-Path ".\config.json").Path
+	}
+
+	throw "Config not found. Pass -ConfigPath explicitly or create .\config.json."
 }
 
 function Invoke-SSH {
@@ -131,7 +144,7 @@ if ($Build) {
 $BinaryFullPath = Resolve-InputPath -Path $BinaryPath -Label "Binary"
 $ConfigFullPath = $null
 if (-not $SkipConfigUpload) {
-	$ConfigFullPath = Resolve-InputPath -Path $ConfigPath -Label "Config"
+	$ConfigFullPath = Resolve-ConfigPath -Path $ConfigPath
 }
 
 $Target = "$User@$HostName"
@@ -139,7 +152,7 @@ $RemoteBinaryDir = [System.IO.Path]::GetDirectoryName($RemoteBinaryPath).Replace
 $RemoteConfigDir = [System.IO.Path]::GetDirectoryName($RemoteConfigPath).Replace("\", "/")
 $RemoteInitPath = "/etc/init.d/$ServiceName"
 $RemoteTempBinary = "$RemoteTempDir/njupt-net"
-$RemoteTempConfig = "$RemoteTempDir/credentials.json"
+$RemoteTempConfig = "$RemoteTempDir/config.json"
 $RemoteTempInit = "$RemoteTempDir/$ServiceName.init"
 $ServiceCommandLine = '    procd_set_param command "$PROG" --config "$CONFIG" --yes guard run --state-dir "$STATE_DIR"'
 if ($UseInsecureTLS) {
@@ -164,7 +177,7 @@ Write-Host "==> Uploading binary" -ForegroundColor Cyan
 Copy-SCP -Source $BinaryFullPath -Destination "${Target}:$RemoteTempBinary"
 
 if (-not $SkipConfigUpload) {
-	Write-Host "==> Uploading credentials.json" -ForegroundColor Cyan
+	Write-Host "==> Uploading config file" -ForegroundColor Cyan
 	Copy-SCP -Source $ConfigFullPath -Destination "${Target}:$RemoteTempConfig"
 }
 

@@ -27,4 +27,4 @@ Thumbs.db
 __pycache__/
 
 # Local secrets
-credentials.json
+config.json

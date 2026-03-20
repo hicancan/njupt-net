@@ -270,8 +270,8 @@ func TestStateStoreReadWriteStatusAndStopRequests(t *testing.T) {
 }
 
 func TestSupervisorHelpersAndWindowsDefaults(t *testing.T) {
-	args := BuildRunArgs([]string{"--config", "credentials.json"}, []string{"--state-dir", "dist/guard"})
-	wantArgs := []string{"--config", "credentials.json", "guard", "run", "--state-dir", "dist/guard"}
+	args := BuildRunArgs([]string{"--config", "config.json"}, []string{"--state-dir", "dist/guard"})
+	wantArgs := []string{"--config", "config.json", "guard", "run", "--state-dir", "dist/guard"}
 	if len(args) != len(wantArgs) {
 		t.Fatalf("unexpected args length: %#v", args)
 	}

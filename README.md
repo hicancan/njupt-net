@@ -223,7 +223,7 @@ bash ./scripts/build.sh all
 .\scripts\build.ps1 -Mode all
 ```
 
-### 2. 准备 `credentials.json`
+### 2. 准备 `config.json`
 
 最小示例：
 
@@ -323,9 +323,9 @@ njupt-net guard status --output json
 /etc/init.d/njupt-net status
 /etc/init.d/njupt-net restart
 /etc/init.d/njupt-net stop
-/usr/bin/njupt-net --config /root/credentials.json --output json guard status --state-dir /tmp/njupt-net-guard
+/usr/bin/njupt-net --config /etc/njupt-net/config.json --output json guard status --state-dir /tmp/njupt-net
 logread -e njupt-net
-cat /tmp/njupt-net-guard/status.json
+cat /tmp/njupt-net/status.json
 ```
 
 ## 机器可读契约

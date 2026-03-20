@@ -114,7 +114,7 @@ This keeps:
 - `guard status --state-dir ...`
 - `guard stop --state-dir ...`
 
-independent from `credentials.json` when those commands do not need protocol access.
+independent from `config.json` when those commands do not need protocol access.
 
 ### Machine-readable diagnostics are schema-first
 

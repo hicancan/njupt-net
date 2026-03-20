@@ -9,7 +9,7 @@ import (
 
 func TestLoad_UsesEnvAndDefaults(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "credentials.json")
+	path := filepath.Join(dir, "config.json")
 	payload := `{
 	  "accounts": {
 	    "A": {"username": "user-a", "password": "pass-a"}
@@ -86,7 +86,7 @@ func TestResolveAccount(t *testing.T) {
 
 func TestLoad_AllowsAccountlessConfig(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "credentials.json")
+	path := filepath.Join(dir, "config.json")
 	payload := `{
 	  "self": {"baseURL": "http://self.example"},
 	  "portal": {"baseURL": "https://portal.example"}

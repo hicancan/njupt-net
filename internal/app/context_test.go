@@ -10,7 +10,7 @@ import (
 
 func TestLoadAndMustConfirm(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "credentials.json")
+	path := filepath.Join(dir, "config.json")
 	payload := `{
 	  "accounts": {
 	    "A": {"username": "user-a", "password": "pass-a"}
