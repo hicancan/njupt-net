@@ -157,6 +157,8 @@ Override via environment variables: `NJUPT_NET_CONFIG`, `NJUPT_NET_OUTPUT`, `NJU
 
 ### Command Reference
 
+Top-level commands: `self` `dashboard` `service` `setting` `bill` `portal` `raw` `guard`
+
 ```
 njupt-net
 ├── self            # Self authentication & diagnosis
@@ -167,15 +169,25 @@ njupt-net
 ├── dashboard       # Dashboard operations
 │   ├── online-list     current online devices
 │   ├── login-history   login history records
+│   ├── refresh-account-raw  refresh raw account payload
 │   ├── offline         force-offline a session
-│   └── mauth           mauth state read/toggle
+│   └── mauth
+│       ├── get         read mauth state
+│       └── toggle      toggle mauth state
 ├── service         # Service management
-│   ├── binding         broadband binding (get/set)
-│   ├── consume         consume protection (get/set)
-│   ├── mac             MAC address list
+│   ├── binding
+│   │   ├── get         read broadband binding
+│   │   └── set         change broadband binding
+│   ├── consume
+│   │   ├── get         read consume protection
+│   │   └── set         change consume protection
+│   ├── mac
+│   │   └── list        MAC address list
 │   └── migrate         cross-account broadband migration
 ├── setting         # Personal settings
-│   └── person          person info (get/update)
+│   └── person
+│       ├── get         read person info
+│       └── update      update person info
 ├── bill            # Billing queries
 │   ├── online-log      usage logs
 │   ├── month-pay       monthly billing

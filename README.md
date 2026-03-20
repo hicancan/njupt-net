@@ -156,6 +156,8 @@ bash ./scripts/build.sh all        # Linux/macOS
 
 ### 命令速查
 
+顶层命令：`self` `dashboard` `service` `setting` `bill` `portal` `raw` `guard`
+
 ```
 njupt-net
 ├── self            # Self 认证与诊断
@@ -166,15 +168,25 @@ njupt-net
 ├── dashboard       # 仪表盘
 │   ├── online-list     在线设备列表
 │   ├── login-history   登录历史
+│   ├── refresh-account-raw  刷新账户原始响应
 │   ├── offline         强制下线指定会话
-│   └── mauth           mauth 状态读取/切换
+│   └── mauth
+│       ├── get         读取 mauth 状态
+│       └── toggle      切换 mauth 状态
 ├── service         # 业务管理
-│   ├── binding         宽带绑定 (get/set)
-│   ├── consume         消费保护 (get/set)
-│   ├── mac             MAC 列表
+│   ├── binding
+│   │   ├── get         读取宽带绑定
+│   │   └── set         修改宽带绑定
+│   ├── consume
+│   │   ├── get         读取消费保护
+│   │   └── set         修改消费保护
+│   ├── mac
+│   │   └── list        MAC 列表
 │   └── migrate         跨账号宽带迁移
 ├── setting         # 个人设置
-│   └── person          个人信息 (get/update)
+│   └── person
+│       ├── get         读取个人信息
+│       └── update      更新个人信息
 ├── bill            # 账单查询
 │   ├── online-log      上网日志
 │   ├── month-pay       月度账单
