@@ -40,7 +40,7 @@
 <td width="50%">
 
 ### 🛡️ 7×24 守护引擎
-内置日夜调度、绑定审计、连通性探测、Portal 恢复链。<br>支持前台运行、后台 daemon、procd 服务三种模式。
+内置日夜调度、绑定审计、连通性探测、Portal 恢复链。<br>支持前台运行、后台 daemon、OpenWrt procd 服务；Windows 可通过官方 WinSW 包装为系统服务。
 
 ### 🌐 路由器一键部署
 `install-immortalwrt.ps1` 自动编译、上传、安装 procd 服务。<br>状态文件走 `/tmp`，零闪存磨损。
@@ -69,6 +69,9 @@ njupt-net self doctor --profile B
 
 # 5. 启动 24 小时守护
 njupt-net guard start --replace --yes
+
+# 6. Windows 开机免登录守护（官方 WinSW）
+.\scripts\install-windows-service.ps1
 ```
 
 ## 📦 安装
@@ -266,12 +269,13 @@ flowchart TD
   N -- 否 --> O["🟡 Degraded"]
 ```
 
-### 三种运行模式
+### 四种运行模式
 
 | 模式 | 命令 | 适用场景 |
 |---|---|---|
 | **前台** | `guard run --yes` | 调试、日志观察 |
 | **后台** | `guard start --yes` | 桌面长期守护 |
+| **Windows 系统服务** | `.\scripts\install-windows-service.ps1` | Windows 开机免登录守护 |
 | **procd 服务** | `install-immortalwrt.ps1` | 路由器部署 |
 
 ### 默认策略
@@ -317,6 +321,34 @@ cat /tmp/njupt-net/status.json
 ```
 
 </details>
+
+## 🪟 Windows 系统服务
+
+通过仓库内脚本把 `njupt-net` 包装成 **Windows Service**：
+
+```powershell
+# 安装/重装服务（自动下载官方 WinSW 到 dist/winsw）
+.\scripts\install-windows-service.ps1
+
+# 查看服务状态
+.\dist\winsw\njupt-net-guard-service.exe status
+.\dist\njupt-net.exe --config .\config.json --state-dir .\dist\guard --output json guard status
+
+# 停止 / 启动 / 重启
+.\dist\winsw\njupt-net-guard-service.exe stop
+.\dist\winsw\njupt-net-guard-service.exe start
+.\dist\winsw\njupt-net-guard-service.exe restart
+
+# 卸载服务
+.\scripts\uninstall-windows-service.ps1
+```
+
+说明：
+
+- 脚本会下载 **官方 WinSW** 到 `dist/winsw/`，并生成同目录的服务 XML、wrapper 日志。
+- `dist/` 仍然是运行时目录，不建议提交；真正应提交的是 `scripts/install-windows-service.ps1`、`scripts/uninstall-windows-service.ps1` 和文档。
+- 服务默认是 `Automatic`，适用于 Windows 开机后、未登录用户时的长期守护。
+- 如果校园网 Portal 证书不规范，请在 `config.json` 中显式设置 `portal.insecureTLS`。
 
 ## 🏗️ 架构设计
 
