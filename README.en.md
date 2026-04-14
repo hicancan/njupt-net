@@ -41,7 +41,7 @@ All mutations are `readback-first` by default: pre-state → submit → readback
 <td width="50%">
 
 ### 🛡️ 24/7 Guard Engine
-Built-in day/night scheduling, binding audit, connectivity probing, and Portal recovery chain. Supports foreground, background daemon, and procd service modes.
+Built-in day/night scheduling, binding audit, connectivity probing, and Portal recovery chain. Supports foreground, background daemon, and OpenWrt procd service modes; on Windows it can be wrapped as a system service via the official WinSW wrapper.
 
 ### 🌐 One-Click Router Deployment
 `install-immortalwrt.ps1` auto-builds, uploads, and installs a procd service.<br>State files go to `/tmp` — zero flash wear.
@@ -70,6 +70,9 @@ njupt-net self doctor --profile B
 
 # 5. Start the 24/7 guard
 njupt-net guard start --replace --yes
+
+# 6. Windows boot-time guard without login (official WinSW)
+.\scripts\install-windows-service.ps1
 ```
 
 ## 📦 Installation
@@ -273,6 +276,7 @@ flowchart TD
 |---|---|---|
 | **Foreground** | `guard run --yes` | Debugging, log inspection |
 | **Background** | `guard start --yes` | Desktop long-running |
+| **Windows service** | `.\scripts\install-windows-service.ps1` | Boot-time guard on Windows without user login |
 | **procd service** | `install-immortalwrt.ps1` | Router deployment |
 
 ### Default Policy
@@ -318,6 +322,34 @@ cat /tmp/njupt-net/status.json
 ```
 
 </details>
+
+## 🪟 Windows System Service
+
+Use the repository script to wrap `njupt-net` as a real **Windows Service**:
+
+```powershell
+# Install or reinstall the service (downloads the official WinSW release to dist/winsw)
+.\scripts\install-windows-service.ps1
+
+# Inspect service and guard status
+.\dist\winsw\njupt-net-guard-service.exe status
+.\dist\njupt-net.exe --config .\config.json --state-dir .\dist\guard --output json guard status
+
+# Stop / start / restart
+.\dist\winsw\njupt-net-guard-service.exe stop
+.\dist\winsw\njupt-net-guard-service.exe start
+.\dist\winsw\njupt-net-guard-service.exe restart
+
+# Uninstall the service
+.\scripts\uninstall-windows-service.ps1
+```
+
+Notes:
+
+- The script downloads the **official WinSW** wrapper into `dist/winsw/` and generates the service XML and wrapper logs there.
+- `dist/` remains a runtime/output directory and should stay uncommitted; the tracked source of truth is the installer scripts plus documentation.
+- The generated service uses `Automatic` startup and is suitable for Windows boot-time guarding without an interactive login.
+- If your campus Portal certificate is not valid for strict TLS verification, set `portal.insecureTLS` explicitly in `config.json`.
 
 ## 🏗️ Architecture
 
