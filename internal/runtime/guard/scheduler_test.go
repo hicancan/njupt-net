@@ -41,3 +41,54 @@ func TestSchedulerDecide(t *testing.T) {
 		})
 	}
 }
+
+func TestSchedulerSkipsConfiguredNightStartWeekdays(t *testing.T) {
+	scheduler, err := NewScheduler(ScheduleConfig{
+		DayProfile:              "B",
+		NightProfile:            "W",
+		NightStart:              "23:30",
+		NightEnd:                "07:00",
+		SkipNightSwitchWeekdays: []string{"friday", "周六"},
+	})
+	if err != nil {
+		t.Fatalf("new scheduler: %v", err)
+	}
+
+	location := time.FixedZone("CST", 8*60*60)
+	tests := []struct {
+		name    string
+		when    time.Time
+		profile string
+		window  string
+	}{
+		{"friday before night", time.Date(2026, 3, 20, 23, 29, 0, 0, location), "B", windowDay},
+		{"friday night start", time.Date(2026, 3, 20, 23, 30, 0, 0, location), "B", windowNight},
+		{"saturday early morning belongs to friday night", time.Date(2026, 3, 21, 0, 30, 0, 0, location), "B", windowNight},
+		{"saturday night start", time.Date(2026, 3, 21, 23, 30, 0, 0, location), "B", windowNight},
+		{"sunday early morning belongs to saturday night", time.Date(2026, 3, 22, 0, 30, 0, 0, location), "B", windowNight},
+		{"sunday night still switches", time.Date(2026, 3, 22, 23, 30, 0, 0, location), "W", windowNight},
+		{"monday early morning belongs to sunday night", time.Date(2026, 3, 23, 0, 30, 0, 0, location), "W", windowNight},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decision := scheduler.Decide(tt.when)
+			if decision.Profile != tt.profile || decision.Window != tt.window {
+				t.Fatalf("unexpected decision: %#v", decision)
+			}
+		})
+	}
+}
+
+func TestSchedulerRejectsInvalidSkipWeekday(t *testing.T) {
+	_, err := NewScheduler(ScheduleConfig{
+		DayProfile:              "B",
+		NightProfile:            "W",
+		NightStart:              "23:30",
+		NightEnd:                "07:00",
+		SkipNightSwitchWeekdays: []string{"funday"},
+	})
+	if err == nil {
+		t.Fatal("expected invalid weekday error")
+	}
+}

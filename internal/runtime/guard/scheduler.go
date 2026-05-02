@@ -16,10 +16,11 @@ const (
 
 // ScheduleConfig is the validated day/night switching model for the guard runtime.
 type ScheduleConfig struct {
-	DayProfile   string
-	NightProfile string
-	NightStart   string
-	NightEnd     string
+	DayProfile              string
+	NightProfile            string
+	NightStart              string
+	NightEnd                string
+	SkipNightSwitchWeekdays []string
 }
 
 // Decision is one fully resolved profile decision.
@@ -30,9 +31,10 @@ type Decision struct {
 
 // Scheduler resolves the target profile for a specific local time.
 type Scheduler struct {
-	config            ScheduleConfig
-	nightStartMinutes int
-	nightEndMinutes   int
+	config                  ScheduleConfig
+	nightStartMinutes       int
+	nightEndMinutes         int
+	skipNightSwitchWeekdays map[time.Weekday]struct{}
 }
 
 // NewScheduler validates and compiles the schedule configuration.
@@ -48,10 +50,15 @@ func NewScheduler(cfg ScheduleConfig) (*Scheduler, error) {
 	if err != nil {
 		return nil, err
 	}
+	skipNightSwitchWeekdays, err := parseWeekdays(cfg.SkipNightSwitchWeekdays)
+	if err != nil {
+		return nil, err
+	}
 	return &Scheduler{
-		config:            cfg,
-		nightStartMinutes: start,
-		nightEndMinutes:   end,
+		config:                  cfg,
+		nightStartMinutes:       start,
+		nightEndMinutes:         end,
+		skipNightSwitchWeekdays: skipNightSwitchWeekdays,
 	}, nil
 }
 
@@ -73,6 +80,9 @@ func (c ScheduleConfig) Validate() error {
 	if _, err := parseClockMinutes(c.NightEnd); err != nil {
 		return err
 	}
+	if _, err := parseWeekdays(c.SkipNightSwitchWeekdays); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -80,10 +90,28 @@ func (c ScheduleConfig) Validate() error {
 func (s *Scheduler) Decide(now time.Time) Decision {
 	local := now
 	minutes := local.Hour()*60 + local.Minute()
-	if minutes >= s.nightStartMinutes || minutes < s.nightEndMinutes {
+	if minutes >= s.nightStartMinutes {
+		if s.shouldSkipNightSwitch(local.Weekday()) {
+			return Decision{Profile: s.config.DayProfile, Window: windowNight}
+		}
+		return Decision{Profile: s.config.NightProfile, Window: windowNight}
+	}
+	if minutes < s.nightEndMinutes {
+		nightStartDay := local.AddDate(0, 0, -1).Weekday()
+		if s.shouldSkipNightSwitch(nightStartDay) {
+			return Decision{Profile: s.config.DayProfile, Window: windowNight}
+		}
 		return Decision{Profile: s.config.NightProfile, Window: windowNight}
 	}
 	return Decision{Profile: s.config.DayProfile, Window: windowDay}
+}
+
+func (s *Scheduler) shouldSkipNightSwitch(weekday time.Weekday) bool {
+	if s == nil || len(s.skipNightSwitchWeekdays) == 0 {
+		return false
+	}
+	_, ok := s.skipNightSwitchWeekdays[weekday]
+	return ok
 }
 
 func parseClockMinutes(raw string) (int, error) {
@@ -103,4 +131,37 @@ func parseClockMinutes(raw string) (int, error) {
 		return 0, &kernel.OpError{Op: "guard.schedule", Message: fmt.Sprintf("invalid clock value %q", raw), Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.schedule.clock", Value: raw}}
 	}
 	return hour*60 + minute, nil
+}
+
+func parseWeekdays(values []string) (map[time.Weekday]struct{}, error) {
+	weekdays := make(map[time.Weekday]struct{}, len(values))
+	for _, value := range values {
+		weekday, err := parseWeekday(value)
+		if err != nil {
+			return nil, err
+		}
+		weekdays[weekday] = struct{}{}
+	}
+	return weekdays, nil
+}
+
+func parseWeekday(raw string) (time.Weekday, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "sunday", "sun", "0", "7", "周日", "星期日", "星期天", "日", "天":
+		return time.Sunday, nil
+	case "monday", "mon", "1", "周一", "星期一", "一":
+		return time.Monday, nil
+	case "tuesday", "tue", "2", "周二", "星期二", "二":
+		return time.Tuesday, nil
+	case "wednesday", "wed", "3", "周三", "星期三", "三":
+		return time.Wednesday, nil
+	case "thursday", "thu", "4", "周四", "星期四", "四":
+		return time.Thursday, nil
+	case "friday", "fri", "5", "周五", "星期五", "五":
+		return time.Friday, nil
+	case "saturday", "sat", "6", "周六", "星期六", "六":
+		return time.Saturday, nil
+	default:
+		return time.Sunday, &kernel.OpError{Op: "guard.schedule", Message: fmt.Sprintf("invalid weekday value %q", raw), Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.schedule.skipNightSwitchWeekdays", Value: raw}}
+	}
 }

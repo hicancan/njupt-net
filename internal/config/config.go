@@ -17,6 +17,14 @@ const (
 	defaultConfigName    = "config.json"
 )
 
+var defaultSkipNightSwitchWeekdays = []string{"friday", "saturday"}
+
+// DefaultSkipNightSwitchWeekdays returns the configured default night-start weekdays
+// on which the guard keeps using the day profile.
+func DefaultSkipNightSwitchWeekdays() []string {
+	return append([]string(nil), defaultSkipNightSwitchWeekdays...)
+}
+
 // AccountConfig resolves profile-based login for Self and Portal.
 type AccountConfig struct {
 	Username string `json:"username"`
@@ -46,10 +54,11 @@ type PortalConfig struct {
 
 // GuardScheduleConfig contains the supported day/night schedule model.
 type GuardScheduleConfig struct {
-	DayProfile   string `json:"dayProfile"`
-	NightProfile string `json:"nightProfile"`
-	NightStart   string `json:"nightStart"`
-	NightEnd     string `json:"nightEnd"`
+	DayProfile              string   `json:"dayProfile"`
+	NightProfile            string   `json:"nightProfile"`
+	NightStart              string   `json:"nightStart"`
+	NightEnd                string   `json:"nightEnd"`
+	SkipNightSwitchWeekdays []string `json:"skipNightSwitchWeekdays,omitempty"`
 }
 
 // GuardConfig contains runtime defaults for the supported Go guard.
@@ -168,6 +177,9 @@ func (c *Config) applyDefaults() {
 	}
 	if strings.TrimSpace(c.Guard.Schedule.NightEnd) == "" {
 		c.Guard.Schedule.NightEnd = "07:00"
+	}
+	if c.Guard.Schedule.SkipNightSwitchWeekdays == nil {
+		c.Guard.Schedule.SkipNightSwitchWeekdays = DefaultSkipNightSwitchWeekdays()
 	}
 }
 

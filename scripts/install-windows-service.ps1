@@ -24,7 +24,8 @@ param(
     [string]$ConfigPath = "",
     [string]$StateDir = ".\dist\guard",
     [string]$WinSWVersion = "v2.12.0",
-    [switch]$RefreshWinSW
+    [switch]$RefreshWinSW,
+    [switch]$ReplaceLegacy
 )
 
 Set-StrictMode -Version Latest
@@ -74,6 +75,11 @@ function Invoke-WinSW {
     }
 }
 
+function Escape-Xml {
+    param([Parameter(Mandatory = $true)][string]$Value)
+    return [System.Security.SecurityElement]::Escape($Value)
+}
+
 function Ensure-WinSW {
     param(
         [Parameter(Mandatory = $true)][string]$Directory,
@@ -113,8 +119,8 @@ if (-not (Test-IsAdmin)) {
         $args += "-$($entry.Key)"
         $args += ('"' + [string]$entry.Value + '"')
     }
-    Start-Process -FilePath $hostExe -Verb RunAs -ArgumentList $args | Out-Null
-    exit 0
+    $process = Start-Process -FilePath $hostExe -Verb RunAs -ArgumentList $args -PassThru -Wait
+    exit $process.ExitCode
 }
 
 $binary = Resolve-InputPath -Path $BinaryPath -Label "Binary"
@@ -127,15 +133,35 @@ $xmlPath = Join-Path $serviceDir "njupt-net-guard-service.xml"
 Ensure-WinSW -Directory $serviceDir -ExecutablePath $wrapperPath -Version $WinSWVersion -ForceRefresh:$RefreshWinSW.IsPresent
 New-Item -ItemType Directory -Force -Path $state | Out-Null
 
+$serviceIDXml = Escape-Xml $ServiceID
+$displayNameXml = Escape-Xml $DisplayName
+$descriptionXml = Escape-Xml $Description
+$binaryXml = Escape-Xml $binary
+$repoRootXml = Escape-Xml ([string]$RepoRoot)
+$arguments = @(
+    "--config",
+    ('"' + $config + '"'),
+    "guard",
+    "run",
+    "--state-dir",
+    ('"' + $state + '"'),
+    "--yes"
+)
+if ($ReplaceLegacy.IsPresent) {
+    $arguments += "--replace"
+}
+$argumentsXml = Escape-Xml ($arguments -join " ")
+
 $xml = @"
 <service>
-  <id>$ServiceID</id>
-  <name>$DisplayName</name>
-  <description>$Description</description>
-  <executable>$binary</executable>
-  <arguments>--config "$config" --state-dir "$state" --yes guard run</arguments>
-  <workingdirectory>$RepoRoot</workingdirectory>
+  <id>$serviceIDXml</id>
+  <name>$displayNameXml</name>
+  <description>$descriptionXml</description>
+  <executable>$binaryXml</executable>
+  <arguments>$argumentsXml</arguments>
+  <workingdirectory>$repoRootXml</workingdirectory>
   <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
   <serviceaccount>
     <user>LocalSystem</user>
   </serviceaccount>

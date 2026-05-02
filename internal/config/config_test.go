@@ -58,6 +58,40 @@ func TestLoad_UsesEnvAndDefaults(t *testing.T) {
 	if cfg.Guard.Schedule.DayProfile != "A" || cfg.Guard.Schedule.NightProfile != "A" {
 		t.Fatalf("unexpected explicit guard profiles: %#v", cfg.Guard.Schedule)
 	}
+	if got := cfg.Guard.Schedule.SkipNightSwitchWeekdays; len(got) != 2 || got[0] != "friday" || got[1] != "saturday" {
+		t.Fatalf("unexpected default skip night switch weekdays: %#v", got)
+	}
+}
+
+func TestLoad_AllowsExplicitEmptySkipNightSwitchWeekdays(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	payload := `{
+	  "accounts": {
+	    "A": {"username": "user-a", "password": "pass-a"}
+	  },
+	  "cmcc": {"account": "cmcc-user", "password": "cmcc-pass"},
+	  "self": {},
+	  "portal": {},
+	  "guard": {
+	    "schedule": {
+	      "dayProfile": "A",
+	      "nightProfile": "A",
+	      "skipNightSwitchWeekdays": []
+	    }
+	  }
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if got := cfg.Guard.Schedule.SkipNightSwitchWeekdays; len(got) != 0 {
+		t.Fatalf("expected explicit empty skip weekday list, got %#v", got)
+	}
 }
 
 func TestResolveAccount(t *testing.T) {

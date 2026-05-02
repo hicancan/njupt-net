@@ -41,8 +41,8 @@ if (-not (Test-IsAdmin)) {
         $args += "-$($entry.Key)"
         $args += ('"' + [string]$entry.Value + '"')
     }
-    Start-Process -FilePath $hostExe -Verb RunAs -ArgumentList $args | Out-Null
-    exit 0
+    $process = Start-Process -FilePath $hostExe -Verb RunAs -ArgumentList $args -PassThru -Wait
+    exit $process.ExitCode
 }
 
 $wrapperPath = Join-Path $RepoRoot "dist\winsw\njupt-net-guard-service.exe"

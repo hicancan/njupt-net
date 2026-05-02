@@ -71,6 +71,9 @@ func TestBuildSettingsResolvesOverridesAndFallbacks(t *testing.T) {
 	if settings.Schedule.DayProfile != "B" || settings.Schedule.NightProfile != "W" {
 		t.Fatalf("unexpected schedule: %#v", settings.Schedule)
 	}
+	if got := settings.Schedule.SkipNightSwitchWeekdays; len(got) != 2 || got[0] != "friday" || got[1] != "saturday" {
+		t.Fatalf("unexpected skip night switch weekdays: %#v", got)
+	}
 	if settings.PortalFallbackBaseURL != "https://p.njupt.edu.cn:802/eportal/portal" {
 		t.Fatalf("unexpected fallback url: %#v", settings.PortalFallbackBaseURL)
 	}
@@ -115,6 +118,11 @@ func TestBuildSettingsRejectsInvalidInputs(t *testing.T) {
 	}
 	if _, err := BuildSettings(baseConfig, Overrides{NightProfile: "W"}, false); err == nil {
 		t.Fatal("expected missing profile error")
+	}
+	invalidSkipWeekday := *baseConfig
+	invalidSkipWeekday.Guard.Schedule.SkipNightSwitchWeekdays = []string{"funday"}
+	if _, err := BuildSettings(&invalidSkipWeekday, Overrides{}, false); err == nil {
+		t.Fatal("expected invalid skip weekday error")
 	}
 }
 
