@@ -127,7 +127,8 @@ Create `config.json` (recommended: copy from `config.example.json`; already in `
       "dayProfile": "B",
       "nightProfile": "W",
       "nightStart": "23:30",
-      "nightEnd": "07:00"
+      "nightEnd": "07:00",
+      "skipNightSwitchWeekdays": ["friday", "saturday"]
     }
   }
 }
@@ -155,6 +156,7 @@ Create `config.json` (recommended: copy from `config.example.json`; already in `
 | `guard.schedule.nightProfile` | no default | Profile name used at night; required |
 | `guard.schedule.nightStart` | `23:30` | Night window start time |
 | `guard.schedule.nightEnd` | `07:00` | Night window end time |
+| `guard.schedule.skipNightSwitchWeekdays` | `["friday","saturday"]` | Night windows starting on these weekdays keep the day profile; set `[]` to switch every night |
 | `output` | `human` | Default output mode: `human` / `json` |
 
 Override via environment variables: `NJUPT_NET_CONFIG`, `NJUPT_NET_OUTPUT`, `NJUPT_NET_SELF_BASE_URL`, `NJUPT_NET_PORTAL_BASE_URL`, etc.
@@ -283,6 +285,7 @@ flowchart TD
 
 - ☀️ Day 07:00–23:30 → profile `B`
 - 🌙 Night 23:30–07:00 → profile `W`
+- 🌙 Night windows starting on Friday or Saturday keep profile `B` by default
 - **Immediate** recovery when connectivity fails
 - Binding correctness audit every 180 seconds
 - Graceful SIGTERM on stop, forced kill on timeout

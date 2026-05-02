@@ -126,7 +126,8 @@ bash ./scripts/build.sh all        # Linux/macOS
       "dayProfile": "B",
       "nightProfile": "W",
       "nightStart": "23:30",
-      "nightEnd": "07:00"
+      "nightEnd": "07:00",
+      "skipNightSwitchWeekdays": ["friday", "saturday"]
     }
   }
 }
@@ -154,6 +155,7 @@ bash ./scripts/build.sh all        # Linux/macOS
 | `guard.schedule.nightProfile` | 无默认值 | 夜间守护使用的账号名，必填 |
 | `guard.schedule.nightStart` | `23:30` | 夜间窗口开始时间 |
 | `guard.schedule.nightEnd` | `07:00` | 夜间窗口结束时间 |
+| `guard.schedule.skipNightSwitchWeekdays` | `["friday","saturday"]` | 这些星期开始的夜间窗口不切到夜间账号；写 `[]` 表示每天夜间都切换 |
 | `output` | `human` | 默认输出模式: `human` / `json` |
 
 也可通过环境变量覆盖：`NJUPT_NET_CONFIG`、`NJUPT_NET_OUTPUT`、`NJUPT_NET_SELF_BASE_URL`、`NJUPT_NET_PORTAL_BASE_URL` 等。
@@ -282,6 +284,7 @@ flowchart TD
 
 - ☀️ 白天 07:00–23:30 → 守护账号 `B`
 - 🌙 夜间 23:30–07:00 → 守护账号 `W`
+- 🌙 周五、周六开始的夜间窗口默认保留 `B`，不切到 `W`
 - 连通性断开后**立即**触发恢复链
 - 每 180 秒执行一次绑定正确性审计
 - `stop` 先发 SIGTERM 优雅退出，超时后强制终止

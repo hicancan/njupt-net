@@ -157,11 +157,16 @@ func BuildSettings(cfg *config.Config, overrides Overrides, insecureTLS bool) (S
 		return Settings{}, &kernel.OpError{Op: "guard.settings", Message: "probe and binding intervals must be positive", Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.intervals", Hint: "probeIntervalSeconds and bindingCheckIntervalSeconds must be positive"}}
 	}
 
+	skipNightSwitchWeekdays := cfg.Guard.Schedule.SkipNightSwitchWeekdays
+	if skipNightSwitchWeekdays == nil {
+		skipNightSwitchWeekdays = config.DefaultSkipNightSwitchWeekdays()
+	}
 	schedule := ScheduleConfig{
-		DayProfile:   chooseString(overrides.DayProfile, cfg.Guard.Schedule.DayProfile),
-		NightProfile: chooseString(overrides.NightProfile, cfg.Guard.Schedule.NightProfile),
-		NightStart:   chooseString(overrides.NightStart, cfg.Guard.Schedule.NightStart),
-		NightEnd:     chooseString(overrides.NightEnd, cfg.Guard.Schedule.NightEnd),
+		DayProfile:              chooseString(overrides.DayProfile, cfg.Guard.Schedule.DayProfile),
+		NightProfile:            chooseString(overrides.NightProfile, cfg.Guard.Schedule.NightProfile),
+		NightStart:              chooseString(overrides.NightStart, cfg.Guard.Schedule.NightStart),
+		NightEnd:                chooseString(overrides.NightEnd, cfg.Guard.Schedule.NightEnd),
+		SkipNightSwitchWeekdays: append([]string(nil), skipNightSwitchWeekdays...),
 	}
 	if err := schedule.Validate(); err != nil {
 		return Settings{}, err
