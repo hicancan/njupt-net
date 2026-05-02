@@ -55,6 +55,12 @@ func TestLoad_UsesEnvAndDefaults(t *testing.T) {
 	if cfg.Guard.StateDir != filepath.Join("dist", "guard") {
 		t.Fatalf("expected default guard state dir, got %q", cfg.Guard.StateDir)
 	}
+	if cfg.Guard.LogRetentionDays != 7 {
+		t.Fatalf("expected default guard log retention days, got %d", cfg.Guard.LogRetentionDays)
+	}
+	if cfg.Guard.LogMaxFiles != 14 {
+		t.Fatalf("expected default guard log max files, got %d", cfg.Guard.LogMaxFiles)
+	}
 	if cfg.Guard.Schedule.DayProfile != "A" || cfg.Guard.Schedule.NightProfile != "A" {
 		t.Fatalf("unexpected explicit guard profiles: %#v", cfg.Guard.Schedule)
 	}

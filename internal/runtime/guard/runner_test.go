@@ -122,7 +122,7 @@ func TestRunnerRunEmitsStartupAndShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	logPath, err := store.NextLogPath()
+	logPath, err := store.NextLogPath(testLogRetentionPolicy())
 	if err != nil {
 		t.Fatalf("next log path: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestRunnerHealthyCycleDoesNotEmitDegradedWhenPortalWasNotNeeded(t *testing.
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	logPath, err := store.NextLogPath()
+	logPath, err := store.NextLogPath(testLogRetentionPolicy())
 	if err != nil {
 		t.Fatalf("next log path: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestRunnerForceSwitchPortalFailureUsesNonDegradedEventMessage(t *testing.T)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	logPath, err := store.NextLogPath()
+	logPath, err := store.NextLogPath(testLogRetentionPolicy())
 	if err != nil {
 		t.Fatalf("next log path: %v", err)
 	}
@@ -330,7 +330,12 @@ func testGuardSettings() Settings {
 			NightStart:   "23:30",
 			NightEnd:     "07:00",
 		},
+		LogRetention: testLogRetentionPolicy(),
 	}
+}
+
+func testLogRetentionPolicy() LogRetentionPolicy {
+	return LogRetentionPolicy{RetentionDays: 7, MaxFiles: 14}
 }
 
 func readEventKinds(t *testing.T, path string) []EventKind {

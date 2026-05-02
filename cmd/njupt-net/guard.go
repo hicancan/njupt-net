@@ -18,6 +18,8 @@ type guardFlags struct {
 	StateDir             string
 	ProbeInterval        int
 	BindingCheckInterval int
+	LogRetentionDays     int
+	LogMaxFiles          int
 	Timezone             string
 	DayProfile           string
 	NightProfile         string
@@ -62,7 +64,7 @@ func newGuardRunCmd() *cobra.Command {
 					return err
 				}
 			} else {
-				logPath, err := store.NextLogPath()
+				logPath, err := store.NextLogPath(settings.LogRetention)
 				if err != nil {
 					return err
 				}
@@ -113,7 +115,7 @@ func newGuardStartCmd() *cobra.Command {
 			if err := requireYes(cmd, "guard start"); err != nil {
 				return err
 			}
-			_, store, err := loadGuardSettings(cmd, flags)
+			settings, store, err := loadGuardSettings(cmd, flags)
 			if err != nil {
 				return err
 			}
@@ -135,7 +137,7 @@ func newGuardStartCmd() *cobra.Command {
 			}
 			rootArgs := buildGuardRootArgs(cmd)
 			runArgs := buildGuardRunArgs(flags)
-			result, err := supervisor.Start(cmd.Context(), runtimeguard.BuildRunArgs(rootArgs, runArgs), flags.Replace)
+			result, err := supervisor.Start(cmd.Context(), runtimeguard.BuildRunArgs(rootArgs, runArgs), flags.Replace, settings.LogRetention)
 			if result == nil {
 				result = &runtimeguard.ControlResult{}
 			}
@@ -308,6 +310,8 @@ func bindGuardRuntimeFlags(cmd *cobra.Command, flags *guardFlags) {
 	bindGuardStateDirFlag(cmd, flags)
 	cmd.Flags().IntVar(&flags.ProbeInterval, "probe-interval", 0, "Connectivity probe interval in seconds")
 	cmd.Flags().IntVar(&flags.BindingCheckInterval, "binding-check-interval", 0, "Binding audit interval in seconds")
+	cmd.Flags().IntVar(&flags.LogRetentionDays, "log-retention-days", 0, "Guard log retention in days")
+	cmd.Flags().IntVar(&flags.LogMaxFiles, "log-max-files", 0, "Maximum guard log files to retain")
 	cmd.Flags().StringVar(&flags.Timezone, "timezone", "", "IANA timezone for schedule evaluation")
 	cmd.Flags().StringVar(&flags.DayProfile, "day-profile", "", "All-day daytime profile")
 	cmd.Flags().StringVar(&flags.NightProfile, "night-profile", "", "All-day nighttime profile")
@@ -325,6 +329,8 @@ func loadGuardSettings(cmd *cobra.Command, flags guardFlags) (runtimeguard.Setti
 		StateDir:             flags.StateDir,
 		ProbeInterval:        flags.ProbeInterval,
 		BindingCheckInterval: flags.BindingCheckInterval,
+		LogRetentionDays:     flags.LogRetentionDays,
+		LogMaxFiles:          flags.LogMaxFiles,
 		Timezone:             flags.Timezone,
 		DayProfile:           flags.DayProfile,
 		NightProfile:         flags.NightProfile,
@@ -379,6 +385,12 @@ func buildGuardRunArgs(flags guardFlags) []string {
 	}
 	if flags.BindingCheckInterval > 0 {
 		args = append(args, "--binding-check-interval", fmt.Sprintf("%d", flags.BindingCheckInterval))
+	}
+	if flags.LogRetentionDays > 0 {
+		args = append(args, "--log-retention-days", fmt.Sprintf("%d", flags.LogRetentionDays))
+	}
+	if flags.LogMaxFiles > 0 {
+		args = append(args, "--log-max-files", fmt.Sprintf("%d", flags.LogMaxFiles))
 	}
 	if strings.TrimSpace(flags.Timezone) != "" {
 		args = append(args, "--timezone", flags.Timezone)

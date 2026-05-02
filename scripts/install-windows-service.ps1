@@ -24,6 +24,8 @@ param(
     [string]$ConfigPath = "",
     [string]$StateDir = ".\dist\guard",
     [string]$WinSWVersion = "v2.12.0",
+    [int]$WinSWLogSizeThresholdKB = 10240,
+    [int]$WinSWLogKeepFiles = 8,
     [switch]$RefreshWinSW,
     [switch]$ReplaceLegacy
 )
@@ -126,6 +128,12 @@ if (-not (Test-IsAdmin)) {
 $binary = Resolve-InputPath -Path $BinaryPath -Label "Binary"
 $config = Resolve-ConfigPath -Path $ConfigPath
 $state = if (Test-Path $StateDir) { (Resolve-Path $StateDir).Path } else { [System.IO.Path]::GetFullPath($StateDir) }
+if ($WinSWLogSizeThresholdKB -le 0) {
+    throw "WinSWLogSizeThresholdKB must be positive"
+}
+if ($WinSWLogKeepFiles -le 0) {
+    throw "WinSWLogKeepFiles must be positive"
+}
 $serviceDir = Join-Path $RepoRoot "dist\winsw"
 $wrapperPath = Join-Path $serviceDir "njupt-net-guard-service.exe"
 $xmlPath = Join-Path $serviceDir "njupt-net-guard-service.xml"
@@ -166,7 +174,10 @@ $xml = @"
     <user>LocalSystem</user>
   </serviceaccount>
   <logpath>%BASE%\logs</logpath>
-  <log mode="append" />
+  <log mode="roll-by-size">
+    <sizeThreshold>$WinSWLogSizeThresholdKB</sizeThreshold>
+    <keepFiles>$WinSWLogKeepFiles</keepFiles>
+  </log>
   <onfailure action="restart" delay="10 sec" />
   <resetfailure>1 hour</resetfailure>
   <stoptimeout>30 sec</stoptimeout>

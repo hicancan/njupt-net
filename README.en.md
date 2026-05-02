@@ -123,6 +123,8 @@ Create `config.json` (recommended: copy from `config.example.json`; already in `
     "insecureTLS": true
   },
   "guard": {
+    "logRetentionDays": 7,
+    "logMaxFiles": 14,
     "schedule": {
       "dayProfile": "B",
       "nightProfile": "W",
@@ -151,6 +153,8 @@ Create `config.json` (recommended: copy from `config.example.json`; already in `
 | `guard.stateDir` | `dist/guard` | Guard state directory |
 | `guard.probeIntervalSeconds` | `3` | Connectivity probe interval |
 | `guard.bindingCheckIntervalSeconds` | `180` | Binding audit interval |
+| `guard.logRetentionDays` | `7` | Guard text/event log retention in days |
+| `guard.logMaxFiles` | `14` | Maximum guard text/event log sets to retain |
 | `guard.timezone` | `Asia/Shanghai` | Schedule timezone |
 | `guard.schedule.dayProfile` | no default | Profile name used during the day; required |
 | `guard.schedule.nightProfile` | no default | Profile name used at night; required |
@@ -350,6 +354,7 @@ Use the repository script to wrap `njupt-net` as a real **Windows Service**:
 Notes:
 
 - The script downloads the **official WinSW** wrapper into `dist/winsw/` and generates the service XML and wrapper logs there.
+- WinSW stdout/stderr logs roll at 10MB and keep 8 files by default; guard-owned logs are written daily and retained for 7 days by default.
 - `dist/` remains a runtime/output directory and should stay uncommitted; the tracked source of truth is the installer scripts plus documentation.
 - The generated service uses `Automatic` startup and is suitable for Windows boot-time guarding without an interactive login.
 - If your campus Portal certificate is not valid for strict TLS verification, set `portal.insecureTLS` explicitly in `config.json`.

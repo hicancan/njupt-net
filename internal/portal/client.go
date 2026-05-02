@@ -2,7 +2,9 @@ package portal
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/hicancan/njupt-net-cli/internal/kernel"
@@ -13,6 +15,8 @@ const (
 	default801BaseURL = "http://p.njupt.edu.cn:801/eportal/"
 	jsonpCallback     = "dr1003"
 )
+
+var sensitiveTransportValuePattern = regexp.MustCompile(`(?i)([?&](?:account|password|user_account|user_password|username)=)[^&\s;"']+`)
 
 // Client implements Portal 802 as primary and keeps Portal 801 as a legacy admin-console probe.
 type Client struct {
@@ -59,7 +63,7 @@ func (c *Client) Login802(ctx context.Context, account, password, ip, isp string
 		}
 		transport = append(transport, kernel.PortalAttemptDetail{
 			Endpoint: endpoint + "/login",
-			Error:    err.Error(),
+			Error:    summarizeTransportError(err),
 		})
 	}
 	if len(transport) > 0 {
@@ -67,7 +71,7 @@ func (c *Client) Login802(ctx context.Context, account, password, ip, isp string
 		return nil, &kernel.OpError{
 			Op:      "portal.login802",
 			Message: message,
-			Err:     fmt.Errorf("%w: %v", kernel.ErrPortal, lastErr),
+			Err:     fmt.Errorf("%w: %s", kernel.ErrPortal, summarizeTransportError(lastErr)),
 			ProblemDetails: kernel.PortalProblemDetails{
 				Endpoint: c.baseURL802 + "/login",
 				Attempts: transport,
@@ -75,6 +79,21 @@ func (c *Client) Login802(ctx context.Context, account, password, ip, isp string
 		}
 	}
 	return nil, lastErr
+}
+
+func summarizeTransportError(err error) string {
+	if err == nil {
+		return ""
+	}
+	var opErr *kernel.OpError
+	if errors.As(err, &opErr) && strings.TrimSpace(opErr.Message) != "" {
+		return opErr.Message
+	}
+	return redactTransportError(err.Error())
+}
+
+func redactTransportError(message string) string {
+	return sensitiveTransportValuePattern.ReplaceAllString(message, "${1}<redacted>")
 }
 
 // Logout802 sends the 802 logout call and treats transport success as success.

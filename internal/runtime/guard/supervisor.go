@@ -100,7 +100,7 @@ func (s *Supervisor) Stop(ctx context.Context) (*ControlResult, error) {
 }
 
 // Start launches a detached `guard run` child process.
-func (s *Supervisor) Start(ctx context.Context, args []string, replace bool) (*ControlResult, error) {
+func (s *Supervisor) Start(ctx context.Context, args []string, replace bool, retention LogRetentionPolicy) (*ControlResult, error) {
 	_ = ctx
 	current, err := s.Status(ctx)
 	if err == nil && current.Running && !replace {
@@ -111,7 +111,7 @@ func (s *Supervisor) Start(ctx context.Context, args []string, replace bool) (*C
 			return nil, err
 		}
 	}
-	logPath, err := s.store.NextLogPath()
+	logPath, err := s.store.NextLogPath(retention)
 	if err != nil {
 		return nil, err
 	}

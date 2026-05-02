@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,8 @@ const (
 	EventShutdown       EventKind = "shutdown"
 	EventFatal          EventKind = "fatal"
 )
+
+var sensitiveLogValuePattern = regexp.MustCompile(`(?i)([?&](?:account|password|user_account|user_password|username)=)[^&\s;"']+`)
 
 // Event is the structured runtime record emitted by the Go guard.
 type Event struct {
@@ -61,7 +64,7 @@ func (r *Recorder) Emit(event Event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	event = NormalizeEvent(event)
+	event = sanitizeEvent(NormalizeEvent(event))
 	if strings.TrimSpace(event.Timestamp) == "" {
 		now := r.now()
 		if r.location != nil {
@@ -94,6 +97,48 @@ func (r *Recorder) humanMessage(event Event) string {
 	}
 	parts = append(parts, humanDetailPairs(event.Details)...)
 	return strings.Join(parts, " ")
+}
+
+func sanitizeEvent(event Event) Event {
+	event.Message = redactSensitiveLogValue(event.Message)
+	switch details := event.Details.(type) {
+	case StartupEventDetails:
+		details.StateDir = redactSensitiveLogValue(details.StateDir)
+		event.Details = details
+	case ScheduleSwitchEventDetails:
+		details.RecoveryStep = redactSensitiveLogValue(details.RecoveryStep)
+		event.Details = details
+	case BindingAuditEventDetails:
+		details.RecoveryStep = redactSensitiveLogValue(details.RecoveryStep)
+		event.Details = details
+	case PortalLoginEventDetails:
+		details.RecoveryStep = redactSensitiveLogValue(details.RecoveryStep)
+		event.Details = details
+	case BindingRepairEventDetails:
+		details.Action = redactSensitiveLogValue(details.Action)
+		details.HolderProfile = redactSensitiveLogValue(details.HolderProfile)
+		details.RecoveryStep = redactSensitiveLogValue(details.RecoveryStep)
+		details.TargetProfile = redactSensitiveLogValue(details.TargetProfile)
+		event.Details = details
+	case DegradedEventDetails:
+		details.Error = redactSensitiveLogValue(details.Error)
+		details.RecoveryStep = redactSensitiveLogValue(details.RecoveryStep)
+		event.Details = details
+	case ShutdownEventDetails:
+		details.Reason = redactSensitiveLogValue(details.Reason)
+		event.Details = details
+	case FatalEventDetails:
+		details.Error = redactSensitiveLogValue(details.Error)
+		event.Details = details
+	}
+	return event
+}
+
+func redactSensitiveLogValue(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return value
+	}
+	return sensitiveLogValuePattern.ReplaceAllString(value, "${1}<redacted>")
 }
 
 func humanDetailPairs(details any) []string {

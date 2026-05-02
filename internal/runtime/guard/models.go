@@ -15,6 +15,8 @@ type Overrides struct {
 	StateDir             string
 	ProbeInterval        int
 	BindingCheckInterval int
+	LogRetentionDays     int
+	LogMaxFiles          int
 	Timezone             string
 	DayProfile           string
 	NightProfile         string
@@ -38,6 +40,7 @@ type Settings struct {
 	PortalISP             string
 	InsecureTLS           bool
 	Schedule              ScheduleConfig
+	LogRetention          LogRetentionPolicy
 }
 
 // Health summarizes the final health state of the guard runtime.
@@ -156,6 +159,14 @@ func BuildSettings(cfg *config.Config, overrides Overrides, insecureTLS bool) (S
 	if probeInterval <= 0 || bindingInterval <= 0 {
 		return Settings{}, &kernel.OpError{Op: "guard.settings", Message: "probe and binding intervals must be positive", Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.intervals", Hint: "probeIntervalSeconds and bindingCheckIntervalSeconds must be positive"}}
 	}
+	logRetentionDays := choosePositive(overrides.LogRetentionDays, cfg.Guard.LogRetentionDays)
+	if logRetentionDays <= 0 {
+		logRetentionDays = config.DefaultGuardLogRetentionDays()
+	}
+	logMaxFiles := choosePositive(overrides.LogMaxFiles, cfg.Guard.LogMaxFiles)
+	if logMaxFiles <= 0 {
+		logMaxFiles = config.DefaultGuardLogMaxFiles()
+	}
 
 	skipNightSwitchWeekdays := cfg.Guard.Schedule.SkipNightSwitchWeekdays
 	if skipNightSwitchWeekdays == nil {
@@ -200,6 +211,10 @@ func BuildSettings(cfg *config.Config, overrides Overrides, insecureTLS bool) (S
 		PortalISP:             cfg.Portal.ISP,
 		InsecureTLS:           insecureTLS || cfg.Portal.InsecureTLS,
 		Schedule:              schedule,
+		LogRetention: LogRetentionPolicy{
+			RetentionDays: logRetentionDays,
+			MaxFiles:      logMaxFiles,
+		},
 	}
 	return settings, nil
 }

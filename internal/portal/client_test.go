@@ -164,6 +164,24 @@ func TestLogin802AggregatesTransportFailuresAcrossEndpoints(t *testing.T) {
 	}
 }
 
+func TestLogin802TransportFailureDoesNotExposeCredentials(t *testing.T) {
+	client := NewClient(&mockSessionClient{
+		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
+			_ = ctx
+			_ = opts
+			return nil, errors.New(`do get request: Get "https://portal.example/login?user_account=alice&user_password=secret": timeout`)
+		},
+	}, "https://portal.example", "")
+
+	_, err := client.Login802(context.Background(), "alice", "secret", "10.0.0.1", "mobile")
+	if err == nil {
+		t.Fatal("expected transport failure")
+	}
+	if strings.Contains(err.Error(), "alice") || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("expected sanitized transport error, got %v", err)
+	}
+}
+
 func TestNewClientLeavesFallbackEmptyWhenNotConfigured(t *testing.T) {
 	client := NewClient(&mockSessionClient{}, "https://10.10.244.11:802/eportal/portal", "")
 	if client.fallbackBaseURL802 != "" {

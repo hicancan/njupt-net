@@ -122,6 +122,8 @@ bash ./scripts/build.sh all        # Linux/macOS
     "insecureTLS": true
   },
   "guard": {
+    "logRetentionDays": 7,
+    "logMaxFiles": 14,
     "schedule": {
       "dayProfile": "B",
       "nightProfile": "W",
@@ -150,6 +152,8 @@ bash ./scripts/build.sh all        # Linux/macOS
 | `guard.stateDir` | `dist/guard` | 守护状态目录 |
 | `guard.probeIntervalSeconds` | `3` | 连通性探测间隔 |
 | `guard.bindingCheckIntervalSeconds` | `180` | 绑定审计间隔 |
+| `guard.logRetentionDays` | `7` | guard 文本/事件日志保留天数 |
+| `guard.logMaxFiles` | `14` | guard 文本/事件日志最多保留组数 |
 | `guard.timezone` | `Asia/Shanghai` | 调度时区 |
 | `guard.schedule.dayProfile` | 无默认值 | 白天守护使用的账号名，必填 |
 | `guard.schedule.nightProfile` | 无默认值 | 夜间守护使用的账号名，必填 |
@@ -349,6 +353,7 @@ cat /tmp/njupt-net/status.json
 说明：
 
 - 脚本会下载 **官方 WinSW** 到 `dist/winsw/`，并生成同目录的服务 XML、wrapper 日志。
+- WinSW stdout/stderr 日志默认按 10MB 滚动并保留 8 份；guard 自身日志默认按天写入并保留 7 天。
 - `dist/` 仍然是运行时目录，不建议提交；真正应提交的是 `scripts/install-windows-service.ps1`、`scripts/uninstall-windows-service.ps1` 和文档。
 - 服务默认是 `Automatic`，适用于 Windows 开机后、未登录用户时的长期守护。
 - 如果校园网 Portal 证书不规范，请在 `config.json` 中显式设置 `portal.insecureTLS`。

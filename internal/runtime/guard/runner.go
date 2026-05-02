@@ -70,7 +70,7 @@ func (r *Runner) Run(ctx context.Context, replaceLegacy bool) error {
 		}
 	}()
 	r.store.ClearStopRequest()
-	_ = r.store.PruneLogs(10)
+	_ = r.store.PruneLogs(r.settings.LogRetention)
 
 	if replaceLegacy {
 		supervisor := NewSupervisor(r.store, "", "")

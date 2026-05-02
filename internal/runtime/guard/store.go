@@ -16,6 +16,12 @@ type stopRequest struct {
 	Requested string `json:"requested,omitempty"`
 }
 
+// LogRetentionPolicy limits guard text/event log growth.
+type LogRetentionPolicy struct {
+	RetentionDays int
+	MaxFiles      int
+}
+
 // StateStore manages guard state, log pointers, and pid files.
 type StateStore struct {
 	stateDir string
@@ -77,13 +83,13 @@ func (s *StateStore) LegacyStateDir() string {
 	return filepath.Join(filepath.Dir(s.stateDir), "w-guard")
 }
 
-// NextLogPath returns a fresh log file path and updates current-log.txt.
-func (s *StateStore) NextLogPath() (string, error) {
-	logPath := filepath.Join(s.LogsDir(), "guard-"+s.now().Format("20060102-150405")+".log")
+// NextLogPath returns the current daily log file path and updates current-log.txt.
+func (s *StateStore) NextLogPath(policy LogRetentionPolicy) (string, error) {
+	logPath := filepath.Join(s.LogsDir(), "guard-"+s.now().Format("20060102")+".log")
 	if err := s.UseLogPath(logPath); err != nil {
 		return "", err
 	}
-	_ = s.PruneLogs(10)
+	_ = s.PruneLogs(policy)
 	return logPath, nil
 }
 
@@ -206,22 +212,74 @@ func (s *StateStore) ClearStopRequest() {
 	_ = os.Remove(s.StopRequestFile())
 }
 
-// PruneLogs keeps only the newest paired text/event log sets.
-func (s *StateStore) PruneLogs(maxFiles int) error {
-	if maxFiles <= 0 {
+// PruneLogs removes stale paired text/event logs by age and count.
+func (s *StateStore) PruneLogs(policy LogRetentionPolicy) error {
+	if policy.RetentionDays <= 0 && policy.MaxFiles <= 0 {
 		return nil
 	}
 	entries, err := filepath.Glob(filepath.Join(s.LogsDir(), "guard-*.log"))
 	if err != nil {
 		return err
 	}
-	if len(entries) <= maxFiles {
+	if len(entries) == 0 {
 		return nil
 	}
 	sort.Strings(entries)
-	for _, stale := range entries[:len(entries)-maxFiles] {
-		_ = os.Remove(stale)
-		_ = os.Remove(s.EventPathForLog(stale))
+
+	stale := map[string]struct{}{}
+	if policy.RetentionDays > 0 {
+		cutoff := truncateToLocalDate(s.now()).AddDate(0, 0, -policy.RetentionDays+1)
+		for _, entry := range entries {
+			logDate, ok := parseLogDate(entry, s.now().Location())
+			if ok && logDate.Before(cutoff) {
+				stale[entry] = struct{}{}
+			}
+		}
+	}
+
+	if policy.MaxFiles > 0 {
+		remaining := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			if _, ok := stale[entry]; !ok {
+				remaining = append(remaining, entry)
+			}
+		}
+		if len(remaining) > policy.MaxFiles {
+			for _, entry := range remaining[:len(remaining)-policy.MaxFiles] {
+				stale[entry] = struct{}{}
+			}
+		}
+	}
+
+	for entry := range stale {
+		_ = os.Remove(entry)
+		_ = os.Remove(s.EventPathForLog(entry))
 	}
 	return nil
+}
+
+func truncateToLocalDate(value time.Time) time.Time {
+	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, value.Location())
+}
+
+func parseLogDate(path string, location *time.Location) (time.Time, bool) {
+	base := filepath.Base(path)
+	const prefix = "guard-"
+	if !strings.HasPrefix(base, prefix) || len(base) < len(prefix)+8 {
+		return time.Time{}, false
+	}
+	raw := base[len(prefix) : len(prefix)+8]
+	for _, ch := range raw {
+		if ch < '0' || ch > '9' {
+			return time.Time{}, false
+		}
+	}
+	if location == nil {
+		location = time.Local
+	}
+	parsed, err := time.ParseInLocation("20060102", raw, location)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
 }

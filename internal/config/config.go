@@ -12,9 +12,11 @@ import (
 )
 
 const (
-	defaultSelfBaseURL   = "http://10.10.244.240:8080"
-	defaultPortalBaseURL = "https://10.10.244.11:802/eportal/portal"
-	defaultConfigName    = "config.json"
+	defaultSelfBaseURL           = "http://10.10.244.240:8080"
+	defaultPortalBaseURL         = "https://10.10.244.11:802/eportal/portal"
+	defaultConfigName            = "config.json"
+	defaultGuardLogRetentionDays = 7
+	defaultGuardLogMaxFiles      = 14
 )
 
 var defaultSkipNightSwitchWeekdays = []string{"friday", "saturday"}
@@ -24,6 +26,12 @@ var defaultSkipNightSwitchWeekdays = []string{"friday", "saturday"}
 func DefaultSkipNightSwitchWeekdays() []string {
 	return append([]string(nil), defaultSkipNightSwitchWeekdays...)
 }
+
+// DefaultGuardLogRetentionDays returns the default age-based guard log retention.
+func DefaultGuardLogRetentionDays() int { return defaultGuardLogRetentionDays }
+
+// DefaultGuardLogMaxFiles returns the default count-based guard log cap.
+func DefaultGuardLogMaxFiles() int { return defaultGuardLogMaxFiles }
 
 // AccountConfig resolves profile-based login for Self and Portal.
 type AccountConfig struct {
@@ -66,6 +74,8 @@ type GuardConfig struct {
 	StateDir                    string              `json:"stateDir"`
 	ProbeIntervalSeconds        int                 `json:"probeIntervalSeconds"`
 	BindingCheckIntervalSeconds int                 `json:"bindingCheckIntervalSeconds"`
+	LogRetentionDays            int                 `json:"logRetentionDays"`
+	LogMaxFiles                 int                 `json:"logMaxFiles"`
 	Timezone                    string              `json:"timezone"`
 	Schedule                    GuardScheduleConfig `json:"schedule"`
 }
@@ -169,6 +179,12 @@ func (c *Config) applyDefaults() {
 	if c.Guard.BindingCheckIntervalSeconds == 0 {
 		c.Guard.BindingCheckIntervalSeconds = 180
 	}
+	if c.Guard.LogRetentionDays == 0 {
+		c.Guard.LogRetentionDays = DefaultGuardLogRetentionDays()
+	}
+	if c.Guard.LogMaxFiles == 0 {
+		c.Guard.LogMaxFiles = DefaultGuardLogMaxFiles()
+	}
 	if strings.TrimSpace(c.Guard.Timezone) == "" {
 		c.Guard.Timezone = "Asia/Shanghai"
 	}
@@ -229,6 +245,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Guard.BindingCheckIntervalSeconds <= 0 {
 		return &kernel.OpError{Op: "config.validate", Message: "guard.bindingCheckIntervalSeconds must be positive", Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.bindingCheckIntervalSeconds", Value: strconv.Itoa(c.Guard.BindingCheckIntervalSeconds)}}
+	}
+	if c.Guard.LogRetentionDays <= 0 {
+		return &kernel.OpError{Op: "config.validate", Message: "guard.logRetentionDays must be positive", Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.logRetentionDays", Value: strconv.Itoa(c.Guard.LogRetentionDays)}}
+	}
+	if c.Guard.LogMaxFiles <= 0 {
+		return &kernel.OpError{Op: "config.validate", Message: "guard.logMaxFiles must be positive", Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.logMaxFiles", Value: strconv.Itoa(c.Guard.LogMaxFiles)}}
 	}
 	if strings.TrimSpace(c.Guard.Schedule.DayProfile) == "" {
 		return &kernel.OpError{Op: "config.validate", Message: "guard.schedule.dayProfile is required", Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.schedule.dayProfile", Hint: "set the daytime profile explicitly"}}

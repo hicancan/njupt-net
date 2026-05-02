@@ -67,7 +67,7 @@ func TestSupervisorStartStopStatus(t *testing.T) {
 	}
 
 	supervisor := NewSupervisor(store, "njupt-net.exe", t.TempDir())
-	startResult, err := supervisor.Start(context.Background(), []string{"guard", "run", "--yes"}, false)
+	startResult, err := supervisor.Start(context.Background(), []string{"guard", "run", "--yes"}, false, testLogRetentionPolicy())
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}

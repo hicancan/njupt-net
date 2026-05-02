@@ -28,6 +28,8 @@
     "stateDir": "dist/guard",
     "probeIntervalSeconds": 3,
     "bindingCheckIntervalSeconds": 180,
+    "logRetentionDays": 7,
+    "logMaxFiles": 14,
     "timezone": "Asia/Shanghai",
     "schedule": {
       "dayProfile": "B",

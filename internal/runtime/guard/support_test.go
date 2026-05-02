@@ -56,6 +56,8 @@ func TestBuildSettingsResolvesOverridesAndFallbacks(t *testing.T) {
 		StateDir:             filepath.Join("dist", "router-guard"),
 		ProbeInterval:        5,
 		BindingCheckInterval: 120,
+		LogRetentionDays:     3,
+		LogMaxFiles:          6,
 		DayProfile:           "B",
 		NightProfile:         "W",
 	}, true)
@@ -67,6 +69,9 @@ func TestBuildSettingsResolvesOverridesAndFallbacks(t *testing.T) {
 	}
 	if settings.ProbeInterval != 5*time.Second || settings.BindingCheckInterval != 120*time.Second {
 		t.Fatalf("unexpected intervals: %#v", settings)
+	}
+	if settings.LogRetention.RetentionDays != 3 || settings.LogRetention.MaxFiles != 6 {
+		t.Fatalf("unexpected log retention: %#v", settings.LogRetention)
 	}
 	if settings.Schedule.DayProfile != "B" || settings.Schedule.NightProfile != "W" {
 		t.Fatalf("unexpected schedule: %#v", settings.Schedule)
