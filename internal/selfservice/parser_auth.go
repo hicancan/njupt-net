@@ -48,7 +48,7 @@ func looksLikeErrorMessage(s string) bool {
 func extractBusinessMessage(body []byte) string {
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
 	if err == nil {
-		if text := extractText(doc, ".alert-danger", ".alert", "div.error", "span.error", "#error", ".swal2-content", ".swal-content", ".layui-layer-content"); text != "" {
+		if text := extractText(doc, ".alert-danger", ".alert", "div.error", "span.error", "#error", ".swal2-content", ".swal-content", ".sweet-alert p", ".layui-layer-content"); text != "" {
 			return text
 		}
 		fallback := ""

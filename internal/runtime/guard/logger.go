@@ -19,6 +19,7 @@ const (
 	EventBindingAudit   EventKind = "binding-audit"
 	EventPortalLogin    EventKind = "portal-login"
 	EventBindingRepair  EventKind = "binding-repair"
+	EventSessionOffline EventKind = "session-offline"
 	EventDegraded       EventKind = "degraded"
 	EventShutdown       EventKind = "shutdown"
 	EventFatal          EventKind = "fatal"
@@ -120,6 +121,10 @@ func sanitizeEvent(event Event) Event {
 		details.RecoveryStep = redactSensitiveLogValue(details.RecoveryStep)
 		details.TargetProfile = redactSensitiveLogValue(details.TargetProfile)
 		event.Details = details
+	case SessionOfflineEventDetails:
+		details.RecoveryStep = redactSensitiveLogValue(details.RecoveryStep)
+		details.Scope = redactSensitiveLogValue(details.Scope)
+		event.Details = details
 	case DegradedEventDetails:
 		details.Error = redactSensitiveLogValue(details.Error)
 		details.RecoveryStep = redactSensitiveLogValue(details.RecoveryStep)
@@ -171,6 +176,15 @@ func humanDetailPairs(details any) []string {
 			"bindingOk", fmt.Sprintf("%t", value.BindingOK),
 			"holderProfile", value.HolderProfile,
 			"targetProfile", value.TargetProfile,
+			"recoveryStep", value.RecoveryStep,
+		)
+	case SessionOfflineEventDetails:
+		return compactPairs(
+			"scope", value.Scope,
+			"sessionCount", fmt.Sprintf("%d", value.SessionCount),
+			"removedCount", fmt.Sprintf("%d", value.RemovedCount),
+			"skippedCount", fmt.Sprintf("%d", value.SkippedCount),
+			"failedCount", fmt.Sprintf("%d", value.FailedCount),
 			"recoveryStep", value.RecoveryStep,
 		)
 	case DegradedEventDetails:

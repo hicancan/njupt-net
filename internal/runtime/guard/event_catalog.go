@@ -1,5 +1,7 @@
 package guard
 
+import "strconv"
+
 // StartupEventDetails captures startup-specific machine details.
 type StartupEventDetails struct {
 	StateDir string `json:"stateDir,omitempty"`
@@ -35,6 +37,16 @@ type BindingRepairEventDetails struct {
 	TargetProfile string `json:"targetProfile,omitempty"`
 }
 
+// SessionOfflineEventDetails captures self-service online-session cleanup.
+type SessionOfflineEventDetails struct {
+	Scope        string `json:"scope,omitempty"`
+	SessionCount int    `json:"sessionCount"`
+	RemovedCount int    `json:"removedCount"`
+	SkippedCount int    `json:"skippedCount,omitempty"`
+	FailedCount  int    `json:"failedCount"`
+	RecoveryStep string `json:"recoveryStep,omitempty"`
+}
+
 // DegradedEventDetails captures why one cycle ended degraded.
 type DegradedEventDetails struct {
 	BindingOK     bool   `json:"bindingOk"`
@@ -67,6 +79,8 @@ func NormalizeEvent(event Event) Event {
 		event.Details = normalizePortalLoginEventDetails(event.Details)
 	case EventBindingRepair:
 		event.Details = normalizeBindingRepairEventDetails(event.Details)
+	case EventSessionOffline:
+		event.Details = normalizeSessionOfflineEventDetails(event.Details)
 	case EventDegraded:
 		event.Details = normalizeDegradedEventDetails(event.Details)
 	case EventShutdown:
@@ -185,6 +199,31 @@ func normalizeBindingRepairEventDetails(details any) any {
 	}
 }
 
+func normalizeSessionOfflineEventDetails(details any) any {
+	switch value := details.(type) {
+	case nil:
+		return nil
+	case SessionOfflineEventDetails:
+		return value
+	case *SessionOfflineEventDetails:
+		if value == nil {
+			return nil
+		}
+		return *value
+	case map[string]string:
+		return SessionOfflineEventDetails{
+			Scope:        value["scope"],
+			SessionCount: stringToInt(value["sessionCount"]),
+			RemovedCount: stringToInt(value["removedCount"]),
+			SkippedCount: stringToInt(value["skippedCount"]),
+			FailedCount:  stringToInt(value["failedCount"]),
+			RecoveryStep: value["recoveryStep"],
+		}
+	default:
+		return nil
+	}
+}
+
 func normalizeDegradedEventDetails(details any) any {
 	switch value := details.(type) {
 	case nil:
@@ -243,4 +282,9 @@ func normalizeFatalEventDetails(details any) any {
 	default:
 		return nil
 	}
+}
+
+func stringToInt(value string) int {
+	n, _ := strconv.Atoi(value)
+	return n
 }

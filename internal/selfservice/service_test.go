@@ -150,6 +150,17 @@ func TestExtractBusinessMessageIgnoresInlineScripts(t *testing.T) {
 	}
 }
 
+func TestExtractBusinessMessageReadsSweetAlertV1Body(t *testing.T) {
+	body := []byte(`<html><div class="sweet-alert"><h2>提示</h2><p>中国移动账号:13800138000,绑定失败,请核对运营商账号的密码是否正确。</p><button>确定</button></div></html>`)
+	got := extractBusinessMessage(body)
+	if !strings.Contains(got, "请核对运营商账号的密码是否正确") {
+		t.Fatalf("unexpected business message: %q", got)
+	}
+	if strings.Contains(got, "确定") {
+		t.Fatalf("expected only alert body, got %q", got)
+	}
+}
+
 func TestBindOperatorPrefersBusinessFailureWithoutReadback(t *testing.T) {
 	client := NewClient(&mockSessionClient{
 		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {

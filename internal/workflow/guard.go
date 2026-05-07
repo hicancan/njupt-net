@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,6 +20,8 @@ type GuardProber interface {
 // GuardSelfClient captures the Self operations the guard workflow needs.
 type GuardSelfClient interface {
 	Login(ctx context.Context, username, password string) (*kernel.OperationResult[kernel.SelfLoginResult], error)
+	GetOnlineList(ctx context.Context) (*kernel.OperationResult[[]kernel.OnlineSession], error)
+	ForceOffline(ctx context.Context, sessionID string) (*kernel.OperationResult[map[string]any], error)
 	GetOperatorBinding(ctx context.Context) (*kernel.OperationResult[kernel.OperatorBinding], error)
 	BindOperator(ctx context.Context, target map[string]string, readback, restore bool) (*kernel.OperationResult[kernel.WriteBackResult], error)
 }
@@ -55,18 +58,45 @@ type LocalIPSelection struct {
 
 // BindingRepairResult summarizes the non-secret repair outcome.
 type BindingRepairResult struct {
-	TargetProfile string `json:"targetProfile"`
-	HolderProfile string `json:"holderProfile,omitempty"`
-	Action        string `json:"action"`
+	TargetProfile     string                `json:"targetProfile"`
+	HolderProfile     string                `json:"holderProfile,omitempty"`
+	Action            string                `json:"action"`
+	TargetOffline     *OfflineCleanupResult `json:"targetOffline,omitempty"`
+	RollbackAttempted bool                  `json:"rollbackAttempted,omitempty"`
+	RollbackOK        bool                  `json:"rollbackOk,omitempty"`
+	RollbackProfile   string                `json:"rollbackProfile,omitempty"`
+	RollbackMessage   string                `json:"rollbackMessage,omitempty"`
+}
+
+// OfflineCleanupResult summarizes self-service online-session cleanup.
+type OfflineCleanupResult struct {
+	Scope        string                        `json:"scope,omitempty"`
+	Profiles     []ProfileOfflineCleanupResult `json:"profiles,omitempty"`
+	SessionCount int                           `json:"sessionCount"`
+	RemovedCount int                           `json:"removedCount"`
+	SkippedCount int                           `json:"skippedCount,omitempty"`
+	FailedCount  int                           `json:"failedCount"`
+	Message      string                        `json:"message,omitempty"`
+}
+
+// ProfileOfflineCleanupResult summarizes cleanup for one Self account profile.
+type ProfileOfflineCleanupResult struct {
+	Profile      string `json:"profile"`
+	SessionCount int    `json:"sessionCount"`
+	RemovedCount int    `json:"removedCount"`
+	SkippedCount int    `json:"skippedCount,omitempty"`
+	FailedCount  int    `json:"failedCount"`
+	Message      string `json:"message,omitempty"`
 }
 
 // GuardTraceKind captures internal action ordering for one guard cycle.
 type GuardTraceKind string
 
 const (
-	GuardTraceBindingAudit  GuardTraceKind = "binding-audit"
-	GuardTraceBindingRepair GuardTraceKind = "binding-repair"
-	GuardTracePortalLogin   GuardTraceKind = "portal-login"
+	GuardTraceBindingAudit   GuardTraceKind = "binding-audit"
+	GuardTraceBindingRepair  GuardTraceKind = "binding-repair"
+	GuardTracePortalLogin    GuardTraceKind = "portal-login"
+	GuardTraceSessionOffline GuardTraceKind = "session-offline"
 )
 
 // GuardTraceEvent records one internal guard action in occurrence order.
@@ -80,26 +110,40 @@ type GuardTraceEvent struct {
 	Action        string
 	HolderProfile string
 	TargetProfile string
+	Profile       string
+	Scope         string
+	SessionCount  int
+	RemovedCount  int
+	SkippedCount  int
+	FailedCount   int
 }
 
 // EnsureOnlineResult summarizes one aggressive ensure-online chain.
 type EnsureOnlineResult struct {
-	DesiredProfile         string                    `json:"desiredProfile"`
-	InitialProbe           *LocalIPSelection         `json:"initialProbe,omitempty"`
-	RetryProbe             *LocalIPSelection         `json:"retryProbe,omitempty"`
-	FirstPortalLoginOK     bool                      `json:"firstPortalLoginOk"`
-	FirstPortalLoginMsg    string                    `json:"firstPortalLoginMessage,omitempty"`
-	SecondPortalLoginOK    bool                      `json:"secondPortalLoginOk"`
-	SecondPortalLoginMsg   string                    `json:"secondPortalLoginMessage,omitempty"`
-	BindingRepairAttempted bool                      `json:"bindingRepairAttempted"`
-	BindingRepairOK        bool                      `json:"bindingRepairOk"`
-	BindingRepairMessage   string                    `json:"bindingRepairMessage,omitempty"`
-	BindingRepair          *BindingRepairResult      `json:"bindingRepair,omitempty"`
-	PortalPayload          *kernel.Portal802Response `json:"portalPayload,omitempty"`
-	InternetOK             bool                      `json:"internetOk"`
-	InternetMessage        string                    `json:"internetMessage,omitempty"`
-	RecoveryStep           string                    `json:"recoveryStep"`
-	Trace                  []GuardTraceEvent         `json:"-"`
+	DesiredProfile            string                    `json:"desiredProfile"`
+	InitialProbe              *LocalIPSelection         `json:"initialProbe,omitempty"`
+	RetryProbe                *LocalIPSelection         `json:"retryProbe,omitempty"`
+	FinalRetryProbe           *LocalIPSelection         `json:"finalRetryProbe,omitempty"`
+	FirstPortalLoginOK        bool                      `json:"firstPortalLoginOk"`
+	FirstPortalLoginMsg       string                    `json:"firstPortalLoginMessage,omitempty"`
+	SecondPortalLoginOK       bool                      `json:"secondPortalLoginOk"`
+	SecondPortalLoginMsg      string                    `json:"secondPortalLoginMessage,omitempty"`
+	ThirdPortalLoginAttempted bool                      `json:"thirdPortalLoginAttempted,omitempty"`
+	ThirdPortalLoginOK        bool                      `json:"thirdPortalLoginOk,omitempty"`
+	ThirdPortalLoginMsg       string                    `json:"thirdPortalLoginMessage,omitempty"`
+	BindingRepairAttempted    bool                      `json:"bindingRepairAttempted"`
+	BindingRepairOK           bool                      `json:"bindingRepairOk"`
+	BindingRepairMessage      string                    `json:"bindingRepairMessage,omitempty"`
+	BindingRepair             *BindingRepairResult      `json:"bindingRepair,omitempty"`
+	OfflineCleanupAttempted   bool                      `json:"offlineCleanupAttempted,omitempty"`
+	OfflineCleanupOK          bool                      `json:"offlineCleanupOk,omitempty"`
+	OfflineCleanupMessage     string                    `json:"offlineCleanupMessage,omitempty"`
+	OfflineCleanup            *OfflineCleanupResult     `json:"offlineCleanup,omitempty"`
+	PortalPayload             *kernel.Portal802Response `json:"portalPayload,omitempty"`
+	InternetOK                bool                      `json:"internetOk"`
+	InternetMessage           string                    `json:"internetMessage,omitempty"`
+	RecoveryStep              string                    `json:"recoveryStep"`
+	Trace                     []GuardTraceEvent         `json:"-"`
 }
 
 // GuardCycleInput is the runtime-to-workflow control surface for one cycle.
@@ -181,19 +225,34 @@ func RepairBinding(ctx context.Context, env GuardEnvironment, targetProfile stri
 		}, nil
 	}
 
+	targetOffline, offlineErr := cleanupProfileOnlineSessions(ctx, env, targetProfile, targetClient, "target-before-bind", nil)
+	if offlineErr != nil {
+		return &kernel.OperationResult[BindingRepairResult]{
+			Level:   kernel.EvidenceConfirmed,
+			Success: false,
+			Message: fmt.Sprintf("failed to clear target %s online sessions before binding", targetProfile),
+			Data: &BindingRepairResult{
+				TargetProfile: targetProfile,
+				Action:        "target-offline-failed",
+				TargetOffline: targetOffline,
+			},
+		}, offlineErr
+	}
+
 	holderProfile := ""
+	var holderClient GuardSelfClient
 	for profile, account := range env.Accounts {
 		if profile == targetProfile {
 			continue
 		}
-		holderClient, err := env.Factory.NewSelf()
+		candidateClient, err := env.Factory.NewSelf()
 		if err != nil {
 			continue
 		}
-		if _, err := holderClient.Login(ctx, account.Username, account.Password); err != nil {
+		if _, err := candidateClient.Login(ctx, account.Username, account.Password); err != nil {
 			continue
 		}
-		holderBinding, err := holderClient.GetOperatorBinding(ctx)
+		holderBinding, err := candidateClient.GetOperatorBinding(ctx)
 		if err != nil || holderBinding.Data == nil {
 			continue
 		}
@@ -201,6 +260,7 @@ func RepairBinding(ctx context.Context, env GuardEnvironment, targetProfile stri
 			continue
 		}
 		holderProfile = profile
+		holderClient = candidateClient
 		if _, err := holderClient.BindOperator(ctx, map[string]string{
 			"FLDEXTRA3": "",
 			"FLDEXTRA4": "",
@@ -213,6 +273,7 @@ func RepairBinding(ctx context.Context, env GuardEnvironment, targetProfile stri
 					TargetProfile: targetProfile,
 					HolderProfile: profile,
 					Action:        "holder-clear-failed",
+					TargetOffline: targetOffline,
 				},
 			}, err
 		}
@@ -223,15 +284,37 @@ func RepairBinding(ctx context.Context, env GuardEnvironment, targetProfile stri
 		"FLDEXTRA3": env.Broadband.Account,
 		"FLDEXTRA4": env.Broadband.Password,
 	}, true, false); err != nil {
+		result := &BindingRepairResult{
+			TargetProfile: targetProfile,
+			HolderProfile: holderProfile,
+			Action:        "target-bind-failed",
+			TargetOffline: targetOffline,
+		}
+		message := fmt.Sprintf("failed to bind target %s", targetProfile)
+		if holderProfile != "" && holderClient != nil {
+			result.RollbackAttempted = true
+			result.RollbackProfile = holderProfile
+			if _, rollbackErr := holderClient.BindOperator(ctx, map[string]string{
+				"FLDEXTRA3": env.Broadband.Account,
+				"FLDEXTRA4": env.Broadband.Password,
+			}, true, false); rollbackErr != nil {
+				result.Action = "target-bind-failed-rollback-failed"
+				result.RollbackOK = false
+				result.RollbackMessage = rollbackErr.Error()
+				message = fmt.Sprintf("failed to bind target %s; rollback to %s failed", targetProfile, holderProfile)
+				err = fmt.Errorf("%w; rollback failed: %v", err, rollbackErr)
+			} else {
+				result.Action = "target-bind-failed-rolled-back"
+				result.RollbackOK = true
+				result.RollbackMessage = fmt.Sprintf("binding restored to %s", holderProfile)
+				message = fmt.Sprintf("failed to bind target %s; rolled back to %s", targetProfile, holderProfile)
+			}
+		}
 		return &kernel.OperationResult[BindingRepairResult]{
 			Level:   kernel.EvidenceConfirmed,
 			Success: false,
-			Message: fmt.Sprintf("failed to bind target %s", targetProfile),
-			Data: &BindingRepairResult{
-				TargetProfile: targetProfile,
-				HolderProfile: holderProfile,
-				Action:        "target-bind-failed",
-			},
+			Message: message,
+			Data:    result,
 		}, err
 	}
 
@@ -249,8 +332,166 @@ func RepairBinding(ctx context.Context, env GuardEnvironment, targetProfile stri
 			TargetProfile: targetProfile,
 			HolderProfile: holderProfile,
 			Action:        action,
+			TargetOffline: targetOffline,
 		},
 	}, nil
+}
+
+func cleanupConfiguredOnlineSessions(ctx context.Context, env GuardEnvironment, scope string, skipIPs map[string]struct{}) (*OfflineCleanupResult, error) {
+	result := &OfflineCleanupResult{Scope: scope}
+	profiles := make([]string, 0, len(env.Accounts))
+	for profile := range env.Accounts {
+		profiles = append(profiles, profile)
+	}
+	sort.Strings(profiles)
+
+	var firstErr error
+	for _, profile := range profiles {
+		profileResult, err := cleanupProfileOnlineSessions(ctx, env, profile, nil, scope, skipIPs)
+		if profileResult != nil {
+			result.Profiles = append(result.Profiles, profileResult.Profiles...)
+			result.SessionCount += profileResult.SessionCount
+			result.RemovedCount += profileResult.RemovedCount
+			result.SkippedCount += profileResult.SkippedCount
+			result.FailedCount += profileResult.FailedCount
+		}
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	result.Message = offlineCleanupMessage(result)
+	return result, firstErr
+}
+
+func cleanupProfileOnlineSessions(ctx context.Context, env GuardEnvironment, profile string, client GuardSelfClient, scope string, skipIPs map[string]struct{}) (*OfflineCleanupResult, error) {
+	result := &OfflineCleanupResult{Scope: scope}
+	profileResult := ProfileOfflineCleanupResult{Profile: profile}
+	defer func() {
+		result.Profiles = []ProfileOfflineCleanupResult{profileResult}
+		result.SessionCount = profileResult.SessionCount
+		result.RemovedCount = profileResult.RemovedCount
+		result.SkippedCount = profileResult.SkippedCount
+		result.FailedCount = profileResult.FailedCount
+		result.Message = offlineCleanupMessage(result)
+	}()
+
+	account, ok := env.Accounts[profile]
+	if !ok {
+		profileResult.FailedCount = 1
+		profileResult.Message = "profile not configured"
+		return result, &kernel.OpError{Op: "workflow.guard.offlineSessions", Message: fmt.Sprintf("profile %q not found", profile), Err: kernel.ErrInvalidConfig, ProblemDetails: kernel.ConfigProblemDetails{Field: "guard.offline.profile", Value: profile}}
+	}
+	if client == nil {
+		created, err := env.Factory.NewSelf()
+		if err != nil {
+			profileResult.FailedCount = 1
+			profileResult.Message = "create self client failed"
+			return result, &kernel.OpError{Op: "workflow.guard.offlineSessions", Message: "create self client failed", Err: err}
+		}
+		client = created
+		if _, err := client.Login(ctx, account.Username, account.Password); err != nil {
+			profileResult.FailedCount = 1
+			profileResult.Message = "self login failed"
+			return result, &kernel.OpError{Op: "workflow.guard.offlineSessions", Message: fmt.Sprintf("self login failed for profile %s", profile), Err: err}
+		}
+	}
+
+	online, err := client.GetOnlineList(ctx)
+	if err != nil {
+		profileResult.FailedCount = 1
+		profileResult.Message = "online list failed"
+		return result, &kernel.OpError{Op: "workflow.guard.offlineSessions", Message: fmt.Sprintf("online list failed for profile %s", profile), Err: err}
+	}
+	sessions := []kernel.OnlineSession{}
+	if online != nil && online.Data != nil {
+		for _, session := range *online.Data {
+			if strings.TrimSpace(session.SessionID) != "" {
+				sessions = append(sessions, session)
+			}
+		}
+	}
+	profileResult.SessionCount = len(sessions)
+	if len(sessions) == 0 {
+		profileResult.Message = "no online sessions"
+		return result, nil
+	}
+
+	var firstErr error
+	for _, session := range sessions {
+		if shouldSkipOnlineSession(session, skipIPs) {
+			profileResult.SkippedCount++
+			continue
+		}
+		offline, err := client.ForceOffline(ctx, session.SessionID)
+		if err != nil {
+			if errors.Is(err, kernel.ErrGuardedCapability) && offline != nil && strings.Contains(offline.Message, "not present") {
+				profileResult.RemovedCount++
+				continue
+			}
+			profileResult.FailedCount++
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		profileResult.RemovedCount++
+	}
+	if firstErr != nil {
+		profileResult.Message = "some online sessions failed to go offline"
+		return result, firstErr
+	}
+	if profileResult.RemovedCount == 0 && profileResult.SkippedCount > 0 {
+		profileResult.Message = "only current/local online sessions present"
+		return result, nil
+	}
+	profileResult.Message = "online sessions removed"
+	return result, nil
+}
+
+func offlineCleanupMessage(result *OfflineCleanupResult) string {
+	if result == nil {
+		return ""
+	}
+	if result.SessionCount == 0 && result.FailedCount == 0 {
+		return "no online sessions to clear"
+	}
+	if result.SkippedCount == result.SessionCount && result.FailedCount == 0 {
+		return fmt.Sprintf("only current/local online sessions present, skipped %d", result.SkippedCount)
+	}
+	if result.FailedCount > 0 {
+		return fmt.Sprintf("cleared %d/%d online sessions, skipped %d, %d failed", result.RemovedCount, result.SessionCount, result.SkippedCount, result.FailedCount)
+	}
+	return fmt.Sprintf("cleared %d online sessions, skipped %d", result.RemovedCount, result.SkippedCount)
+}
+
+func shouldSkipOnlineSession(session kernel.OnlineSession, skipIPs map[string]struct{}) bool {
+	if len(skipIPs) == 0 {
+		return false
+	}
+	ip := strings.TrimSpace(session.IP)
+	if ip == "" {
+		return false
+	}
+	_, ok := skipIPs[ip]
+	return ok
+}
+
+func localProbeIPs(probes ...*LocalIPSelection) map[string]struct{} {
+	ips := map[string]struct{}{}
+	for _, probe := range probes {
+		if probe == nil {
+			continue
+		}
+		for _, ip := range []string{probe.SelectedIP, probe.RoutedIP} {
+			if ip = strings.TrimSpace(ip); ip != "" {
+				ips[ip] = struct{}{}
+			}
+		}
+	}
+	if len(ips) == 0 {
+		return nil
+	}
+	return ips
 }
 
 // EnsureOnline aggressively restores connectivity for the desired profile.
@@ -374,12 +615,74 @@ func EnsureOnline(ctx context.Context, env GuardEnvironment, targetProfile strin
 			Data:    result,
 		}, nil
 	}
+
+	cleanup, cleanupErr := cleanupConfiguredOnlineSessions(ctx, env, "post-portal-offline", localProbeIPs(result.InitialProbe, result.RetryProbe))
+	result.OfflineCleanupAttempted = true
+	result.OfflineCleanupOK = cleanupErr == nil
+	if cleanup != nil {
+		result.OfflineCleanup = cleanup
+		result.OfflineCleanupMessage = cleanup.Message
+		if trace := offlineCleanupTraceEvent(cleanup, "offline-sessions-then-portal-login"); trace != nil {
+			result.Trace = append(result.Trace, *trace)
+		}
+	}
+	if cleanup != nil && cleanup.RemovedCount > 0 {
+		if err := waitAfterRepair(ctx, env.AfterRepair); err != nil {
+			result.RecoveryStep = "offline-sessions-settle-failed"
+			return &kernel.OperationResult[EnsureOnlineResult]{
+				Level:   kernel.EvidenceConfirmed,
+				Success: false,
+				Message: "online sessions cleared but settle wait failed before final login",
+				Data:    result,
+			}, err
+		}
+		finalProbe, err := env.Prober.DetectLocalIPv4(ctx)
+		if err != nil || strings.TrimSpace(finalProbe.SelectedIP) == "" {
+			finalProbe = retryProbe
+		}
+		result.FinalRetryProbe = &finalProbe
+		third, thirdErr := portalClient.Login802(ctx, account.Username, account.Password, finalProbe.SelectedIP, env.PortalISP)
+		result.ThirdPortalLoginAttempted = true
+		result.ThirdPortalLoginOK = thirdErr == nil
+		if third != nil {
+			result.ThirdPortalLoginMsg = third.Message
+			result.PortalPayload = third.Data
+		}
+		if strings.TrimSpace(result.ThirdPortalLoginMsg) == "" && thirdErr != nil {
+			result.ThirdPortalLoginMsg = portalErrorMessage(thirdErr)
+		}
+		internetOK, internetMessage = env.Prober.CheckConnectivity(ctx)
+		result.InternetOK = internetOK
+		result.InternetMessage = internetMessage
+		result.RecoveryStep = "offline-sessions-then-portal-login"
+		result.Trace = append(result.Trace, GuardTraceEvent{
+			Kind:          GuardTracePortalLogin,
+			Message:       thirdPortalTraceMessage(result),
+			InternetOK:    internetOK,
+			PortalLoginOK: result.ThirdPortalLoginOK,
+			RecoveryStep:  result.RecoveryStep,
+		})
+		if internetOK {
+			return &kernel.OperationResult[EnsureOnlineResult]{
+				Level:   kernel.EvidenceConfirmed,
+				Success: true,
+				Message: "online sessions cleared and portal login restored connectivity",
+				Data:    result,
+			}, nil
+		}
+		return &kernel.OperationResult[EnsureOnlineResult]{
+			Level:   kernel.EvidenceConfirmed,
+			Success: false,
+			Message: "connectivity still unavailable after online-session cleanup",
+			Data:    result,
+		}, firstNonNil(thirdErr, cleanupErr, secondErr)
+	}
 	return &kernel.OperationResult[EnsureOnlineResult]{
 		Level:   kernel.EvidenceConfirmed,
 		Success: false,
 		Message: "connectivity still unavailable after portal retry",
 		Data:    result,
-	}, secondErr
+	}, firstNonNil(secondErr, cleanupErr)
 }
 
 // GuardCycle executes one non-secret guard cycle around schedule, probe, repair, and portal recovery.
@@ -487,6 +790,9 @@ func finalPortalLoginOK(src *EnsureOnlineResult) bool {
 	if src == nil {
 		return false
 	}
+	if src.ThirdPortalLoginAttempted {
+		return src.ThirdPortalLoginOK
+	}
 	if src.BindingRepairAttempted || src.RetryProbe != nil || strings.TrimSpace(src.SecondPortalLoginMsg) != "" {
 		return src.SecondPortalLoginOK
 	}
@@ -495,6 +801,8 @@ func finalPortalLoginOK(src *EnsureOnlineResult) bool {
 
 func portalMessageFromEnsure(src *EnsureOnlineResult) string {
 	switch {
+	case src.ThirdPortalLoginMsg != "":
+		return src.ThirdPortalLoginMsg
 	case src.SecondPortalLoginMsg != "":
 		return src.SecondPortalLoginMsg
 	case src.FirstPortalLoginMsg != "":
@@ -551,6 +859,16 @@ func secondPortalTraceMessage(result *EnsureOnlineResult) string {
 	return result.InternetMessage
 }
 
+func thirdPortalTraceMessage(result *EnsureOnlineResult) string {
+	if result == nil {
+		return ""
+	}
+	if strings.TrimSpace(result.ThirdPortalLoginMsg) != "" {
+		return result.ThirdPortalLoginMsg
+	}
+	return result.InternetMessage
+}
+
 func bindingTraceEvent(repair *kernel.OperationResult[BindingRepairResult]) GuardTraceEvent {
 	if repair == nil {
 		return GuardTraceEvent{}
@@ -581,6 +899,22 @@ func forceSwitchTraceEvent(repair *kernel.OperationResult[BindingRepairResult], 
 	}
 }
 
+func offlineCleanupTraceEvent(cleanup *OfflineCleanupResult, recoveryStep string) *GuardTraceEvent {
+	if cleanup == nil || cleanup.SessionCount == 0 {
+		return nil
+	}
+	return &GuardTraceEvent{
+		Kind:         GuardTraceSessionOffline,
+		Message:      cleanup.Message,
+		RecoveryStep: recoveryStep,
+		Scope:        cleanup.Scope,
+		SessionCount: cleanup.SessionCount,
+		RemovedCount: cleanup.RemovedCount,
+		SkippedCount: cleanup.SkippedCount,
+		FailedCount:  cleanup.FailedCount,
+	}
+}
+
 func bindingRepairTraceEvent(repair *kernel.OperationResult[BindingRepairResult], recoveryStep string) *GuardTraceEvent {
 	if repair == nil || repair.Data == nil {
 		return nil
@@ -604,4 +938,13 @@ func updateLastTraceRecoveryStep(trace []GuardTraceEvent, recoveryStep string) {
 		return
 	}
 	trace[len(trace)-1].RecoveryStep = recoveryStep
+}
+
+func firstNonNil(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

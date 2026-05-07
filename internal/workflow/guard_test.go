@@ -45,6 +45,10 @@ func (p *fakeProber) DetectLocalIPv4(ctx context.Context) (LocalIPSelection, err
 
 type fakeSelfClient struct {
 	loginErr    error
+	onlineErr   error
+	online      []kernel.OnlineSession
+	offlineErrs []error
+	offlineIDs  []string
 	binding     *kernel.OperatorBinding
 	bindingErr  error
 	bindErrs    []error
@@ -56,6 +60,43 @@ func (c *fakeSelfClient) Login(ctx context.Context, username, password string) (
 	_ = username
 	_ = password
 	return &kernel.OperationResult[kernel.SelfLoginResult]{Level: kernel.EvidenceConfirmed, Success: c.loginErr == nil}, c.loginErr
+}
+
+func (c *fakeSelfClient) GetOnlineList(ctx context.Context) (*kernel.OperationResult[[]kernel.OnlineSession], error) {
+	_ = ctx
+	sessions := append([]kernel.OnlineSession(nil), c.online...)
+	return &kernel.OperationResult[[]kernel.OnlineSession]{
+		Level:   kernel.EvidenceConfirmed,
+		Success: c.onlineErr == nil,
+		Message: "online list loaded",
+		Data:    &sessions,
+	}, c.onlineErr
+}
+
+func (c *fakeSelfClient) ForceOffline(ctx context.Context, sessionID string) (*kernel.OperationResult[map[string]any], error) {
+	_ = ctx
+	c.offlineIDs = append(c.offlineIDs, sessionID)
+	var err error
+	if len(c.offlineErrs) > 0 {
+		err = c.offlineErrs[0]
+		c.offlineErrs = c.offlineErrs[1:]
+	}
+	if err == nil {
+		filtered := c.online[:0]
+		for _, session := range c.online {
+			if session.SessionID != sessionID {
+				filtered = append(filtered, session)
+			}
+		}
+		c.online = filtered
+	}
+	data := map[string]any{"sessionId": sessionID}
+	return &kernel.OperationResult[map[string]any]{
+		Level:   kernel.EvidenceConfirmed,
+		Success: err == nil,
+		Message: "offline attempted",
+		Data:    &data,
+	}, err
 }
 
 func (c *fakeSelfClient) GetOperatorBinding(ctx context.Context) (*kernel.OperationResult[kernel.OperatorBinding], error) {
@@ -182,6 +223,59 @@ func TestRepairBindingMovesFromHolder(t *testing.T) {
 	}
 	if len(target.bindTargets) != 1 || target.bindTargets[0]["FLDEXTRA3"] != "cmcc-user" {
 		t.Fatalf("expected target bind, got %#v", target.bindTargets)
+	}
+}
+
+func TestRepairBindingClearsTargetOnlineSessionsBeforeMove(t *testing.T) {
+	target := &fakeSelfClient{
+		binding: &kernel.OperatorBinding{},
+		online:  []kernel.OnlineSession{{SessionID: "target-session"}},
+	}
+	holder := &fakeSelfClient{binding: &kernel.OperatorBinding{MobileAccount: "cmcc-user"}}
+	factory := &fakeFactory{
+		selfClients: []GuardSelfClient{target, holder},
+	}
+
+	result, err := RepairBinding(context.Background(), baseGuardEnv(factory, &fakeProber{}), "W")
+	if err != nil {
+		t.Fatalf("repair binding: %v", err)
+	}
+	if !result.Success || result.Data == nil || result.Data.Action != "moved" {
+		t.Fatalf("unexpected repair result: %#v", result)
+	}
+	if len(target.offlineIDs) != 1 || target.offlineIDs[0] != "target-session" {
+		t.Fatalf("expected target session offline before bind, got %#v", target.offlineIDs)
+	}
+	if result.Data.TargetOffline == nil || result.Data.TargetOffline.RemovedCount != 1 {
+		t.Fatalf("expected target offline evidence, got %#v", result.Data.TargetOffline)
+	}
+}
+
+func TestRepairBindingRollsBackHolderWhenTargetBindFails(t *testing.T) {
+	target := &fakeSelfClient{
+		binding:  &kernel.OperatorBinding{},
+		bindErrs: []error{errors.New("target bind failed")},
+	}
+	holder := &fakeSelfClient{binding: &kernel.OperatorBinding{MobileAccount: "cmcc-user"}}
+	factory := &fakeFactory{
+		selfClients: []GuardSelfClient{target, holder},
+	}
+
+	result, err := RepairBinding(context.Background(), baseGuardEnv(factory, &fakeProber{}), "W")
+	if err == nil {
+		t.Fatal("expected target bind error")
+	}
+	if result == nil || result.Success || result.Data == nil {
+		t.Fatalf("unexpected repair result: %#v", result)
+	}
+	if result.Data.Action != "target-bind-failed-rolled-back" || !result.Data.RollbackOK || result.Data.RollbackProfile != "B" {
+		t.Fatalf("expected rollback evidence, got %#v", result.Data)
+	}
+	if len(holder.bindTargets) != 2 {
+		t.Fatalf("expected holder clear and rollback, got %#v", holder.bindTargets)
+	}
+	if holder.bindTargets[0]["FLDEXTRA3"] != "" || holder.bindTargets[1]["FLDEXTRA3"] != "cmcc-user" {
+		t.Fatalf("unexpected holder bind targets: %#v", holder.bindTargets)
 	}
 }
 
@@ -338,6 +432,109 @@ func TestGuardCyclePortalSuccessButStillOfflineRepairsThenRetries(t *testing.T) 
 	}
 	if !result.PortalLoginOK || !result.InternetOK {
 		t.Fatalf("expected recovered internet: %#v", result)
+	}
+}
+
+func TestEnsureOnlineClearsConfiguredSessionsBeforeFinalRetry(t *testing.T) {
+	target := &fakeSelfClient{binding: &kernel.OperatorBinding{MobileAccount: "cmcc-user", MobilePassword: "cmcc-pass"}}
+	profileB := &fakeSelfClient{}
+	profileW := &fakeSelfClient{online: []kernel.OnlineSession{{SessionID: "stale-w"}}}
+	portalClient := &fakePortalClient{
+		results: []*kernel.OperationResult[kernel.Portal802Response]{
+			{Level: kernel.EvidenceConfirmed, Success: true, Message: "portal login ok first"},
+			{Level: kernel.EvidenceConfirmed, Success: true, Message: "portal login ok second"},
+			{Level: kernel.EvidenceConfirmed, Success: true, Message: "portal login ok third"},
+		},
+		errs: []error{nil, nil, nil},
+	}
+	prober := &fakeProber{
+		checks: []probeResult{
+			{ok: false, message: "initial offline"},
+			{ok: false, message: "offline after first"},
+			{ok: false, message: "offline after second"},
+			{ok: true, message: "internet restored after offline cleanup"},
+		},
+		ips: []LocalIPSelection{
+			{SelectedIP: "10.1.2.3", RoutedIP: "10.1.2.3", SelectionReason: "routed-match"},
+			{SelectedIP: "10.1.2.3", RoutedIP: "10.1.2.3", SelectionReason: "routed-match"},
+			{SelectedIP: "10.1.2.3", RoutedIP: "10.1.2.3", SelectionReason: "routed-match"},
+		},
+	}
+	factory := &fakeFactory{
+		selfClients:   []GuardSelfClient{target, profileB, profileW},
+		portalClients: []GuardPortalClient{portalClient},
+	}
+
+	result, err := GuardCycle(context.Background(), baseGuardEnv(factory, prober), GuardCycleInput{
+		DesiredProfile: "W",
+		ScheduleWindow: "night",
+	})
+	if err != nil {
+		t.Fatalf("expected final cleanup recovery, got %v", err)
+	}
+	if !result.InternetOK || !result.PortalLoginOK || result.RecoveryStep != "offline-sessions-then-portal-login" {
+		t.Fatalf("unexpected recovery result: %#v", result)
+	}
+	if result.EnsureOnline == nil || result.EnsureOnline.OfflineCleanup == nil || result.EnsureOnline.OfflineCleanup.RemovedCount != 1 {
+		t.Fatalf("expected offline cleanup evidence, got %#v", result.EnsureOnline)
+	}
+	if len(profileW.offlineIDs) != 1 || profileW.offlineIDs[0] != "stale-w" {
+		t.Fatalf("expected stale W session offline, got %#v", profileW.offlineIDs)
+	}
+	if got, want := traceKinds(result.Trace), []GuardTraceKind{GuardTracePortalLogin, GuardTraceBindingAudit, GuardTracePortalLogin, GuardTraceSessionOffline, GuardTracePortalLogin}; !equalTraceKinds(got, want) {
+		t.Fatalf("unexpected trace order: got %v want %v", got, want)
+	}
+}
+
+func TestEnsureOnlineSkipsCurrentLocalSessionDuringFinalCleanup(t *testing.T) {
+	target := &fakeSelfClient{binding: &kernel.OperatorBinding{MobileAccount: "cmcc-user", MobilePassword: "cmcc-pass"}}
+	profileB := &fakeSelfClient{online: []kernel.OnlineSession{{SessionID: "current-b", IP: "10.1.2.3"}}}
+	profileW := &fakeSelfClient{}
+	portalClient := &fakePortalClient{
+		results: []*kernel.OperationResult[kernel.Portal802Response]{
+			{Level: kernel.EvidenceConfirmed, Success: true, Message: "portal login ok first"},
+			{Level: kernel.EvidenceConfirmed, Success: true, Message: "portal login ok second"},
+		},
+		errs: []error{nil, nil},
+	}
+	prober := &fakeProber{
+		checks: []probeResult{
+			{ok: false, message: "initial offline"},
+			{ok: false, message: "offline after first"},
+			{ok: false, message: "offline after second"},
+		},
+		ips: []LocalIPSelection{
+			{SelectedIP: "10.1.2.3", RoutedIP: "10.1.2.3", SelectionReason: "routed-match"},
+			{SelectedIP: "10.1.2.3", RoutedIP: "10.1.2.3", SelectionReason: "routed-match"},
+		},
+	}
+	factory := &fakeFactory{
+		selfClients:   []GuardSelfClient{target, profileB, profileW},
+		portalClients: []GuardPortalClient{portalClient},
+	}
+
+	result, err := GuardCycle(context.Background(), baseGuardEnv(factory, prober), GuardCycleInput{
+		DesiredProfile: "B",
+		ScheduleWindow: "day",
+	})
+	if err != nil {
+		t.Fatalf("current local session should not be a cleanup error: %v", err)
+	}
+	if result.InternetOK || result.RecoveryStep != "binding-repair-then-portal-login" {
+		t.Fatalf("expected degraded connectivity without session kill, got %#v", result)
+	}
+	if result.EnsureOnline == nil || result.EnsureOnline.OfflineCleanup == nil {
+		t.Fatalf("expected offline cleanup evidence, got %#v", result.EnsureOnline)
+	}
+	cleanup := result.EnsureOnline.OfflineCleanup
+	if cleanup.SessionCount != 1 || cleanup.SkippedCount != 1 || cleanup.RemovedCount != 0 || cleanup.FailedCount != 0 {
+		t.Fatalf("expected current session skipped, got %#v", cleanup)
+	}
+	if len(profileB.offlineIDs) != 0 {
+		t.Fatalf("current local session should not be forced offline, got %#v", profileB.offlineIDs)
+	}
+	if len(portalClient.results) != 0 {
+		t.Fatalf("expected no third portal login when only current sessions were skipped")
 	}
 }
 

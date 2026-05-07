@@ -354,6 +354,17 @@ func traceToEvent(base Event, trace workflow.GuardTraceEvent) (Event, bool) {
 			TargetProfile: trace.TargetProfile,
 		}
 		return event, true
+	case workflow.GuardTraceSessionOffline:
+		event.Kind = EventSessionOffline
+		event.Details = SessionOfflineEventDetails{
+			Scope:        trace.Scope,
+			SessionCount: trace.SessionCount,
+			RemovedCount: trace.RemovedCount,
+			SkippedCount: trace.SkippedCount,
+			FailedCount:  trace.FailedCount,
+			RecoveryStep: trace.RecoveryStep,
+		}
+		return event, true
 	default:
 		return Event{}, false
 	}
