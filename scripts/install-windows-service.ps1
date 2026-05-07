@@ -169,7 +169,6 @@ $xml = @"
   <arguments>$argumentsXml</arguments>
   <workingdirectory>$repoRootXml</workingdirectory>
   <startmode>Automatic</startmode>
-  <delayedAutoStart>true</delayedAutoStart>
   <serviceaccount>
     <user>LocalSystem</user>
   </serviceaccount>
