@@ -299,6 +299,30 @@ func TestGetMacList(t *testing.T) {
 	}
 }
 
+func TestGetMacListAcceptsArrayRows(t *testing.T) {
+	client := NewClient(&mockSessionClient{
+		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {
+			_ = ctx
+			_ = opts
+			if path == "/Self/service/myMac" {
+				return &kernel.SessionResponse{StatusCode: 200, Body: fixture(t, "dashboard_page.html")}, nil
+			}
+			if path != macListPath {
+				t.Fatalf("unexpected path: %s", path)
+			}
+			return &kernel.SessionResponse{StatusCode: 200, Body: []byte(`{"total":1,"rows":[["aa:bb","device"]]}`)}, nil
+		},
+	})
+
+	result, err := client.GetMacList(context.Background())
+	if err != nil {
+		t.Fatalf("get mac list: %v", err)
+	}
+	if result == nil || result.Data == nil || result.Data.Total != 1 || len(result.Data.Rows) != 1 {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 func TestGetMacListEmptyBodyTreatsAsZeroRows(t *testing.T) {
 	client := NewClient(&mockSessionClient{
 		getFn: func(ctx context.Context, path string, opts kernel.RequestOptions) (*kernel.SessionResponse, error) {

@@ -46,6 +46,19 @@ function Add-Result {
     }
 }
 
+function Redact-TestOutput {
+    param([AllowNull()][string]$Text)
+    if ($null -eq $Text) {
+        return ""
+    }
+    $redacted = [string]$Text
+    $redacted = $redacted -replace '(?i)(user_password=)[^&\s"]+', '$1<redacted>'
+    $redacted = $redacted -replace '(?i)(user_account=)[^&\s"]+', '$1<redacted>'
+    $redacted = $redacted -replace '(?i)("(?:user_password|userPassword|password)"\s*:\s*")[^"]*(")', '$1<redacted>$2'
+    $redacted = $redacted -replace '(?i)(--password\s+)\S+', '$1<redacted>'
+    return $redacted
+}
+
 function Get-PropertyValue {
     param(
         [Parameter(Mandatory = $true)]$Object,
@@ -166,6 +179,17 @@ function Wait-ForInternetHealthy {
     throw "internet did not recover within ${TimeoutSeconds}s"
 }
 
+function Test-InternetHealthy {
+    param([int]$TimeoutSeconds = 10)
+    try {
+        Wait-ForInternetHealthy -TimeoutSeconds $TimeoutSeconds -IntervalSeconds 2
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
 function Invoke-CliJson {
     param([string[]]$CliArgs)
 
@@ -196,17 +220,17 @@ function Invoke-CliJson {
                         $json = $candidate | ConvertFrom-Json
                     }
                     catch {
-                        throw "command did not emit valid JSON`nstdout:`n$stdout`nstderr:`n$stderr"
+                        throw "command did not emit valid JSON`nstdout:`n$(Redact-TestOutput $stdout)`nstderr:`n$(Redact-TestOutput $stderr)"
                     }
                 } else {
-                    throw "command emitted no JSON payload`nstderr:`n$stderr"
+                    throw "command emitted no JSON payload`nstderr:`n$(Redact-TestOutput $stderr)"
                 }
             }
         }
         return [pscustomobject]@{
             ExitCode = $exitCode
-            Stdout   = $stdout
-            Stderr   = $stderr
+            Stdout   = Redact-TestOutput $stdout
+            Stderr   = Redact-TestOutput $stderr
             Json     = $json
             Args     = @($CliArgs)
         }
@@ -219,7 +243,7 @@ function Invoke-CliJson {
 function Require-JsonPayload {
     param($Result)
     if ($null -eq $Result.Json) {
-        throw "command emitted no JSON payload`nstderr:`n$($Result.Stderr)"
+        throw "command emitted no JSON payload`nstderr:`n$(Redact-TestOutput $Result.Stderr)"
     }
     return $Result.Json
 }
@@ -673,9 +697,17 @@ if (-not $SkipPortal) {
         $result = Invoke-CliJson ((New-RootArgs) + @("portal", "login", "--profile", $script:DayProfile, "--ip", $IP, "--isp", "mobile"))
         $json = Require-JsonPayload $result
         if ($Result.ExitCode -ne 0) {
+            $message = [string](Get-PropertyValue -Object $json -Name "message")
+            if ($message -match "Radius|already online|AC999|已在线" -and (Test-InternetHealthy -TimeoutSeconds 10)) {
+                return "portal rejected redundant login but internet is healthy"
+            }
             throw "portal login exited $($Result.ExitCode)`npayload:`n$($Result.Stdout)"
         }
         if (-not (Get-PropertyValue -Object $json -Name "success")) {
+            $message = [string](Get-PropertyValue -Object $json -Name "message")
+            if ($message -match "Radius|already online|AC999|已在线" -and (Test-InternetHealthy -TimeoutSeconds 10)) {
+                return "portal rejected redundant login but internet is healthy"
+            }
             throw "portal login expected success=true`npayload:`n$($Result.Stdout)"
         }
         $level = [string](Get-PropertyValue -Object $json -Name "level")

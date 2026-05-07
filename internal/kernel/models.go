@@ -71,8 +71,8 @@ type ConsumeProtectState struct {
 
 // MacListResult keeps the raw page rows because field shapes may vary by environment.
 type MacListResult struct {
-	Total int                      `json:"total,omitempty"`
-	Rows  []map[string]interface{} `json:"rows,omitempty"`
+	Total int   `json:"total,omitempty"`
+	Rows  []any `json:"rows,omitempty"`
 }
 
 // PersonState exposes a sanitized machine-readable projection of person-list state.

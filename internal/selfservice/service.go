@@ -302,7 +302,7 @@ func (c *Client) GetMacList(ctx context.Context) (*kernel.OperationResult[kernel
 		return nil, &kernel.OpError{Op: "service.mac.list", Message: "request failed", Err: err}
 	}
 	if strings.TrimSpace(string(resp.Body)) == "" {
-		data := &kernel.MacListResult{Total: 0, Rows: []map[string]interface{}{}}
+		data := &kernel.MacListResult{Total: 0, Rows: []any{}}
 		return &kernel.OperationResult[kernel.MacListResult]{
 			Level:   kernel.EvidenceConfirmed,
 			Success: true,
@@ -313,8 +313,8 @@ func (c *Client) GetMacList(ctx context.Context) (*kernel.OperationResult[kernel
 	}
 
 	var payload struct {
-		Total interface{}              `json:"total"`
-		Rows  []map[string]interface{} `json:"rows"`
+		Total interface{} `json:"total"`
+		Rows  []any       `json:"rows"`
 	}
 	if err := parseJSON(resp.Body, &payload); err != nil {
 		return nil, &kernel.OpError{Op: "service.mac.list", Message: "parse json failed", Err: err}
