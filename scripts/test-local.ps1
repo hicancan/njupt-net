@@ -418,6 +418,15 @@ function Get-SessionIdForOffline {
     $sessions = Get-OnlineSessions -Profile $Profile
     foreach ($session in $sessions) {
         $sessionId = [string](Get-PropertyValue -Object $session -Name "sessionId")
+        $sessionIP = [string](Get-PropertyValue -Object $session -Name "ip")
+        if (-not [string]::IsNullOrWhiteSpace($sessionId) -and
+            -not [string]::IsNullOrWhiteSpace($IP) -and
+            $sessionIP -ne $IP) {
+            return $sessionId
+        }
+    }
+    foreach ($session in $sessions) {
+        $sessionId = [string](Get-PropertyValue -Object $session -Name "sessionId")
         if (-not [string]::IsNullOrWhiteSpace($sessionId)) {
             return $sessionId
         }
