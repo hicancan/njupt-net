@@ -128,8 +128,8 @@ Create `config.json` (recommended: copy from `config.example.json`; already in `
     "schedule": {
       "dayProfile": "B",
       "nightProfile": "W",
-      "nightStart": "23:30",
-      "nightEnd": "07:00",
+      "nightStart": "23:28",
+      "nightEnd": "07:02",
       "skipNightSwitchWeekdays": ["friday", "saturday"]
     }
   }
@@ -158,8 +158,8 @@ Create `config.json` (recommended: copy from `config.example.json`; already in `
 | `guard.timezone` | `Asia/Shanghai` | Schedule timezone |
 | `guard.schedule.dayProfile` | no default | Profile name used during the day; required |
 | `guard.schedule.nightProfile` | no default | Profile name used at night; required |
-| `guard.schedule.nightStart` | `23:30` | Night window start time |
-| `guard.schedule.nightEnd` | `07:00` | Night window end time |
+| `guard.schedule.nightStart` | `23:28` | Night window start time |
+| `guard.schedule.nightEnd` | `07:02` | Night window end time |
 | `guard.schedule.skipNightSwitchWeekdays` | `["friday","saturday"]` | Night windows starting on these weekdays keep the day profile; set `[]` to switch every night |
 | `output` | `human` | Default output mode: `human` / `json` |
 
@@ -287,8 +287,8 @@ flowchart TD
 
 ### Default Policy
 
-- ☀️ Day 07:00–23:30 → profile `B`
-- 🌙 Night 23:30–07:00 → profile `W`
+- ☀️ Day 07:02–23:28 → profile `B`
+- 🌙 Night 23:28–07:02 → profile `W`
 - 🌙 Night windows starting on Friday or Saturday keep profile `B` by default
 - **Immediate** recovery when connectivity fails
 - Binding correctness audit every 180 seconds

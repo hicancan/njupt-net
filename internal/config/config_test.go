@@ -64,6 +64,9 @@ func TestLoad_UsesEnvAndDefaults(t *testing.T) {
 	if cfg.Guard.Schedule.DayProfile != "A" || cfg.Guard.Schedule.NightProfile != "A" {
 		t.Fatalf("unexpected explicit guard profiles: %#v", cfg.Guard.Schedule)
 	}
+	if cfg.Guard.Schedule.NightStart != "23:28" || cfg.Guard.Schedule.NightEnd != "07:02" {
+		t.Fatalf("unexpected default guard night window: %#v", cfg.Guard.Schedule)
+	}
 	if got := cfg.Guard.Schedule.SkipNightSwitchWeekdays; len(got) != 2 || got[0] != "friday" || got[1] != "saturday" {
 		t.Fatalf("unexpected default skip night switch weekdays: %#v", got)
 	}

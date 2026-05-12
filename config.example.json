@@ -34,8 +34,8 @@
     "schedule": {
       "dayProfile": "B",
       "nightProfile": "W",
-      "nightStart": "23:30",
-      "nightEnd": "07:00",
+      "nightStart": "23:28",
+      "nightEnd": "07:02",
       "skipNightSwitchWeekdays": ["friday", "saturday"]
     }
   },

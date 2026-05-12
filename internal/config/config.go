@@ -189,10 +189,10 @@ func (c *Config) applyDefaults() {
 		c.Guard.Timezone = "Asia/Shanghai"
 	}
 	if strings.TrimSpace(c.Guard.Schedule.NightStart) == "" {
-		c.Guard.Schedule.NightStart = "23:30"
+		c.Guard.Schedule.NightStart = "23:28"
 	}
 	if strings.TrimSpace(c.Guard.Schedule.NightEnd) == "" {
-		c.Guard.Schedule.NightEnd = "07:00"
+		c.Guard.Schedule.NightEnd = "07:02"
 	}
 	if c.Guard.Schedule.SkipNightSwitchWeekdays == nil {
 		c.Guard.Schedule.SkipNightSwitchWeekdays = DefaultSkipNightSwitchWeekdays()
