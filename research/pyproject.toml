@@ -1,0 +1,9 @@
+[project]
+name = "njupt-net-research"
+version = "0.1.0"
+description = "Independent and reproducible investigation of NJUPT Portal and Self protocols"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[tool.uv]
+package = false
