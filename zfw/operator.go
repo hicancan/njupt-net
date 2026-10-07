@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-
 	"strings"
 
 	"golang.org/x/net/html"
@@ -72,6 +71,17 @@ func (s *Session) BindOperator(ctx context.Context, operator, account, password 
 	if account == "" || password == "" {
 		return nil, fmt.Errorf("operator binding requires a broadband account and password")
 	}
+	return s.setOperator(ctx, operator, account, password)
+}
+
+func (s *Session) UnbindOperator(ctx context.Context, operator string) (*OperatorBindingResult, error) {
+	if operator != "njxy" && operator != "cmcc" {
+		return nil, fmt.Errorf("operator unbinding requires njxy or cmcc")
+	}
+	return s.setOperator(ctx, operator, "", "")
+}
+
+func (s *Session) setOperator(ctx context.Context, operator, account, password string) (*OperatorBindingResult, error) {
 	result := &OperatorBindingResult{Operator: operator, Account: account, Outcome: NotSubmitted}
 	form, values, err := s.operatorForm(ctx)
 	if err != nil {
@@ -81,6 +91,12 @@ func (s *Session) BindOperator(ctx context.Context, operator, account, password 
 	if operator == "cmcc" {
 		accountField, passwordField = "FLDEXTRA3", "FLDEXTRA4"
 	}
+	result.Bindings = operatorAccounts(values)
+	if account == "" && password == "" && values.Get(accountField) == "" && values.Get(passwordField) == "" {
+		result.Verified = true
+		return result, nil
+	}
+	passwords := []string{values.Get("FLDEXTRA2"), values.Get("FLDEXTRA4"), password}
 	values.Set(accountField, account)
 	values.Set(passwordField, password)
 	result.Outcome = Unknown
@@ -96,8 +112,8 @@ func (s *Session) BindOperator(ctx context.Context, operator, account, password 
 	if err != nil {
 		return result, err
 	}
-	for _, field := range []string{"FLDEXTRA2", "FLDEXTRA4"} {
-		if secret := values.Get(field); secret != "" {
+	for _, secret := range passwords {
+		if secret != "" {
 			message = strings.ReplaceAll(message, secret, "[password]")
 		}
 	}
@@ -111,11 +127,6 @@ func (s *Session) BindOperator(ctx context.Context, operator, account, password 
 	default:
 		return result, fmt.Errorf("Self operator result has no recognized acceptance state")
 	}
-	updated := findForm(doc, "/Self/service/bind-operator")
-	if updated == nil {
-		return result, fmt.Errorf("Self operator result is missing its binding form")
-	}
-	result.Bindings = operatorAccounts(formValues(updated))
 	_, actual, err := s.operatorForm(ctx)
 	if err != nil {
 		return result, fmt.Errorf("operator binding was accepted; final state is unverified: %w", err)

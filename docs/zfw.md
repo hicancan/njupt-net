@@ -69,15 +69,30 @@ URL 文件保存示例中的 `.data.url` 字符串。`--account` 选择期望账
 | `consume --limit AMOUNT` | POST `service/changeConsumeProtect` | 提交专用表单并核对实际限额 |
 | `operator` | `service/operatorId` | 读取运营商绑定 |
 | `operator --bind` | POST `service/bind-operator` | 提交配置中选定的运营商账号，保留另一运营商字段 |
+| `operator --unbind njxy\|cmcc` | POST `service/bind-operator` | 清空选定运营商的账号与密码，保留另一运营商字段 |
 | `mauth` | `dashboard/refreshMauthType` | 读取无感知策略 |
 | `mauth --change` | GET `dashboard/oprateMauthAction` | 执行一次当前策略动作，再核对变化 |
 | `recharge` | `service/userRecharge` | 检查实际充值入口 |
 
-消费限额为非负十进制金额，最多三位小数，`999999` 表示不限。运营商表单包含电信 `FLDEXTRA1/2` 和移动 `FLDEXTRA3/4`；`operator --bind` 修改配置选定的运营商字段，并保留另一组字段。
+消费限额为非负十进制金额，最多三位小数，`999999` 表示不限。运营商表单包含电信 `FLDEXTRA1/2` 和移动 `FLDEXTRA3/4`；`operator --bind` 修改配置选定的运营商字段，`operator --unbind njxy|cmcc` 将选定的一组账号与密码同时置空。两种操作互斥，均先 GET 当前表单，使用其中的 `csrftoken`，保留另一组字段，再 POST 到同一 `service/bind-operator` 地址。解绑目标的账号和密码均已为空时，返回 `not_submitted`、`verified:true`。
+
+当前部署中，同一移动宽带账号仍绑定旧校园账号时，直接绑定新校园账号会返回“已存在该运营商账号”。转移时，先下线待切换终端的旧会话，解除旧校园账号的移动绑定，再在新校园账号下绑定并认证。以下命令中的 `OLD_ACCOUNT`、`NEW_ACCOUNT` 为配置中的账号键；在旧账号的 `online` 结果中按终端 IP 与 MAC 选定对应的 `SESSION_ID`。配置中的 `broadband_account.operator` 设为 `cmcc`。
+
+```powershell
+njupt-net --interface 'Ethernet' --account OLD_ACCOUNT zfw online
+njupt-net --interface 'Ethernet' --account OLD_ACCOUNT zfw offline --session SESSION_ID
+njupt-net --interface 'Ethernet' --account OLD_ACCOUNT zfw operator --unbind cmcc
+njupt-net --interface 'Ethernet' --account NEW_ACCOUNT zfw operator --bind
+njupt-net --interface 'Ethernet' --account NEW_ACCOUNT p login --operator cmcc
+njupt-net --interface 'Ethernet' p status
+njupt-net --interface 'Ethernet' probe
+```
+
+运营商解绑改变校园账号的宽带关系；终端下线使用 `offline --session`，MAC 解绑使用 `unbind --mac`。以上移动宽带迁移流程已完成校园网实测，解绑、重新绑定和新账号认证均通过独立状态核对，同一源地址的公网检查成功。
 
 CSRF 令牌按操作读取：刷新使用 dashboard 内联调用令牌；消费保护与运营商绑定使用各自隐藏表单令牌；MAC 解绑使用 MAC 页面内联令牌。无感知查询返回包含 HTML 操作链接的 JSON 字符串，内核从链接恢复下一次动作。
 
-修改操作区分 `accepted`、`rejected`、`unknown`、`not_submitted`，`verified` 单独表示最终状态是否确认。消费限额提交后独立 GET 读回限额；运营商提交后独立读取表单，确认选定账号与密码、未选运营商字段，结果仅输出非密码字段。无感知操作重新查询策略，指定连接下线只读核对目标会话消失。
+修改操作区分 `accepted`、`rejected`、`unknown`、`not_submitted`，`verified` 单独表示最终状态是否确认。消费限额提交后独立 GET 读回限额；运营商绑定或解绑提交后独立 GET 读取表单，绑定核对选定账号与密码一致，解绑核对两字段均为空，同时确认另一运营商字段保持原值。结果仅输出账号与密码是否已设置等非密码字段。无感知操作重新查询策略，指定连接下线只读核对目标会话消失。
 
 MAC 解绑先完整读取当前绑定。目标已不存在时返回 `not_submitted`、`verified:true`；列表异常时，明确指定的 MAC 仍可提交一次。服务器结构化 `state:true/false` 分别映射为 `accepted/rejected`，缺少该字段则为 `unknown`。提交后完整读回各页，目标消失时设为 `verified:true`，同时保留原 `outcome`。提交后的成功结果需要 `accepted` 与 `verified:true` 同时成立；列表为空正文、不完整或重复页时，返回已知结果与协议错误。
 
@@ -117,7 +132,8 @@ MAC 解绑先完整读取当前绑定。目标已不存在时返回 `not_submitt
 | 管理会话语言 | `English`、`zh_cn` 切换与读回成功 |
 | 消费保护 | 以原值 `999999` 提交，服务器接受且读回一致；其他限额修改待验证 |
 | MAC 列表 | HTTP 200 空正文，命令返回协议错误 |
-| 运营商改绑、MAC 解绑 | 请求和离线测试已实现，真实账号修改待验证 |
+| 移动宽带解绑与跨校园账号迁移 | 旧账号解绑、新账号绑定均被接受且读回一致，新账号门户认证及同源公网检查成功 |
+| MAC 解绑 | 请求和离线测试已实现，真实账号修改待验证 |
 | 充值 | 入口显示服务菜单，未提供付款表单，返回不可用状态 |
 
 网页相对充值链接会拼接成 `service/service/userRecharge`；CLI 直接读取表中确认的 `service/userRecharge`。部署与账号权限变化时，可通过 [research](../research/README.md) 重新读取页面和复核接口。

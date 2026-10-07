@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -12,7 +13,7 @@ import (
 
 func zfwCommand(ctx context.Context, opt options, command string, args []string) (result any, resultErr error) {
 	fs := commandFlags("zfw " + command)
-	var sessionID, mac, limit, output string
+	var sessionID, mac, limit, output, unbindOperator string
 	var bind, change, all bool
 	page, size := 1, 10
 	var query zfw.BillQuery
@@ -29,6 +30,7 @@ func zfwCommand(ctx context.Context, opt options, command string, args []string)
 		fs.StringVar(&limit, "limit", "", "new limit; omitted means query")
 	case "operator":
 		fs.BoolVar(&bind, "bind", false, "submit configured broadband account")
+		fs.StringVar(&unbindOperator, "unbind", "", "clear njxy or cmcc broadband binding")
 	case "mauth":
 		fs.BoolVar(&change, "change", false, "execute the current mauth action")
 	case "bills", "export":
@@ -49,6 +51,22 @@ func zfwCommand(ctx context.Context, opt options, command string, args []string)
 	}
 	if err := parse(fs, args); err != nil {
 		return nil, err
+	}
+	if command == "operator" {
+		unbindSet := false
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "unbind" {
+				unbindSet = true
+			}
+		})
+		if unbindSet {
+			if bind {
+				return nil, invalid("operator --bind and --unbind are mutually exclusive")
+			}
+			if unbindOperator != "njxy" && unbindOperator != "cmcc" {
+				return nil, invalid("operator --unbind requires njxy or cmcc")
+			}
+		}
 	}
 	if command == "offline" && sessionID == "" {
 		return nil, invalid("offline requires --session")
@@ -178,6 +196,9 @@ func zfwCommand(ctx context.Context, opt options, command string, args []string)
 		}
 		return self.SetConsumeProtect(ctx, limit)
 	case "operator":
+		if unbindOperator != "" {
+			return self.UnbindOperator(ctx, unbindOperator)
+		}
 		if bind {
 			broadband := cfg.BroadbandAccount
 			return self.BindOperator(ctx, broadband.Operator, broadband.Account, broadband.Password)

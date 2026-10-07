@@ -29,7 +29,7 @@ uv run --locked python -m unittest discover -p "test_*.py" -v
 | `zfw/connections.py` | 在线连接、历史记录、选定会话下线 |
 | `zfw/mac.py` | MAC 列表原始响应、页面列含义、解绑检查 |
 | `zfw/mauth.py` | 无感知状态与单次切换 |
-| `zfw/operator.py` | 运营商表单和绑定后检查 |
+| `zfw/operator.py` | 运营商表单、绑定、清空绑定及独立读回检查 |
 | `zfw/consume.py` | 消费限额、表单和修改后检查 |
 | `zfw/bills.py` | 三类账单、筛选、分页、排序、两类 XLS 导出 |
 | `zfw/recharge.py` | 实际充值入口与付款表单 |
@@ -50,6 +50,9 @@ uv run --locked python -m p.portal --source SOURCE_IPV4
 uv run --locked python -m p.access --source SOURCE_IPV4
 uv run --locked python -m zfw.session --source SOURCE_IPV4 --config ../config.json --account ACCOUNT_ALIAS
 uv run --locked python -m zfw.mac --source SOURCE_IPV4 --config ../config.json --account ACCOUNT_ALIAS
+uv run --locked python -m zfw.operator --source SOURCE_IPV4 --config ../config.json --account ACCOUNT_ALIAS
+uv run --locked python -m zfw.operator --source SOURCE_IPV4 --config ../config.json --account ACCOUNT_ALIAS --bind cmcc --operator-account BROADBAND_ACCOUNT
+uv run --locked python -m zfw.operator --source SOURCE_IPV4 --config ../config.json --account ACCOUNT_ALIAS --unbind cmcc
 uv run --locked python -m zfw.bills --source SOURCE_IPV4 --config ../config.json --account ACCOUNT_ALIAS --kind monthly --export page
 uv run --locked python -m zfw.public --source SOURCE_IPV4
 ```
@@ -60,7 +63,9 @@ uv run --locked python -m zfw.public --source SOURCE_IPV4
 
 默认输出响应状态、类型、长度、哈希和 JSON 结构。`--output OUTPUT_DIRECTORY` 将解压后的响应正文保存到本次新建的目录，文件采用独占创建。正文包含实际账号、用户模型、令牌或账单，作为本地实验数据保存；公开样本使用下述人工构造格式。
 
-状态改变通过显式参数选择：`p.access --action login|logout`、`p.password --action change`、`zfw.connections --offline-session`、`zfw.mac --unbind`、`zfw.mauth --toggle`、`zfw.operator --bind`、`zfw.consume --set-limit`、`zfw.account --refresh|--submit-profile`。新密码通过交互输入。每次动作对应一次提交，认证端口和协议由指定入口确定。
+状态改变通过显式参数选择：`p.access --action login|logout`、`p.password --action change`、`zfw.connections --offline-session`、`zfw.mac --unbind`、`zfw.mauth --toggle`、`zfw.operator --bind|--unbind`、`zfw.consume --set-limit`、`zfw.account --refresh|--submit-profile`。新密码通过交互输入。每次动作对应一次提交，认证端口和协议由指定入口确定。
+
+`zfw.operator --bind njxy|cmcc` 和 `--unbind njxy|cmcc` 互斥。绑定通过 `--operator-account` 指定宽带账号，并交互输入密码；解绑只选择运营商。程序 GET `service/operatorId` 获取当前表单和 `csrftoken`，修改电信 `FLDEXTRA1/2` 或移动 `FLDEXTRA3/4`，保留另一组字段，向 `service/bind-operator` POST 一次。解绑提交的选定账号与密码均为空。提交后独立 GET 读取表单，输出响应摘要，以及账号、密码是否符合目标和另一运营商是否保持原值的布尔结果；解绑结果分别使用 `account_cleared`、`password_cleared`、`other_operator_unchanged`。
 
 `access_cycle` 必须指定 `--execute` 和 `--operator`，会改变选定终端的上网状态。实验前核对当前账号、源地址和待用配置；如选用 `--restore-on-failure`，恢复属于显式实验清理，并单独报告结果。账单当前页导出先在同一管理会话查询表格；全部导出携带页面提供的筛选条件。
 
@@ -74,6 +79,7 @@ uv run --locked python -m zfw.public --source SOURCE_IPV4
 - 语言实验已验证服务器端 Cookie 会话偏好。公开帮助页的语言按钮存在未定义 `ctx` 的脚本错误，该按钮点击后请求未发出。
 - 匿名帮助实验先访问登录页建立 `/Self` Cookie，再从帮助外框读取实际 iframe。这一顺序使服务器输出可用的 `/Self/unlogin/helpinfo/0` 地址，整个过程使用公开页面。
 - MAC 页面明确给出五列含义；当前列表返回 HTTP 200 空正文，JSON 协议解析报错。有效 JSON 列表结构和解绑后的状态变化尚待实际响应确认。
+- 移动宽带已完成跨校园账号迁移：旧终端会话下线后，清空旧校园账号的移动账号与密码，服务器接受且独立读回为空；新校园账号绑定同一宽带后读回一致，门户认证及同一源地址的公网检查成功。旧绑定仍存在时，新校园账号直接绑定会收到“已存在该运营商账号”。完整命令见 [Self 协议](../docs/zfw.md)。
 - 资料表单仅包含 `csrftoken`，当前提交返回 `Not valid!`。充值入口返回服务菜单，付款表单及请求需要可用页面继续确认。
 - `deployment --nmap-xml SCAN_XML` 读取独立扫描的范围和状态。TCP 服务枚举说明监听端口，页面与脚本调查说明 HTTP 路径；UDP 无响应按扫描器给出的状态记录。
 - `deployment --udp ntp|drcom-challenge` 向 `--host` 指定目标发送一个报文，默认目标为 p。NTP 请求为首字节 `1b` 的 48 字节报文；Drcom 请求为 `07 01 08 00 01 00 00 00`。结果记录应答对端、长度、协议头及结构字段；`--output` 保存同一份汇总。Drcom 请求依据参考客户端的 [`_make_challenge`](https://github.com/drcoms/drcom-generic/blob/master/latest-pppoe.py)，应答中的挑战种子留在进程内存。

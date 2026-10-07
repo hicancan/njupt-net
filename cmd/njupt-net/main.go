@@ -50,7 +50,7 @@ zfw commands:
   devices     [--page 1] [--size 10]  MAC bindings; size: 10, 25, 50 or 100
   unbind      --mac ADDRESS           remove a MAC binding
   consume     [--limit AMOUNT]        query or set; 999999 means no limit
-  operator    [--bind]                query or submit configured broadband account
+  operator    [--bind | --unbind njxy|cmcc] query, bind or clear a broadband account
   mauth       [--change]              query or execute the current policy action
   recharge                           show recharge availability
   notice, help, agreement             public pages; no --account required

@@ -86,6 +86,9 @@ func TestInvalidBusinessArgumentsFailBeforeNetwork(t *testing.T) {
 		{"zfw", "bills", []string{"--kind", "monthly", "--start", "2026-01-01"}},
 		{"zfw", "devices", []string{"--size", "20"}},
 		{"zfw", "unbind", []string{"--mac", "invalid-mac"}},
+		{"zfw", "operator", []string{"--unbind", "invalid"}},
+		{"zfw", "operator", []string{"--unbind", ""}},
+		{"zfw", "operator", []string{"--bind", "--unbind", "cmcc"}},
 	}
 	for _, check := range checks {
 		t.Run(check.group+" "+check.command+strings.Join(check.args, ""), func(t *testing.T) {
@@ -100,6 +103,26 @@ func TestInvalidBusinessArgumentsFailBeforeNetwork(t *testing.T) {
 				t.Fatalf("expected argument error, got %v", err)
 			}
 		})
+	}
+}
+
+func TestOperatorUnbindUsesAccountWithoutBroadbandConfiguration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"accounts":{"fixture":{"account":"campus-account","password":"campus-password"}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, operator := range []string{"njxy", "cmcc"} {
+		opt := options{config: path, account: "fixture"}
+		_, err := zfwCommand(context.Background(), opt, "operator", []string{"--unbind", operator})
+		var argument *argumentError
+		if !errors.As(err, &argument) || !strings.Contains(err.Error(), "--interface") {
+			t.Fatalf("unbind required broadband configuration before link selection: %v", err)
+		}
+		opt.account = ""
+		_, err = zfwCommand(context.Background(), opt, "operator", []string{"--unbind", operator})
+		if !errors.As(err, &argument) || !strings.Contains(err.Error(), "--account is required") {
+			t.Fatalf("unbind did not require account identity: %v", err)
+		}
 	}
 }
 
