@@ -16,14 +16,13 @@ type binding struct {
 	Account     string `json:"account"`
 	PasswordSet bool   `json:"password_set"`
 }
-
 type call struct {
-	Args    []string `json:"args"`
-	Command string   `json:"command"`
-	Account string   `json:"account"`
-	Write   string   `json:"write,omitempty"`
+	Args       []string `json:"args"`
+	Command    string   `json:"command"`
+	Account    string   `json:"account"`
+	Executable string   `json:"executable"`
+	Write      string   `json:"write,omitempty"`
 }
-
 type state struct {
 	Scenario      string                        `json:"scenario"`
 	FailAt        int                           `json:"fail_at"`
@@ -33,11 +32,12 @@ type state struct {
 	OnlineAccount string                        `json:"online_account"`
 	Provider      string                        `json:"provider"`
 	Bindings      map[string]map[string]binding `json:"bindings"`
+	Residual      map[string]bool               `json:"residual"`
 	Writes        map[string]int                `json:"writes"`
+	Reads         map[string]int                `json:"reads"`
 	OfflineIDs    []string                      `json:"offline_ids"`
 	PortalReads   int                           `json:"portal_reads"`
 }
-
 type config struct {
 	Accounts map[string]struct {
 		Account  string `json:"account"`
@@ -66,6 +66,9 @@ func main() {
 	}
 	if s.Writes == nil {
 		s.Writes = map[string]int{}
+	}
+	if s.Reads == nil {
+		s.Reads = map[string]int{}
 	}
 	args := os.Args[1:]
 	flags := map[string]string{}
@@ -103,20 +106,22 @@ func main() {
 		position++
 	}
 	alias := flags["--account"]
-	c := call{Args: append([]string{}, args...), Command: command, Account: alias}
-	write := ""
+	program, err := os.Executable()
+	if err != nil {
+		panic(err)
+	}
+	entry := call{Args: append([]string{}, args...), Command: command, Account: alias, Executable: program}
 	switch {
 	case command == "p login":
-		write = alias + ":login"
+		entry.Write = alias + ":login"
 	case command == "zfw offline":
-		write = alias + ":offline"
+		entry.Write = alias + ":offline"
 	case command == "zfw operator" && flags["--unbind"] != "":
-		write = alias + ":unbind"
-	case command == "zfw operator" && flags["--bind"] == "true":
-		write = alias + ":bind"
+		entry.Write = alias + ":unbind"
+	case command == "zfw operator" && flags["--bind"] != "":
+		entry.Write = alias + ":bind"
 	}
-	c.Write = write
-	s.Calls = append(s.Calls, c)
+	s.Calls = append(s.Calls, entry)
 	failed := s.FailAt > 0 && len(s.Calls) == s.FailAt
 	save := func() {
 		data, err := json.MarshalIndent(s, "", "  ")
@@ -153,33 +158,68 @@ func main() {
 	if failed && s.FailureMode == "secret_error" {
 		emit(nil, "injected error CAMPUS_OLD_PASSWORD_73e6 / CAMPUS_NEW_PASSWORD_82a1 / BROADBAND_PASSWORD_91f4", 1)
 	}
-	if failed && s.FailureMode != "accepted_unverified" && s.FailureMode != "accepted_unverified_success" && s.FailureMode != "wrong_envelope" {
+	if failed && s.FailureMode != "accepted_unverified" && s.FailureMode != "accepted_unverified_success" && s.FailureMode != "unknown_mutation" && s.FailureMode != "wrong_envelope" {
 		emit(nil, "injected CLI failure", 1)
 	}
 	var cfg config
 	if flags["--config"] != "" {
-		data, err = os.ReadFile(flags["--config"])
+		data, err := os.ReadFile(flags["--config"])
 		if err != nil || json.Unmarshal(data, &cfg) != nil {
 			emit(nil, "fixture could not load configuration", 1)
 		}
 	}
-	terminal := func(online bool) any {
-		if !online {
-			return nil
+	if strings.HasPrefix(command, "zfw ") {
+		credential, exists := cfg.Accounts[alias]
+		if !exists || credential.Account == "" || credential.Password == "" {
+			emit(nil, "configured campus account and password are required", 1)
 		}
-		return map[string]any{"account": s.OnlineAccount, "ip": source, "mac": mac, "session": "portal-session"}
 	}
-	status := func() any {
+	baseAccount := func() string {
+		value := strings.TrimPrefix(strings.TrimPrefix(s.OnlineAccount, ",0,"), ",1,")
+		base, _, _ := strings.Cut(value, "@")
+		return base
+	}
+	wasDisconnected := func() bool {
+		for key, count := range s.Writes {
+			if strings.HasSuffix(key, ":offline") && count > 0 {
+				return true
+			}
+		}
+		return false
+	}
+	status := func() map[string]any {
 		online := s.Online
-		if s.Writes["old:offline"] > 0 && !online && (s.Scenario == "offline_pending" || s.Scenario == "offline_delayed" && s.PortalReads <= 2) {
+		if wasDisconnected() && !online && (s.Scenario == "offline_pending" || s.Scenario == "offline_delayed" && s.PortalReads <= 2) {
 			online = true
 		}
-		return map[string]any{"source": source, "online": online, "terminal": terminal(online)}
+		var terminal any
+		if online {
+			address := source
+			account := s.OnlineAccount
+			terminalMAC := mac
+			if s.Scenario == "before_offline_identity_changes" && s.Reads["p status"] >= 2 && !wasDisconnected() {
+				account = "unrelated-campus@" + s.Provider
+			}
+			if s.Scenario == "before_offline_mac_changes" && s.Reads["p status"] >= 2 && !wasDisconnected() || s.Scenario == "login_mac_changes" && s.Writes["new:login"] > 0 {
+				terminalMAC = "112233445566"
+			}
+			if s.Scenario == "wrong_status_ip" {
+				address = "10.20.30.99"
+			}
+			terminal = map[string]any{"account": account, "ip": address, "mac": terminalMAC, "session": "portal-session"}
+		}
+		return map[string]any{"source": source, "online": online, "terminal": terminal}
 	}
-	verified := !(failed && (s.FailureMode == "accepted_unverified" || s.FailureMode == "accepted_unverified_success"))
-	finishWrite := func(result any) {
-		if !verified && s.FailureMode != "accepted_unverified_success" {
-			emit(result, "operation accepted; final state is unverified", 1)
+	finishWrite := func(result map[string]any) {
+		if failed && s.FailureMode == "unknown_mutation" {
+			result["outcome"], result["verified"] = "unknown", false
+			emit(result, "submission outcome is unknown", 1)
+		}
+		if failed && (s.FailureMode == "accepted_unverified" || s.FailureMode == "accepted_unverified_success") {
+			result["verified"] = false
+			if s.FailureMode != "accepted_unverified_success" {
+				emit(result, "operation accepted; final state is unverified", 1)
+			}
 		}
 		emit(result, "", 0)
 	}
@@ -189,8 +229,13 @@ func main() {
 		if s.Scenario == "multiple_ipv4" {
 			addresses = append(addresses, "10.20.30.41")
 		}
-		emit([]any{map[string]any{"name": "校园 有线 网络", "index": 12, "up": s.Scenario != "interface_down", "ipv4": addresses}}, "", 0)
+		rows := []any{map[string]any{"name": "校园 有线 网络", "index": 12, "up": s.Scenario != "interface_down", "ipv4": addresses}, map[string]any{"name": "independent WiFi", "index": 13, "up": true, "ipv4": []string{"192.168.43.123"}}}
+		if s.Scenario == "duplicate_source" {
+			rows = append(rows, map[string]any{"name": "duplicate", "index": 14, "up": true, "ipv4": []string{source}})
+		}
+		emit(rows, "", 0)
 	case "p status":
+		s.Reads["p status"]++
 		if s.Scenario == "pause_status" {
 			save()
 			if err := os.WriteFile(path+".ready", []byte("ready"), 0600); err != nil {
@@ -207,66 +252,81 @@ func main() {
 				time.Sleep(25 * time.Millisecond)
 			}
 		}
-		if s.Writes["old:offline"] > 0 {
+		if wasDisconnected() {
 			s.PortalReads++
 		}
 		emit(status(), "", 0)
 	case "p login":
-		s.Writes[write]++
-		s.Online = true
-		s.OnlineAccount = cfg.Accounts[alias].Account
-		if flags["--operator"] != "campus" {
-			s.OnlineAccount += "@" + flags["--operator"]
+		if s.Online {
+			emit(map[string]any{"outcome": "not_submitted", "verified": false, "status": status()}, "terminal is already online", 1)
 		}
-		finishWrite(map[string]any{"outcome": "accepted", "verified": verified, "status": status()})
+		s.Writes[entry.Write]++
+		s.Online = true
+		s.OnlineAccount = cfg.Accounts[alias].Account + "@" + flags["--operator"]
+		if s.Scenario == "login_wrong_identity" {
+			s.OnlineAccount = "unrelated-campus@" + s.Provider
+		}
+		finishWrite(map[string]any{"outcome": "accepted", "verified": true, "status": status()})
 	case "probe":
 		emit(map[string]any{"source": source, "internet": s.Scenario != "probe_offline", "probe": "http://www.msftconnecttest.com/connecttest.txt"}, "", 0)
-	case "zfw verify":
-		emit(map[string]any{"credentials_valid": true, "identity_verified": true, "login_method": "password", "account_alias": alias}, "", 0)
 	case "zfw online":
-		rows := []any{}
-		if s.Online || s.Scenario == "offline_self_online" {
-			row := func(id, ip, address string) any {
-				return map[string]any{"session_id": id, "login_time": "2026-01-01 00:00:00", "ip": ip, "mac": address, "use_time": "1", "up_flow": "1", "down_flow": "1", "host_name": nil, "terminal_type": "PC", "bras_id": "fixture", "user_id": 1}
+		rows := []any{map[string]any{"session_id": "another-device-" + alias, "ip": "10.20.30.41", "mac": "112233445566"}}
+		if s.Online && cfg.Accounts[alias].Account == baseAccount() || s.Residual[alias] {
+			row := func(id, address string) any {
+				return map[string]any{"session_id": id, "ip": source, "mac": address, "login_time": "2026-01-01 00:00:00", "use_time": "1", "up_flow": "1", "down_flow": "1", "host_name": nil, "terminal_type": "PC", "bras_id": "fixture", "user_id": 1}
 			}
 			switch s.Scenario {
 			case "zero_session":
 			case "multiple_sessions":
-				rows = append(rows, row("self-session", source, mac), row("self-second", source, mac))
+				rows = append(rows, row("self-session-"+alias, mac), row("duplicate-session", mac))
 			case "wrong_mac":
-				rows = append(rows, row("self-session", source, "112233445566"))
+				rows = append(rows, row("self-session-"+alias, "112233445566"))
 			default:
-				rows = append(rows, row("self-session", source, "AA:BB:CC:DD:EE:FF"), row("other-device", "10.20.30.41", "112233445566"))
+				rows = append(rows, row("self-session-"+alias, "AA:BB:CC:DD:EE:FF"))
 			}
 		}
 		emit(rows, "", 0)
 	case "zfw offline":
-		if flags["--session"] != "self-session" {
-			emit(nil, "offline used a portal session or another terminal", 1)
+		if flags["--session"] != "self-session-"+alias || cfg.Accounts[alias].Account != baseAccount() {
+			emit(nil, "offline used another account or a portal session", 1)
 		}
-		s.Writes[write]++
+		s.Writes[entry.Write]++
 		s.OfflineIDs = append(s.OfflineIDs, flags["--session"])
 		s.Online = false
 		if s.Scenario == "target_changes_after_offline" {
 			s.Bindings["new"][s.Provider] = binding{Account: "concurrent-target-binding", PasswordSet: true}
 		}
-		finishWrite(map[string]any{"session_id": "self-session", "outcome": "accepted", "accepted": true, "verified": verified})
+		if s.Scenario == "holder_changes_after_offline" {
+			s.Bindings["old"][s.Provider] = binding{Account: "different-holder-binding", PasswordSet: true}
+		}
+		finishWrite(map[string]any{"session_id": flags["--session"], "outcome": "accepted", "accepted": true, "verified": true})
 	case "zfw operator":
-		if flags["--unbind"] == "" && flags["--bind"] == "" {
+		if entry.Write == "" {
+			s.Reads[alias+":operator"]++
+			if alias == "new" && s.Reads[alias+":operator"] == 2 && (s.Scenario == "target_changes_before_offline_empty" || s.Scenario == "target_changes_before_offline_ready" || s.Scenario == "target_changes_before_bind") {
+				s.Bindings[alias][s.Provider] = binding{Account: "concurrent-target-binding", PasswordSet: true}
+			}
+			if alias == "old" && s.Reads[alias+":operator"] == 2 && s.Scenario == "holder_changes_before_offline" {
+				s.Bindings[alias][s.Provider] = binding{Account: "different-holder-binding", PasswordSet: true}
+			}
+			if s.Writes["new:login"] > 0 && alias == "new" && s.Scenario == "final_target_mismatch" {
+				s.Bindings[alias][s.Provider] = binding{Account: "different-final-binding", PasswordSet: true}
+			}
+			if s.Writes["new:login"] > 0 && alias == "old" && s.Scenario == "final_holder_not_empty" {
+				s.Bindings[alias][s.Provider] = binding{Account: cfg.Broadband.Account, PasswordSet: true}
+			}
 			emit(s.Bindings[alias], "", 0)
 		}
-		provider := flags["--unbind"]
-		account := ""
+		provider, account := flags["--unbind"], ""
 		if flags["--bind"] == "true" {
-			provider = cfg.Broadband.Operator
-			account = cfg.Broadband.Account
+			provider, account = cfg.Broadband.Operator, cfg.Broadband.Account
 		}
 		if provider != s.Provider {
 			emit(nil, "workflow attempted to migrate another provider", 1)
 		}
-		s.Writes[write]++
+		s.Writes[entry.Write]++
 		s.Bindings[alias][provider] = binding{Account: account, PasswordSet: account != ""}
-		finishWrite(map[string]any{"operator": provider, "account": account, "outcome": "accepted", "verified": verified, "message": "", "bindings": s.Bindings[alias]})
+		finishWrite(map[string]any{"operator": provider, "account": account, "outcome": "accepted", "verified": true, "message": "", "bindings": s.Bindings[alias]})
 	default:
 		emit(nil, "unsupported fixture command", 1)
 	}

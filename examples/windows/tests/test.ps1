@@ -1,9 +1,6 @@
 #requires -Version 7.0
 [CmdletBinding()]
-param(
-    [Parameter(Mandatory)]
-    [string] $OutputDirectory
-)
+param([Parameter(Mandatory)][string] $OutputDirectory)
 
 $ErrorActionPreference = 'Stop'
 $repository = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
@@ -13,13 +10,13 @@ if ($outputRoot -eq $repository -or $outputRoot.StartsWith($repository + [IO.Pat
 }
 [IO.Directory]::CreateDirectory($outputRoot) | Out-Null
 $temporaryDirectory = Join-Path $outputRoot 'tmp'
-[IO.Directory]::CreateDirectory($temporaryDirectory) | Out-Null
 $fixtureDirectory = Join-Path $outputRoot '含空格 测试程序'
+[IO.Directory]::CreateDirectory($temporaryDirectory) | Out-Null
 [IO.Directory]::CreateDirectory($fixtureDirectory) | Out-Null
 $executable = Join-Path $fixtureDirectory $(if ($IsWindows) { 'fake cli.exe' } else { 'fake cli' })
-$pwsh = (Get-Command pwsh -CommandType Application -ErrorAction Stop).Source
-$go = (Get-Command go -CommandType Application -ErrorAction Stop).Source
-$secrets = @('CAMPUS_OLD_PASSWORD_73e6', 'CAMPUS_NEW_PASSWORD_82a1', 'BROADBAND_PASSWORD_91f4')
+$pwsh = (Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+$go = (Get-Command go -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+$secrets = @('CAMPUS_OLD_PASSWORD_73e6', 'CAMPUS_NEW_PASSWORD_82a1', 'BROADBAND_PASSWORD_91f4', 'CAMPUS_THIRD_PASSWORD_a62c')
 $completed = [Collections.Generic.List[string]]::new()
 $caseNumber = 0
 
@@ -60,10 +57,11 @@ function Invoke-Process([string] $File, [string[]] $Arguments, [hashtable] $Envi
 $build = Invoke-Process $go @('build', '-trimpath', '-o', $executable, (Join-Path $PSScriptRoot 'cli.go'))
 if ($build.ExitCode -ne 0) { throw "Could not build offline CLI fixture: $($build.Stderr)" }
 
-function New-Case([string] $Scenario = '', [string] $Provider = 'cmcc') {
+function New-Case([string] $Plan = 'migrate_online', [string] $Provider = 'cmcc', [string] $Scenario = '') {
     $script:caseNumber++
     $directory = Join-Path $outputRoot ('cases/用例 {0:D3}' -f $script:caseNumber)
     [IO.Directory]::CreateDirectory($directory) | Out-Null
+    $other = $(if ($Provider -eq 'cmcc') { 'njxy' } else { 'cmcc' })
     $configuration = @{
         accounts = @{
             old = @{ account = 'old-campus'; password = $secrets[0] }
@@ -71,43 +69,62 @@ function New-Case([string] $Scenario = '', [string] $Provider = 'cmcc') {
         }
         broadband_account = @{ operator = $Provider; account = 'broadband-fixture'; password = $secrets[2] }
     }
-    $other = $(if ($Provider -eq 'cmcc') { 'njxy' } else { 'cmcc' })
     $state = @{
-        scenario = $Scenario; fail_at = 0; failure_mode = ''; calls = @(); writes = @(); offline_ids = @()
+        scenario = $Scenario; fail_at = 0; failure_mode = ''; calls = @(); writes = @{}; reads = @{}; offline_ids = @(); residual = @{}
         online = $true; online_account = "old-campus@$Provider"; provider = $Provider
         bindings = @{
             old = @{ $Provider = @{ account = 'broadband-fixture'; password_set = $true }; $other = @{ account = 'old-other-provider'; password_set = $true } }
             new = @{ $Provider = @{ account = ''; password_set = $false }; $other = @{ account = 'new-other-provider'; password_set = $true } }
         }
     }
-    # JSON objects, including an empty write counter, remain objects on every run.
-    $state.writes = @{}
+    $previous = 'old'
+    $holder = 'old'
+    switch ($Plan) {
+        'ready_online' { $state.online_account = "new-campus@$Provider"; $previous = 'new' }
+        'ready_offline' { $state.online = $false; $previous = $null }
+        'ready_other_online' { }
+        'target_wrong_operator' { $state.online_account = "new-campus@$other"; $previous = 'new' }
+        'new_empty_online' { $state.online_account = "new-campus@$Provider"; $previous = 'new' }
+        'unowned_offline' { $state.online = $false; $previous = $null }
+        'unowned_online' { }
+        'migrate_offline' { $state.online = $false; $previous = $null }
+        'migrate_third_online' {
+            $configuration.accounts.third = @{ account = 'third-campus'; password = $secrets[3] }
+            $state.bindings.third = @{ $Provider = @{ account = ''; password_set = $false }; $other = @{ account = 'third-other-provider'; password_set = $true } }
+            $state.online_account = "third-campus@$Provider"; $previous = 'third'
+        }
+        'migrate_online' { }
+        default { throw "Unknown fixture plan: $Plan" }
+    }
+    if ($Plan -like 'ready_*' -or $Plan -eq 'target_wrong_operator') {
+        $state.bindings.new[$Provider] = @{ account = 'broadband-fixture'; password_set = $true }
+        $state.bindings.old[$Provider] = @{ account = ''; password_set = $false }
+        $holder = $null
+    }
+    if ($Plan -like 'unowned_*') {
+        $state.bindings.old[$Provider] = @{ account = ''; password_set = $false }
+        $holder = $null
+    }
     $stateName = 'state-{0}.json' -f [guid]::NewGuid().ToString('N')
-    return @{ Directory = $directory; ConfigPath = (Join-Path $directory '校园 配置.json'); StatePath = (Join-Path $directory $stateName); Config = $configuration; State = $state; From = 'old'; To = 'new' }
+    return @{ Directory = $directory; ConfigPath = (Join-Path $directory '校园 配置.json'); StatePath = (Join-Path $directory $stateName); Config = $configuration; State = $state; Plan = $Plan; Previous = $previous; Holder = $holder }
 }
 
-function Invoke-Workflow([string] $Command, [hashtable] $Case, [string[]] $Selection = @('-Interface', '校园 有线 网络'), [string[]] $Extra = @(), [bool] $UseDefaultConfig = $false) {
-    [IO.File]::WriteAllText($Case.ConfigPath, ($Case.Config | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+function Invoke-Login([hashtable] $Case, [string[]] $Selection = @('-Interface', '校园 有线 网络'), [bool] $UseDefaultConfig = $false) {
+    $configurationText = $Case.RawConfig ?? ($Case.Config | ConvertTo-Json -Depth 20)
+    [IO.File]::WriteAllText($Case.ConfigPath, $configurationText, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($Case.StatePath, ($Case.State | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
-    $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot "../$Command.ps1"))
+    $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot '../login.ps1'))
     $arguments += $Selection
     if (-not $UseDefaultConfig) { $arguments += @('-Config', ($Case.ConfigArgument ?? $Case.ConfigPath)) }
-    $arguments += @('-Executable', $executable, '-TimeoutSeconds', '1')
-    switch ($Command) {
-        'connect' { $arguments += @('-Account', 'new', '-Operator', ($Case.Operator ?? $Case.State.provider)) }
-        'disconnect' { $arguments += @('-Account', 'old') }
-        'switch' { $arguments += @('-From', $Case.From, '-To', $Case.To) }
-    }
-    $arguments += $Extra
+    $arguments += @('-Executable', ($Case.Executable ?? $executable), '-TimeoutSeconds', '1', '-Account', ($Case.Account ?? 'new'))
     $environment = @{ NJUPT_NET_FAKE_STATE = $Case.StatePath }
+    if ($Case.Environment) { foreach ($name in $Case.Environment.Keys) { $environment[$name] = $Case.Environment[$name] } }
     $workingDirectory = $Case.Directory
     if ($Case.SetLocationOverride) {
         $wrapperPath = Join-Path $Case.Directory 'set location.ps1'
         $argumentPath = Join-Path $Case.Directory 'workflow arguments.json'
         $workflowParameters = @{}
-        for ($index = 5; $index -lt $arguments.Count; $index += 2) {
-            $workflowParameters[$arguments[$index].TrimStart('-')] = $arguments[$index + 1]
-        }
+        for ($index = 5; $index -lt $arguments.Count; $index += 2) { $workflowParameters[$arguments[$index].TrimStart('-')] = $arguments[$index + 1] }
         [IO.File]::WriteAllText($argumentPath, (ConvertTo-Json -InputObject $workflowParameters -Depth 5), [Text.UTF8Encoding]::new($false))
         [IO.File]::WriteAllText($wrapperPath, @'
 #requires -Version 7.0
@@ -119,7 +136,7 @@ exit $LASTEXITCODE
 '@, [Text.UTF8Encoding]::new($false))
         $environment['NJUPT_NET_TEST_LOCATION'] = $Case.Directory
         $environment['NJUPT_NET_TEST_ARGUMENTS'] = $argumentPath
-        $environment['NJUPT_NET_TEST_SCRIPT'] = Join-Path $PSScriptRoot "../$Command.ps1"
+        $environment['NJUPT_NET_TEST_SCRIPT'] = Join-Path $PSScriptRoot '../login.ps1'
         $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $wrapperPath)
         $workingDirectory = $outputRoot
     }
@@ -130,91 +147,89 @@ exit $LASTEXITCODE
         Assert-True (-not ($process.Stdout + $process.Stderr + $stateText).Contains($secret)) 'A password reached workflow output or CLI arguments.'
     }
     $text = $(if ($process.ExitCode -eq 0) { $process.Stdout } else { $process.Stderr })
-    Assert-True (-not [string]::IsNullOrWhiteSpace($text)) "$Command did not emit a result."
+    Assert-True (-not [string]::IsNullOrWhiteSpace($text)) 'Login did not emit a result.'
     try {
         $document = [Text.Json.JsonDocument]::Parse($text)
         $document.Dispose()
         $envelope = $text | ConvertFrom-Json -AsHashtable
     }
-    catch { throw "$Command did not emit exactly one JSON document: $text" }
-    Assert-True ($envelope.command -eq $Command) "$Command emitted an incorrect command envelope."
-    Assert-True ($envelope.data.ContainsKey('stage') -and $envelope.data.ContainsKey('steps')) "$Command omitted stage or steps."
+    catch { throw "Login did not emit exactly one JSON document: $text" }
+    Assert-True ($envelope.command -eq 'login') 'Login emitted an incorrect command envelope.'
+    Assert-True ($envelope.data.ContainsKey('stage') -and $envelope.data.ContainsKey('steps')) 'Login omitted stage or steps.'
     if ($process.ExitCode -eq 0) {
-        Assert-True ([string]::IsNullOrWhiteSpace($process.Stderr) -and -not $envelope.ContainsKey('error')) "$Command mixed its success and error streams."
+        Assert-True ([string]::IsNullOrWhiteSpace($process.Stderr) -and -not $envelope.ContainsKey('error')) 'Login mixed its success and error streams.'
     }
     else {
-        Assert-True ($process.ExitCode -eq 1 -and [string]::IsNullOrWhiteSpace($process.Stdout) -and $envelope.error.message) "$Command omitted its JSON error or mixed output streams."
+        Assert-True ($process.ExitCode -eq 1 -and [string]::IsNullOrWhiteSpace($process.Stdout) -and $envelope.error.message) 'Login omitted its JSON error or mixed output streams.'
     }
     foreach ($call in $observed.calls) {
         if ($call.command -eq 'interfaces') { continue }
         $sourceIndex = [Array]::IndexOf([string[]] $call.args, '--source')
-        Assert-True ($sourceIndex -ge 0 -and $call.args[$sourceIndex + 1] -eq '10.20.30.40') "$Command did not pin all network calls to the selected source."
-        Assert-True (-not ($call.args -contains '--interface')) "$Command selected an interface again after source resolution."
+        Assert-True ($sourceIndex -ge 0 -and $call.args[$sourceIndex + 1] -eq '10.20.30.40') 'Login did not pin all network calls to the selected source.'
+        Assert-True (-not ($call.args -contains '--interface')) 'Login selected an interface again after source resolution.'
     }
-    foreach ($count in $observed.writes.Values) { Assert-True ($count -le 1) "$Command retried a mutation." }
+    foreach ($group in @($observed.calls | Where-Object write | Group-Object write)) { Assert-True ($group.Count -eq 1) 'Login repeated a mutation submission.' }
     return @{ Process = $process; Result = $envelope; State = $observed }
 }
 
-function Assert-NoWrites([hashtable] $Observed, [string] $Message) {
-    Assert-True ($Observed.State.writes.Count -eq 0) $Message
+function Assert-Writes([hashtable] $Observed, [string[]] $Expected = @()) {
+    $actual = @($Observed.State.calls | Where-Object write | ForEach-Object write)
+    Assert-True ([string]::Join(',', $actual) -ceq [string]::Join(',', $Expected)) "Mutation sequence differs: expected $([string]::Join(',', $Expected)), got $([string]::Join(',', $actual))."
 }
-
-function Assert-Success([hashtable] $Observed, [string] $Name) {
+function Assert-Success([hashtable] $Observed, [hashtable] $Case, [string] $Name) {
     Assert-True ($Observed.Process.ExitCode -eq 0) "$Name failed: $($Observed.Process.Stderr)"
+    $data = $Observed.Result.data
+    Assert-True ($data.stage -eq 'complete' -and $data.account_alias -eq 'new' -and $data.operator -eq $Case.State.provider -and $data.online -eq $true -and $data.internet -eq $true) "$Name returned incomplete success metadata."
+    Assert-True ($data.previous_account_alias -eq $Case.Previous -and $data.binding_from -eq $Case.Holder -and $data.binding_moved -eq [bool]$Case.Holder) "$Name returned an incorrect previous account or binding holder."
+    $other = $(if ($Case.State.provider -eq 'cmcc') { 'njxy' } else { 'cmcc' })
+    foreach ($alias in $Case.State.bindings.Keys) {
+        Assert-True ($Observed.State.bindings[$alias][$other].account -eq $Case.State.bindings[$alias][$other].account -and $Observed.State.bindings[$alias][$other].password_set -eq $Case.State.bindings[$alias][$other].password_set) 'Login changed an unselected operator binding.'
+    }
     $script:completed.Add($Name)
 }
 
 $baselines = @{}
-foreach ($command in @('connect', 'disconnect', 'switch')) {
-    $case = New-Case
-    if ($command -eq 'connect') { $case.State.online = $false }
-    $observed = Invoke-Workflow $command $case
-    Assert-Success $observed "$command success"
-    $baselines[$command] = $observed
-    if ($command -eq 'connect') {
-        Assert-True ($observed.State.writes['new:login'] -eq 1 -and $observed.State.online_account -eq 'new-campus@cmcc') 'Connect did not submit one login for the selected account.'
+foreach ($plan in @('ready_online', 'ready_offline', 'ready_other_online', 'target_wrong_operator', 'unowned_offline', 'unowned_online', 'migrate_online', 'migrate_offline', 'migrate_third_online', 'new_empty_online')) {
+    $case = New-Case $plan
+    $observed = Invoke-Login $case
+    Assert-Success $observed $case "$plan success"
+    $baselines[$plan] = $observed
+    $expected = @()
+    if ($plan -ne 'ready_online') {
+        if ($case.State.online) { $expected += "$($case.Previous):offline" }
+        if ($case.Holder) { $expected += "$($case.Holder):unbind" }
+        if (-not ($plan -like 'ready_*' -or $plan -eq 'target_wrong_operator')) { $expected += 'new:bind' }
+        $expected += 'new:login'
     }
-    elseif ($command -eq 'disconnect') {
-        Assert-True ($observed.State.writes['old:offline'] -eq 1 -and -not $observed.State.online -and $observed.State.writes.Count -eq 1) 'Disconnect changed an operator or another setting.'
+    Assert-Writes $observed $expected
+    if ($case.State.online -and $plan -ne 'ready_online') {
+        Assert-True ($observed.State.offline_ids.Count -eq 1 -and $observed.State.offline_ids[0] -eq "self-session-$($case.Previous)") 'Login disconnected the broadband holder or portal ID instead of the actual online Self session.'
     }
-    else {
-        foreach ($write in @('old:offline', 'old:unbind', 'new:bind', 'new:login')) { Assert-True ($observed.State.writes[$write] -eq 1) "Switch omitted $write." }
-        Assert-True ($observed.State.bindings.old.cmcc.account -eq '' -and $observed.State.bindings.new.cmcc.account -eq 'broadband-fixture') 'Switch did not migrate the configured provider.'
-        Assert-True ($observed.State.bindings.old.njxy.account -eq 'old-other-provider' -and $observed.State.bindings.new.njxy.account -eq 'new-other-provider') 'Switch changed the unselected provider.'
-    }
-    if ($command -ne 'connect') {
-        Assert-True ($observed.State.offline_ids.Count -eq 1 -and $observed.State.offline_ids[0] -eq 'self-session') 'Disconnect used a portal session instead of the matched Self session.'
+    if ($plan -like 'ready_*' -or $plan -eq 'target_wrong_operator') {
+        Assert-True (@($observed.State.calls | Where-Object { $_.command -eq 'zfw operator' -and $_.account -ne 'new' }).Count -eq 0) 'Ready target caused unrelated account binding queries.'
     }
 }
 
-$case = New-Case
-$case.State.online_account = 'new-campus@cmcc'
-$observed = Invoke-Workflow 'connect' $case @('-Source', '10.20.30.40')
-Assert-Success $observed 'connect already online with explicit source'
-Assert-NoWrites $observed 'Connect submitted a password for an already online target.'
-Assert-True (@($observed.State.calls | Where-Object command -eq 'probe').Count -eq 1) 'Connect did not verify connectivity for the online target.'
+$case = New-Case 'migrate_online' 'njxy'
+$observed = Invoke-Login $case @('-Source', '10.20.30.40')
+Assert-Success $observed $case 'configured njxy migration with explicit source'
+Assert-Writes $observed @('old:offline', 'old:unbind', 'new:bind', 'new:login')
 
-$case = New-Case
-$case.State.online = $false
-$case.Operator = 'campus'
-$case.ConfigPath = Join-Path $case.Directory 'config.json'
-$observed = Invoke-Workflow 'connect' $case -UseDefaultConfig $true
-Assert-Success $observed 'connect campus with configuration in current directory'
-Assert-True ($observed.State.online_account -eq 'new-campus') 'Campus login received an operator suffix.'
+$case = New-Case 'ready_online'
+$case.State.online_account = ',1,new-campus@cmcc'
+$case.Config.accounts.old.password = ''
+$case.State.bindings.old.cmcc = @{ account = 'broadband-fixture'; password_set = $true }
+$observed = Invoke-Login $case
+Assert-Success $observed $case 'ready target recognizes prefix and ignores unrelated account credentials and bindings'
+Assert-Writes $observed
+Assert-True ($observed.State.calls.Count -eq 4) 'Already online target executed operations beyond interfaces, status, target binding and probe.'
 
-foreach ($configurationMode in @('default', 'relative')) {
-    $case = New-Case
-    $case.State.online = $false
+foreach ($mode in @('default', 'relative')) {
+    $case = New-Case 'ready_offline'
     $case.SetLocationOverride = $true
-    if ($configurationMode -eq 'default') {
-        $case.ConfigPath = Join-Path $case.Directory 'config.json'
-        $observed = Invoke-Workflow 'connect' $case -UseDefaultConfig $true
-    }
-    else {
-        $case.ConfigArgument = './校园 配置.json'
-        $observed = Invoke-Workflow 'connect' $case
-    }
-    Assert-Success $observed "connect resolves $configurationMode Config after Set-Location"
+    if ($mode -eq 'default') { $case.ConfigPath = Join-Path $case.Directory 'config.json'; $observed = Invoke-Login $case -UseDefaultConfig $true }
+    else { $case.ConfigArgument = './校园 配置.json'; $observed = Invoke-Login $case }
+    Assert-Success $observed $case "Config $mode follows Set-Location"
     foreach ($call in $observed.State.calls) {
         if ($call.command -eq 'interfaces') { continue }
         $configIndex = [Array]::IndexOf([string[]] $call.args, '--config')
@@ -222,162 +237,169 @@ foreach ($configurationMode in @('default', 'relative')) {
     }
 }
 
-$case = New-Case
-$case.State.online = $false
-$case.State.fail_at = 2
-$case.State.failure_mode = 'secret_error'
-$observed = Invoke-Workflow 'connect' $case
-Assert-True ($observed.Process.ExitCode -ne 0) 'Connect ignored a CLI error containing credentials.'
-Assert-NoWrites $observed 'Connect modified state after a credential-bearing error.'
-$completed.Add('CLI error messages remove configured passwords')
+$case = New-Case 'ready_offline'
+$firstPath = Join-Path $case.Directory 'first PATH directory'
+$secondPath = Join-Path $case.Directory 'second PATH directory'
+[IO.Directory]::CreateDirectory($firstPath) | Out-Null
+[IO.Directory]::CreateDirectory($secondPath) | Out-Null
+$commandName = $(if ($IsWindows) { 'njupt-net-path-fixture.exe' } else { 'njupt-net-path-fixture' })
+$firstExecutable = Join-Path $firstPath $commandName
+Copy-Item -LiteralPath $executable -Destination $firstExecutable
+Copy-Item -LiteralPath $executable -Destination (Join-Path $secondPath $commandName)
+$case.Executable = $commandName
+$case.Environment = @{ PATH = $firstPath + [IO.Path]::PathSeparator + $secondPath + [IO.Path]::PathSeparator + $env:PATH }
+$observed = Invoke-Login $case
+Assert-Success $observed $case 'PATH chooses the first matching native executable'
+foreach ($call in $observed.State.calls) { Assert-True ($call.executable -eq $firstExecutable) 'Login chose a later PATH executable.' }
 
-$case = New-Case
-$case.State.online_account = ',1,new-campus@cmcc'
-$observed = Invoke-Workflow 'connect' $case
-Assert-Success $observed 'connect recognizes prefixed portal identity'
-Assert-NoWrites $observed 'Connect reauthenticated a matching prefixed identity.'
-
-$case = New-Case
-$case.State.online = $false
-$observed = Invoke-Workflow 'disconnect' $case
-Assert-Success $observed 'disconnect verifies an already offline terminal'
-Assert-NoWrites $observed 'Disconnect modified an already offline terminal.'
-
-$case = New-Case 'offline_self_online'
-$case.State.online = $false
-$observed = Invoke-Workflow 'disconnect' $case
-Assert-True ($observed.Process.ExitCode -ne 0) 'Disconnect accepted a remaining Self session while the portal was offline.'
-Assert-NoWrites $observed 'Disconnect mutated an unconfirmed offline state.'
-$completed.Add('disconnect checks Self when portal is already offline')
-
-foreach ($scenario in @('multiple_ipv4', 'interface_down')) {
-    $case = New-Case $scenario
-    $case.State.online = $false
-    $observed = Invoke-Workflow 'connect' $case
-    Assert-True ($observed.Process.ExitCode -ne 0 -and $observed.State.calls.Count -eq 1) "Connect accepted $scenario."
-    Assert-NoWrites $observed 'Connect modified state after invalid interface selection.'
-    $completed.Add("interface selection rejects $scenario")
-}
-
-foreach ($command in @('connect', 'disconnect', 'switch')) {
-    $case = New-Case
-    $case.State.online_account = 'unrelated-campus@cmcc'
-    $observed = Invoke-Workflow $command $case
-    Assert-True ($observed.Process.ExitCode -ne 0) "$command accepted another online identity."
-    Assert-NoWrites $observed "$command modified another account's terminal."
-    $completed.Add("$command rejects another identity")
-}
-
-foreach ($command in @('disconnect', 'switch')) {
-    foreach ($scenario in @('zero_session', 'multiple_sessions', 'wrong_mac')) {
-        $case = New-Case $scenario
-        $observed = Invoke-Workflow $command $case
-        Assert-True ($observed.Process.ExitCode -ne 0) "$command accepted $scenario."
-        Assert-NoWrites $observed "$command modified state without a unique IP and MAC match."
-        $completed.Add("$command rejects $scenario")
-    }
-}
-
-$case = New-Case '' 'njxy'
-$observed = Invoke-Workflow 'switch' $case
-Assert-Success $observed 'switch migrates configured njxy provider'
-Assert-True ($observed.State.bindings.old.njxy.account -eq '' -and $observed.State.bindings.new.njxy.account -eq 'broadband-fixture') 'Switch ignored the configured njxy provider.'
-Assert-True ($observed.State.bindings.old.cmcc.account -eq 'old-other-provider' -and $observed.State.bindings.new.cmcc.account -eq 'new-other-provider') 'NJXY migration changed CMCC bindings.'
-
-$case = New-Case 'target_changes_after_offline'
-$observed = Invoke-Workflow 'switch' $case
-Assert-True ($observed.Process.ExitCode -ne 0) 'Switch ignored a target binding changed after disconnection.'
-Assert-True ($observed.State.writes.Count -eq 1 -and $observed.State.writes['old:offline'] -eq 1) 'Switch cleared the old binding before detecting a changed target.'
-Assert-True ($observed.State.bindings.old.cmcc.account -eq 'broadband-fixture' -and $observed.State.bindings.new.cmcc.account -eq 'concurrent-target-binding') 'Switch changed bindings after the target became occupied.'
-$completed.Add('switch rechecks the target before clearing the old binding')
-
-foreach ($variant in @('same_alias', 'same_real_account', 'missing_old_password', 'missing_new_password', 'invalid_provider', 'missing_broadband_password', 'old_binding_mismatch', 'old_binding_without_password', 'target_binding_occupied', 'target_password_without_account')) {
-    $case = New-Case
+foreach ($variant in @('malformed_config', 'missing_target_password', 'missing_holder_password', 'missing_current_password', 'missing_broadband', 'invalid_provider', 'empty_broadband_account', 'empty_broadband_password', 'target_other_binding', 'target_incomplete_binding', 'target_password_without_account', 'holder_incomplete_binding', 'multiple_holders', 'unknown_portal_account', 'ambiguous_portal_account', 'invalid_portal_prefix')) {
+    $case = if ($variant -eq 'missing_current_password') { New-Case 'ready_other_online' } else { New-Case }
     switch ($variant) {
-        'same_alias' { $case.To = 'old' }
-        'same_real_account' { $case.Config.accounts.new.account = $case.Config.accounts.old.account }
-        'missing_old_password' { $case.Config.accounts.old.password = '' }
-        'missing_new_password' { $case.Config.accounts.new.password = '' }
+        'malformed_config' { $case.RawConfig = '{ malformed' }
+        'missing_target_password' { $case.Config.accounts.new.password = '' }
+        'missing_holder_password' { $case.Config.accounts.old.password = '' }
+        'missing_current_password' { $case.Config.accounts.old.password = '' }
+        'missing_broadband' { $case.Config.Remove('broadband_account') }
         'invalid_provider' { $case.Config.broadband_account.operator = 'campus' }
-        'missing_broadband_password' { $case.Config.broadband_account.password = '' }
-        'old_binding_mismatch' { $case.State.bindings.old.cmcc.account = 'another-broadband' }
-        'old_binding_without_password' { $case.State.bindings.old.cmcc.password_set = $false }
-        'target_binding_occupied' { $case.State.bindings.new.cmcc = @{ account = 'another-broadband'; password_set = $true } }
+        'empty_broadband_account' { $case.Config.broadband_account.account = '' }
+        'empty_broadband_password' { $case.Config.broadband_account.password = '' }
+        'target_other_binding' { $case.State.bindings.new.cmcc = @{ account = 'other-broadband'; password_set = $true } }
+        'target_incomplete_binding' { $case.State.bindings.new.cmcc = @{ account = 'broadband-fixture'; password_set = $false } }
         'target_password_without_account' { $case.State.bindings.new.cmcc.password_set = $true }
+        'holder_incomplete_binding' { $case.State.bindings.old.cmcc.password_set = $false }
+        'multiple_holders' {
+            $case.Config.accounts.third = @{ account = 'third-campus'; password = $secrets[3] }
+            $case.State.bindings.third = @{ cmcc = @{ account = 'broadband-fixture'; password_set = $true }; njxy = @{ account = ''; password_set = $false } }
+        }
+        'unknown_portal_account' { $case.State.online_account = 'unrelated-campus@cmcc' }
+        'ambiguous_portal_account' { $case.Config.accounts.duplicate = @{ account = 'old-campus'; password = $secrets[3] } }
+        'invalid_portal_prefix' { $case.State.online_account = ',2,old-campus@cmcc' }
     }
-    $observed = Invoke-Workflow 'switch' $case
-    Assert-True ($observed.Process.ExitCode -ne 0) "Switch accepted $variant."
-    Assert-NoWrites $observed "Switch modified state after $variant."
-    $completed.Add("switch rejects $variant")
+    $observed = Invoke-Login $case
+    Assert-True ($observed.Process.ExitCode -ne 0) "Login accepted $variant."
+    Assert-Writes $observed
+    $completed.Add("preflight rejects $variant")
 }
 
-foreach ($command in @('connect', 'disconnect', 'switch')) {
-    $baseline = $baselines[$command].State.calls
+foreach ($scenario in @('multiple_ipv4', 'interface_down', 'duplicate_source', 'zero_session', 'multiple_sessions', 'wrong_mac', 'wrong_status_ip', 'before_offline_identity_changes', 'before_offline_mac_changes', 'target_changes_before_offline_empty', 'holder_changes_before_offline')) {
+    $case = New-Case 'migrate_online' 'cmcc' $scenario
+    $selection = $(if ($scenario -eq 'duplicate_source') { @('-Source', '10.20.30.40') } else { @('-Interface', '校园 有线 网络') })
+    $observed = Invoke-Login $case $selection
+    Assert-True ($observed.Process.ExitCode -ne 0) "Login accepted $scenario."
+    Assert-Writes $observed
+    $completed.Add("no modifications after $scenario")
+}
+
+$case = New-Case 'ready_other_online' 'cmcc' 'target_changes_before_offline_ready'
+$observed = Invoke-Login $case
+Assert-True ($observed.Process.ExitCode -ne 0) 'Login disconnected despite a changed ready target.'
+Assert-Writes $observed
+$completed.Add('ready target binding is rechecked before disconnection')
+
+foreach ($scenario in @('target_changes_after_offline', 'holder_changes_after_offline')) {
+    $case = New-Case 'migrate_online' 'cmcc' $scenario
+    $observed = Invoke-Login $case
+    Assert-True ($observed.Process.ExitCode -ne 0) "Login ignored $scenario."
+    Assert-Writes $observed @('old:offline')
+    $completed.Add("no unbind after $scenario")
+}
+$case = New-Case 'unowned_offline' 'cmcc' 'target_changes_before_bind'
+$observed = Invoke-Login $case
+Assert-True ($observed.Process.ExitCode -ne 0) 'Login overwrote a target changed before binding.'
+Assert-Writes $observed
+$completed.Add('unowned binding is rechecked before submission')
+
+foreach ($alias in @('new', 'old')) {
+    $case = New-Case 'migrate_offline'
+    $case.State.residual[$alias] = $true
+    $observed = Invoke-Login $case
+    Assert-True ($observed.Process.ExitCode -ne 0) "Login ignored the initial offline $alias Self session."
+    Assert-Writes $observed
+    $completed.Add("initial offline portal verifies $alias Self sessions")
+}
+
+foreach ($plan in @('ready_online', 'ready_offline', 'unowned_offline', 'migrate_online', 'migrate_offline')) {
+    $baseline = $baselines[$plan].State.calls
     for ($index = 1; $index -le $baseline.Count; $index++) {
-        $case = New-Case
-        if ($command -eq 'connect') { $case.State.online = $false }
+        $case = New-Case $plan
         $case.State.fail_at = $index
         $case.State.failure_mode = 'stderr_error'
-        $observed = Invoke-Workflow $command $case
-        Assert-True ($observed.Process.ExitCode -ne 0) "$command ignored CLI failure at call $index."
-        Assert-True ($observed.State.calls.Count -eq $index) "$command advanced or retried after failure at call $index."
+        $observed = Invoke-Login $case
+        Assert-True ($observed.Process.ExitCode -ne 0 -and $observed.State.calls.Count -eq $index) "$plan advanced or retried after CLI failure at call $index."
         for ($prefix = 0; $prefix -lt $index; $prefix++) {
-            $actual = $observed.State.calls[$prefix]
-            $expected = $baseline[$prefix]
-            Assert-True ($actual.command -eq $expected.command -and $actual.account -eq $expected.account -and $actual.write -eq $expected.write) "$command changed its call sequence before injected failure."
+            $actual, $expected = $observed.State.calls[$prefix], $baseline[$prefix]
+            Assert-True ($actual.command -eq $expected.command -and $actual.account -eq $expected.account -and $actual.write -eq $expected.write) "$plan changed its call sequence before injected failure."
         }
     }
-    $completed.Add("$command stops at every CLI failure")
-    foreach ($mode in @('accepted_unverified', 'accepted_unverified_success')) {
+    $completed.Add("$plan stops at every CLI failure")
+}
+foreach ($plan in @('ready_offline', 'unowned_offline', 'migrate_online')) {
+    $baseline = $baselines[$plan].State.calls
+    foreach ($mode in @('accepted_unverified', 'accepted_unverified_success', 'unknown_mutation')) {
         for ($index = 1; $index -le $baseline.Count; $index++) {
             if (-not $baseline[$index - 1].write) { continue }
-            $case = New-Case
-            if ($command -eq 'connect') { $case.State.online = $false }
+            $case = New-Case $plan
             $case.State.fail_at = $index
             $case.State.failure_mode = $mode
-            $observed = Invoke-Workflow $command $case
-            Assert-True ($observed.Process.ExitCode -ne 0 -and $observed.State.calls.Count -eq $index) "$command advanced after an accepted but unverified operation."
-            $lastStep = @($observed.Result.data.steps)[-1]
-            Assert-True ($lastStep.outcome -eq 'accepted' -and $lastStep.verified -eq $false) "$command lost the accepted but unverified state."
+            $observed = Invoke-Login $case
+            Assert-True ($observed.Process.ExitCode -ne 0 -and $observed.State.calls.Count -eq $index) "$plan advanced after $mode."
+            $last = @($observed.Result.data.steps)[-1]
+            $expectedOutcome = $(if ($mode -eq 'unknown_mutation') { 'unknown' } else { 'accepted' })
+            Assert-True ($last.outcome -eq $expectedOutcome -and $last.verified -eq $false) "$plan lost the submitted operation state."
         }
     }
-    $completed.Add("$command preserves accepted unverified results")
-    foreach ($mode in @('malformed_json', 'wrong_envelope')) {
-        $case = New-Case
-        if ($command -eq 'connect') { $case.State.online = $false }
-        $case.State.fail_at = 2
-        $case.State.failure_mode = $mode
-        $observed = Invoke-Workflow $command $case
-        Assert-True ($observed.Process.ExitCode -ne 0 -and $observed.State.calls.Count -eq 2) "$command ignored $mode."
-        Assert-NoWrites $observed "$command modified state after $mode."
-        $completed.Add("$command rejects $mode")
-    }
+    $completed.Add("$plan preserves uncertain mutations without retry")
+}
+foreach ($mode in @('malformed_json', 'wrong_envelope', 'secret_error')) {
+    $case = New-Case
+    $case.State.fail_at = 2
+    $case.State.failure_mode = $mode
+    $observed = Invoke-Login $case
+    Assert-True ($observed.Process.ExitCode -ne 0 -and $observed.State.calls.Count -eq 2) "Login ignored $mode."
+    Assert-Writes $observed
+    $completed.Add("CLI failure handling rejects $mode")
 }
 
-foreach ($command in @('disconnect', 'switch')) {
-    $case = New-Case 'offline_delayed'
-    $observed = Invoke-Workflow $command $case
-    Assert-Success $observed "$command observes delayed portal disconnection"
-    Assert-True ($observed.State.portal_reads -ge 3 -and $observed.State.writes['old:offline'] -eq 1) "$command did not observe delayed state without repeating offline."
-    $case = New-Case 'offline_pending'
-    $observed = Invoke-Workflow $command $case
-    Assert-True ($observed.Process.ExitCode -ne 0 -and $observed.State.portal_reads -ge 2) "$command did not stop after bounded portal observations."
-    Assert-True ($observed.State.writes.Count -eq 1 -and $observed.State.writes['old:offline'] -eq 1) "$command advanced beyond an unconfirmed portal disconnection."
-    $completed.Add("$command stops when portal disconnection does not converge")
+$case = New-Case 'migrate_online'
+$migrationCalls = $baselines.migrate_online.State.calls
+$unbindIndex = -1
+for ($index = 0; $index -lt $migrationCalls.Count; $index++) {
+    if ($migrationCalls[$index].write -eq 'old:unbind') { $unbindIndex = $index; break }
 }
+Assert-True ($unbindIndex -ge 0 -and $migrationCalls[$unbindIndex + 1].command -eq 'zfw operator' -and -not $migrationCalls[$unbindIndex + 1].write) 'Migration baseline does not recheck the target after unbinding.'
+$case.State.fail_at = $unbindIndex + 2
+$case.State.failure_mode = 'stderr_error'
+$interrupted = Invoke-Login $case
+Assert-True ($interrupted.Process.ExitCode -ne 0 -and -not $interrupted.State.online) 'Interrupted migration did not preserve its observed offline state.'
+Assert-Writes $interrupted @('old:offline', 'old:unbind')
+Assert-True ($interrupted.State.bindings.old.cmcc.account -eq '' -and $interrupted.State.bindings.new.cmcc.account -eq '') 'Interrupted migration unexpectedly retained or assigned the broadband binding.'
+$resume = New-Case 'unowned_offline'
+$resume.State = $interrupted.State
+$resume.State.calls = @(); $resume.State.writes = @{}; $resume.State.reads = @{}; $resume.State.offline_ids = @()
+$resume.State.fail_at = 0; $resume.State.failure_mode = ''; $resume.State.portal_reads = 0
+$observed = Invoke-Login $resume
+Assert-Success $observed $resume 'manual invocation recomputes a previously interrupted transfer'
+Assert-Writes $observed @('new:bind', 'new:login')
 
-foreach ($command in @('connect', 'switch')) {
-    $case = New-Case 'probe_offline'
-    if ($command -eq 'connect') { $case.State.online = $false }
-    $observed = Invoke-Workflow $command $case
-    Assert-True ($observed.Process.ExitCode -ne 0 -and $observed.State.calls[-1].command -eq 'probe') "$command accepted a failed connectivity probe or continued afterwards."
-    $completed.Add("$command rejects an offline connectivity result")
+foreach ($scenario in @('login_wrong_identity', 'login_mac_changes', 'probe_offline', 'final_target_mismatch', 'final_holder_not_empty')) {
+    $case = New-Case 'migrate_online' 'cmcc' $scenario
+    $observed = Invoke-Login $case
+    Assert-True ($observed.Process.ExitCode -ne 0) "Login ignored $scenario."
+    Assert-Writes $observed @('old:offline', 'old:unbind', 'new:bind', 'new:login')
+    $completed.Add("final verification rejects $scenario")
 }
+$case = New-Case 'migrate_online' 'cmcc' 'offline_delayed'
+$observed = Invoke-Login $case
+Assert-Success $observed $case 'portal disconnection is observed with bounded readonly polling'
+Assert-Writes $observed @('old:offline', 'old:unbind', 'new:bind', 'new:login')
+Assert-True ($observed.State.portal_reads -ge 3) 'Delayed portal state was not observed.'
+$case = New-Case 'migrate_online' 'cmcc' 'offline_pending'
+$observed = Invoke-Login $case
+Assert-True ($observed.Process.ExitCode -ne 0 -and $observed.State.portal_reads -ge 2) 'Login did not stop after bounded offline observations.'
+Assert-Writes $observed @('old:offline')
+$completed.Add('unconfirmed portal disconnection stops before unbinding')
 
-# Hold one source workflow at a read-only fixture response, then contend from
-# another process. The same pause also exposes the configuration sharing mode.
-$case = New-Case 'pause_status'
-$case.State.online = $false
+$case = New-Case 'ready_offline' 'cmcc' 'pause_status'
 [IO.File]::WriteAllText($case.ConfigPath, ($case.Config | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText($case.StatePath, ($case.State | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
 $start = [Diagnostics.ProcessStartInfo]::new()
@@ -392,9 +414,7 @@ $start.StandardErrorEncoding = [Text.UTF8Encoding]::new($false)
 $start.Environment['NJUPT_NET_FAKE_STATE'] = $case.StatePath
 $start.Environment['TEMP'] = $temporaryDirectory
 $start.Environment['TMP'] = $temporaryDirectory
-foreach ($argument in @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot '../connect.ps1'), '-Interface', '校园 有线 网络', '-Account', 'new', '-Operator', 'cmcc', '-Config', $case.ConfigPath, '-Executable', $executable, '-TimeoutSeconds', '1')) {
-    $start.ArgumentList.Add($argument)
-}
+foreach ($argument in @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot '../login.ps1'), '-Interface', '校园 有线 网络', '-Account', 'new', '-Config', $case.ConfigPath, '-Executable', $executable, '-TimeoutSeconds', '1')) { $start.ArgumentList.Add($argument) }
 $active = [Diagnostics.Process]::new()
 $active.StartInfo = $start
 try {
@@ -408,21 +428,17 @@ try {
     }
     if ($IsWindows) {
         $writeBlocked = $false
-        try {
-            $writer = [IO.File]::Open($case.ConfigPath, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
-            $writer.Dispose()
-        }
+        try { $writer = [IO.File]::Open($case.ConfigPath, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite); $writer.Dispose() }
         catch [IO.IOException] { $writeBlocked = $true }
-        Assert-True $writeBlocked 'Workflow did not prevent configuration writes while active.'
-        $completed.Add('active workflow protects its configuration from writes')
+        Assert-True $writeBlocked 'Login did not prevent configuration writes while active.'
+        $completed.Add('active login protects configuration from writes')
     }
-    $contender = New-Case
-    $contender.State.online = $false
-    $observed = Invoke-Workflow 'connect' $contender
-    Assert-True ($observed.Process.ExitCode -ne 0 -and $observed.Result.data.stage -eq 'lock') 'Concurrent workflow did not reject an occupied source.'
-    Assert-NoWrites $observed 'Concurrent workflow modified the occupied source.'
-    Assert-True (@($observed.State.calls | Where-Object command -ne 'interfaces').Count -eq 0) 'Concurrent workflow queried the campus network before obtaining the source lock.'
-    $completed.Add('concurrent workflow rejects an occupied source')
+    $contender = New-Case 'ready_offline'
+    $observed = Invoke-Login $contender
+    Assert-True ($observed.Process.ExitCode -ne 0 -and $observed.Result.data.stage -eq 'lock') 'Concurrent login did not reject an occupied source.'
+    Assert-Writes $observed
+    Assert-True (@($observed.State.calls | Where-Object command -ne 'interfaces').Count -eq 0) 'Concurrent login queried the campus network before obtaining the source lock.'
+    $completed.Add('concurrent login rejects an occupied source')
 }
 finally {
     [IO.File]::WriteAllText($case.StatePath + '.release', 'release')
@@ -432,11 +448,10 @@ finally {
     $activeCode = $active.ExitCode
     $active.Dispose()
 }
-Assert-True ($activeCode -eq 0 -and [string]::IsNullOrWhiteSpace($activeError)) "First source workflow failed after release: $activeError"
-foreach ($secret in $secrets) { Assert-True (-not ($activeOutput + $activeError).Contains($secret)) 'Concurrent test output exposed a password.' }
-$case = New-Case
-$case.State.online = $false
-$observed = Invoke-Workflow 'connect' $case
-Assert-Success $observed 'completed workflow releases its source lock'
+Assert-True ($activeCode -eq 0 -and [string]::IsNullOrWhiteSpace($activeError)) "First login failed after release: $activeError"
+foreach ($secret in $secrets) { Assert-True (-not ($activeOutput + $activeError).Contains($secret)) 'Concurrent login output exposed a password.' }
+$case = New-Case 'ready_offline'
+$observed = Invoke-Login $case
+Assert-Success $observed $case 'completed login releases its source lock'
 
 @{ result = 'passed'; cases = $caseNumber; checks = $completed.ToArray() } | ConvertTo-Json -Depth 8

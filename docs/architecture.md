@@ -35,10 +35,7 @@ cmd/njupt-net/
 integration/
   live_test.go        显式启用的跨包校园网测试
 examples/windows/
-  cli.psm1            共享 CLI 调用、JSON 读取与步骤结果
-  connect.ps1         连接并检查公网通达性
-  disconnect.ps1      按本机 IP 与 MAC 下线当前会话
-  switch.ps1          迁移宽带绑定并用新账号连接
+  login.ps1           按目标账号状态迁移宽带、登录与核对结果
 research/             独立 Python 协议研究
 docs/                 Markdown 协议说明与开发文档
 ```
@@ -51,7 +48,7 @@ docs/                 Markdown 协议说明与开发文档
 
 ```mermaid
 flowchart TB
-    Examples[可选 Windows 示例：组合业务流程] --> CLI
+    Examples[可选 login.ps1：目标账号登录] --> CLI
     CLI[CLI：配置、参数、输出] --> P[p：当前终端门户]
     CLI --> Z[zfw：账号管理会话]
     CLI --> N[network：选定链路]
@@ -61,7 +58,9 @@ flowchart TB
 
 p 与 zfw 各自创建独立 CookieJar，共用指定链路的 transport，分别依赖 network。Portal 从 `Link.Source()` 取得认证和状态核验使用的同一源地址。
 
-Windows 示例通过共享 `cli.psm1` 执行 CLI 并消费 JSON，按配置核对身份和操作前提，组合连接、下线及宽带迁移流程。依赖方向为示例脚本 → CLI → 内核；校园 HTTP、协议解析、凭据提交和单项结果确认由内核完成。一次流程固定源 IPv4，同一源地址的流程互斥；执行期间只读打开配置，每次 CLI 调用前核对内容。示例保留执行阶段与步骤结果，失败时停止。使用说明见 [Windows 示例](../examples/windows/README.md)。
+Windows 示例由独立 `login.ps1` 组成，所需调用函数包含在同一脚本内。脚本通过 CLI JSON 读取当前身份和宽带绑定，以 `-Account` 指定的目标账号为依据组合迁移与登录流程，运营商取自配置。目标绑定已符合配置时保留；完全为空时查询其他配置账号，按唯一持有人迁移或直接绑定。当前终端登录账号与宽带持有账号分别确定，所需的 Self 下线由脚本内部完成。
+
+依赖方向为 `login.ps1` → CLI → 内核；校园 HTTP、协议解析、凭据提交和单项结果确认由内核完成。一次流程固定源 IPv4，同一源地址的流程互斥；执行期间只读打开配置，每次 CLI 调用前核对内容。示例保留执行阶段与步骤结果，失败时停止。再次运行从当前状态决定剩余操作。使用说明见 [Windows 示例](../examples/windows/README.md)。
 
 | 对象 | 拥有的状态 | 使用规则 |
 |---|---|---|

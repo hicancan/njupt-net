@@ -52,7 +52,7 @@ jobs:
           if ($env:GOOS -eq 'windows') {
             $examples = Join-Path $package 'examples/windows'
             New-Item -ItemType Directory -Path $examples | Out-Null
-            Copy-Item -LiteralPath examples/windows/connect.ps1, examples/windows/disconnect.ps1, examples/windows/switch.ps1, examples/windows/cli.psm1, examples/windows/README.md -Destination $examples
+            Copy-Item -LiteralPath examples/windows/login.ps1, examples/windows/README.md -Destination $examples
             Compress-Archive -Path "$package/*" -DestinationPath "dist/$name.zip"
           } else {
             tar -czf "dist/$name.tar.gz" -C $package $binary README.md LICENSE config.example.json

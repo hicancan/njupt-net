@@ -38,7 +38,7 @@ uv run --locked python -m unittest discover -p "test_*.py" -v
 pwsh -NoProfile -File examples/windows/tests/test.ps1 -OutputDirectory <OUTPUT_DIRECTORY>
 ```
 
-将 `<OUTPUT_DIRECTORY>` 替换为本次测试输出目录。离线测试使用模拟 CLI JSON，核对流程顺序、身份与绑定前提、单次修改及失败后的阶段记录。示例脚本的参数与使用方法见 [Windows 示例](../examples/windows/README.md)。
+将 `<OUTPUT_DIRECTORY>` 替换为本次测试输出目录。离线测试使用模拟 CLI JSON，核对目标已在线、保留已有绑定、迁移唯一持有人绑定、直接绑定等状态分支，以及身份与绑定前提、单次修改和失败后的阶段记录。示例脚本的参数与使用方法见 [Windows 示例](../examples/windows/README.md)。
 
 ## 校园网集成测试
 
@@ -69,7 +69,7 @@ GitHub Actions 在 Windows、Linux、macOS 运行 Go 测试、vet 与 Python 离
 | Linux | amd64、arm64 | tar.gz |
 | macOS | amd64、arm64 | tar.gz |
 
-归档包含可执行文件、README、许可证与配置示例，并生成 `SHA256SUMS`。Windows ZIP 另含 `examples/windows/` 的三个业务脚本、共享模块与使用说明，测试文件保留在源码仓库。每个归档的可执行程序仍为对应平台的一个 `njupt-net`。发布工作流创建草稿 Release，维护者核对版本说明后发布。版本通过 `njupt-net version` 查询；发布构建将标签写入可执行文件。
+归档包含可执行文件、README、许可证与配置示例，并生成 `SHA256SUMS`。Windows ZIP 另含 `examples/windows/login.ps1` 与使用说明，测试文件保留在源码仓库。每个归档的可执行程序仍为对应平台的一个 `njupt-net`。发布工作流创建草稿 Release，维护者核对版本说明后发布。版本通过 `njupt-net version` 查询；发布构建将标签写入可执行文件。
 
 ## 仓库内容
 

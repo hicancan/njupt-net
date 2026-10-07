@@ -14,7 +14,7 @@
 使用 Go 1.26 或更新版本：
 
 ```text
-go install github.com/hicancan/njupt-net/v3/cmd/njupt-net@v3.2.0
+go install github.com/hicancan/njupt-net/v3/cmd/njupt-net@v3.2.1
 ```
 
 也可以从源码构建：
@@ -25,7 +25,7 @@ go build -trimpath -o njupt-net ./cmd/njupt-net
 
 Windows 构建输出使用 `njupt-net.exe`。预编译归档面向 Windows、Linux、macOS 的 amd64 与 arm64；下载入口为 [Releases](https://github.com/hicancan/njupt-net/releases)。
 
-Windows 归档另附 [PowerShell 流程示例](examples/windows/README.md)：连接、断线和迁移宽带后切换账号。示例使用 PowerShell 7，通过 CLI 完成操作。
+Windows 归档另附 [PowerShell 登录脚本](examples/windows/README.md)：选择目标校园账号，按当前绑定状态完成宽带迁移与登录。脚本使用 PowerShell 7，通过 CLI 完成操作。
 
 ## 快速使用
 
@@ -104,7 +104,7 @@ njupt-net zfw --help
 - [zfw 自助服务协议与命令](docs/zfw.md)
 - [内核架构](docs/architecture.md)
 - [开发、测试与发布](docs/development.md)
-- [Windows 连接、断线与账号切换](examples/windows/README.md)
+- [Windows 账号登录](examples/windows/README.md)
 - [Python 协议研究](research/README.md)
 
 许可证：[MIT](LICENSE)。

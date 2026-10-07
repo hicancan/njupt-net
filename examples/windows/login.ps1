@@ -1,6 +1,21 @@
 #Requires -Version 7.0
+<#
+.SYNOPSIS
+Use a selected campus account, moving the configured broadband binding when needed.
+.EXAMPLE
+./login.ps1 -Interface Ethernet -Account default -Config ./config.json
+#>
+[CmdletBinding(DefaultParameterSetName = 'Interface')]
+param(
+    [Parameter(Mandatory, ParameterSetName = 'Interface')][ValidateNotNullOrEmpty()][string]$Interface,
+    [Parameter(Mandatory, ParameterSetName = 'Source')][ValidateNotNullOrEmpty()][string]$Source,
+    [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$Account,
+    [ValidateNotNullOrEmpty()][string]$Config = 'config.json',
+    [ValidateNotNullOrEmpty()][string]$Executable = 'njupt-net',
+    [ValidateRange(1, 300)][int]$TimeoutSeconds = 15
+)
 Set-StrictMode -Version Latest
-
+$ErrorActionPreference = 'Stop'
 function New-CampusContext {
     param([string]$Command, [string]$Executable, [string]$Config, [string]$Interface, [string]$Source, [int]$TimeoutSeconds)
     return @{
@@ -37,7 +52,7 @@ function Initialize-CampusContext {
             throw "Account alias '$alias' requires a base campus account and password."
         }
     }
-    $application = Get-Command -Name $Context.Executable -CommandType Application -ErrorAction Stop
+    $application = Get-Command -Name $Context.Executable -CommandType Application -ErrorAction Stop | Select-Object -First 1
     $Context.Executable = $application.Source
     $interfaces = Invoke-CampusCommand $Context 'interfaces' '' @('interfaces')
     if ($interfaces -isnot [array]) { throw 'CLI interfaces did not return an array.' }
@@ -248,4 +263,134 @@ function Write-CampusResult {
     } else { [Console]::Out.WriteLine(($result | ConvertTo-Json -Depth 12)) }
 }
 
-Export-ModuleMember -Function New-CampusContext, Initialize-CampusContext, Close-CampusContext, Invoke-CampusCommand, Get-CampusStatus, Assert-CampusIdentity, ConvertTo-CampusMac, Get-CampusConnection, Get-CampusBindings, Assert-CampusOperation, Disconnect-CampusTerminal, Confirm-CampusInternet, Write-CampusResult
+function Get-CampusPortalAlias {
+    param($Context, $State)
+    $identity = [regex]::Match($State.terminal.account, '^(?:,[01],)?([^,@]+)(?:@(njxy|cmcc))?$')
+    if (-not $identity.Success) { throw 'Portal account identity is invalid.' }
+    $matches = @($Context.Settings.accounts.Keys | Where-Object {
+        $credential = $Context.Settings.accounts[$_]
+        $credential -is [System.Collections.IDictionary] -and $credential.Contains('account') -and $credential.account -ceq $identity.Groups[1].Value
+    })
+    if ($matches.Count -ne 1) { throw 'Current portal account must match exactly one configured campus account.' }
+    return [string]$matches[0]
+}
+
+function Test-CampusBroadband {
+    param($Bindings, $Broadband)
+    return $Bindings[$Broadband.operator].account -ceq $Broadband.account -and $Bindings[$Broadband.operator].password_set -eq $true
+}
+
+function Assert-CampusEmptyBinding {
+    param($Bindings, [string]$Operator)
+    if ($Bindings[$Operator].account -cne '' -or $Bindings[$Operator].password_set -ne $false) {
+        throw 'Target operator binding must be empty before assigning the configured broadband.'
+    }
+}
+
+$context = New-CampusContext 'login' $Executable $Config $Interface $Source $TimeoutSeconds
+$details = @{ account_alias = $Account; operator = $null; previous_account_alias = $null; binding_from = $null; binding_moved = $false }
+try {
+    Initialize-CampusContext $context @($Account)
+    $context.Stage = 'configuration'
+    $settings = $context.Settings
+    if (-not $settings.Contains('broadband_account') -or $settings.broadband_account -isnot [System.Collections.IDictionary]) {
+        throw 'Login requires a configured broadband account.'
+    }
+    $broadband = $settings.broadband_account
+    if (-not $broadband.Contains('operator') -or $broadband.operator -cnotin @('njxy', 'cmcc') -or
+        -not $broadband.Contains('account') -or $broadband.account -isnot [string] -or [string]::IsNullOrEmpty($broadband.account) -or
+        -not $broadband.Contains('password') -or $broadband.password -isnot [string] -or [string]::IsNullOrEmpty($broadband.password)) {
+        throw 'Login requires a broadband operator, account and password.'
+    }
+    $operator = $broadband.operator
+    $details.operator = $operator
+    $state = Get-CampusStatus $context 'status'
+    $currentAlias = if ($state.online) { Get-CampusPortalAlias $context $state } else { $null }
+    $details.previous_account_alias = $currentAlias
+    $targetBindings = Get-CampusBindings $context 'target-binding' $Account
+    $targetReady = Test-CampusBroadband $targetBindings $broadband
+    $holder = $null
+    if (-not $targetReady) {
+        Assert-CampusEmptyBinding $targetBindings $operator
+        $holders = @()
+        foreach ($alias in @($settings.accounts.Keys | Sort-Object -CaseSensitive)) {
+            if ($alias -ceq $Account) { continue }
+            $bindings = Get-CampusBindings $context 'find-binding' $alias
+            if ($bindings[$operator].account -ceq $broadband.account) {
+                if (-not (Test-CampusBroadband $bindings $broadband)) { throw 'Configured broadband has an incomplete binding.' }
+                $holders += $alias
+            }
+        }
+        if ($holders.Count -gt 1) { throw 'Configured broadband has multiple campus account holders.' }
+        if ($holders.Count -eq 1) { $holder = [string]$holders[0]; $details.binding_from = $holder }
+    }
+    $alreadyOnline = $false
+    if ($state.online -and $currentAlias -ceq $Account -and $targetReady) {
+        $identity = [regex]::Match($state.terminal.account, '^(?:,[01],)?([^,@]+)(?:@(njxy|cmcc))?$')
+        $alreadyOnline = $identity.Groups[2].Value -ceq $operator
+    }
+    if ($alreadyOnline) {
+        Confirm-CampusInternet $context
+    } else {
+        if ($state.online) {
+            $connection = Get-CampusConnection $context $currentAlias $state
+            $targetBefore = Get-CampusBindings $context 'before-offline-target-binding' $Account
+            if ($targetReady) {
+                if (-not (Test-CampusBroadband $targetBefore $broadband)) { throw 'Target broadband binding changed before disconnection.' }
+            } else { Assert-CampusEmptyBinding $targetBefore $operator }
+            if ($holder) {
+                $holderBefore = Get-CampusBindings $context 'before-offline-holder-binding' $holder
+                if (-not (Test-CampusBroadband $holderBefore $broadband)) { throw 'Broadband holder changed before disconnection.' }
+            }
+            $before = Get-CampusStatus $context 'before-offline'
+            Assert-CampusIdentity $context $before $currentAlias
+            if ($before.terminal.account -cne $state.terminal.account -or
+                (ConvertTo-CampusMac $before.terminal.mac) -cne (ConvertTo-CampusMac $state.terminal.mac)) { throw 'Terminal identity changed before disconnection.' }
+            Disconnect-CampusTerminal $context $currentAlias $state $connection
+        } else {
+            foreach ($alias in @(@($Account, $holder) | Where-Object { $_ } | Select-Object -Unique)) {
+                $rows = Invoke-CampusCommand $context 'offline-connections' $alias @('zfw', 'online')
+                if ($rows -isnot [array] -or @($rows | Where-Object { $_.ip -ceq $context.Source }).Count -ne 0) {
+                    throw 'Portal is offline, but Self still lists a session at the selected source.'
+                }
+            }
+        }
+        if (-not $targetReady) {
+            if ($holder) {
+                $oldCurrent = Get-CampusBindings $context 'check-old-binding' $holder
+                if (-not (Test-CampusBroadband $oldCurrent $broadband)) { throw 'Broadband holder changed before unbinding.' }
+                $targetCurrent = Get-CampusBindings $context 'check-target-before-unbind' $Account
+                Assert-CampusEmptyBinding $targetCurrent $operator
+                $cleared = Invoke-CampusCommand $context 'unbind' $holder @('zfw', 'operator', '--unbind', $operator)
+                Assert-CampusOperation $cleared
+                if ($cleared.operator -cne $operator -or $cleared.account -cne '' -or
+                    $cleared.bindings[$operator].account -cne '' -or $cleared.bindings[$operator].password_set -ne $false) { throw 'Old broadband binding was not cleared.' }
+            }
+            $targetCurrent = Get-CampusBindings $context 'check-target-binding' $Account
+            Assert-CampusEmptyBinding $targetCurrent $operator
+            $bound = Invoke-CampusCommand $context 'bind' $Account @('zfw', 'operator', '--bind')
+            Assert-CampusOperation $bound
+            if ($bound.operator -cne $operator -or $bound.account -cne $broadband.account -or
+                -not (Test-CampusBroadband $bound.bindings $broadband)) { throw 'Target broadband binding does not match the configured account.' }
+            $details.binding_moved = [bool]$holder
+        }
+        $loggedIn = Invoke-CampusCommand $context 'login' $Account @('p', 'login', '--operator', $operator)
+        Assert-CampusOperation $loggedIn
+        $after = Get-CampusStatus $context 'login-status'
+        Assert-CampusIdentity $context $after $Account $operator
+        if ($state.online -and (ConvertTo-CampusMac $after.terminal.mac) -cne (ConvertTo-CampusMac $state.terminal.mac)) { throw 'Terminal MAC changed during login.' }
+        Confirm-CampusInternet $context
+        $targetFinal = Get-CampusBindings $context 'final-target-binding' $Account
+        if (-not (Test-CampusBroadband $targetFinal $broadband)) { throw 'Final target broadband binding does not match the configured account.' }
+        if ($holder) {
+            $oldFinal = Get-CampusBindings $context 'final-old-binding' $holder
+            if ($oldFinal[$operator].account -cne '' -or $oldFinal[$operator].password_set -ne $false) { throw 'Previous campus account still has a broadband binding.' }
+        }
+    }
+    $context.Stage = 'complete'
+    Write-CampusResult $context $details
+    exit 0
+} catch {
+    Write-CampusResult $context $details $_.Exception.Message
+    exit 1
+} finally { Close-CampusContext $context }
