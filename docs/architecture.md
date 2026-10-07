@@ -34,6 +34,11 @@ cmd/njupt-net/
   output.go           JSON、文件输出与标准输入交互
 integration/
   live_test.go        显式启用的跨包校园网测试
+examples/windows/
+  cli.psm1            共享 CLI 调用、JSON 读取与步骤结果
+  connect.ps1         连接并检查公网通达性
+  disconnect.ps1      按本机 IP 与 MAC 下线当前会话
+  switch.ps1          迁移宽带绑定并用新账号连接
 research/             独立 Python 协议研究
 docs/                 Markdown 协议说明与开发文档
 ```
@@ -46,6 +51,7 @@ docs/                 Markdown 协议说明与开发文档
 
 ```mermaid
 flowchart TB
+    Examples[可选 Windows 示例：组合业务流程] --> CLI
     CLI[CLI：配置、参数、输出] --> P[p：当前终端门户]
     CLI --> Z[zfw：账号管理会话]
     CLI --> N[network：选定链路]
@@ -55,12 +61,15 @@ flowchart TB
 
 p 与 zfw 各自创建独立 CookieJar，共用指定链路的 transport，分别依赖 network。Portal 从 `Link.Source()` 取得认证和状态核验使用的同一源地址。
 
+Windows 示例通过共享 `cli.psm1` 执行 CLI 并消费 JSON，按配置核对身份和操作前提，组合连接、下线及宽带迁移流程。依赖方向为示例脚本 → CLI → 内核；校园 HTTP、协议解析、凭据提交和单项结果确认由内核完成。一次流程固定源 IPv4，同一源地址的流程互斥；执行期间只读打开配置，每次 CLI 调用前核对内容。示例保留执行阶段与步骤结果，失败时停止。使用说明见 [Windows 示例](../examples/windows/README.md)。
+
 | 对象 | 拥有的状态 | 使用规则 |
 |---|---|---|
 | `network.Link` | 不可变源 IPv4、transport、请求超时 | 创建的客户端使用同一源地址 |
 | `p.Portal` | 终端类型、program/page/version、MAC/VLAN/AC 上下文、JSONP 序号 | 门户目标 IP 必须匹配源地址；单对象操作串行 |
 | `zfw.Session` | 独立 Cookie、已确认账号身份、管理会话状态 | 私有业务必须有服务器确认的身份；单对象顺序使用 |
 | CLI | 配置、账户别名、参数、输出路径与退出码 | 将明确的源地址和凭据传给内核 |
+| Windows 示例 | 所选链路、账号键、执行阶段与步骤结果 | 通过 CLI JSON 顺序组合业务 |
 
 管理身份与 CSRF 分开。账号刷新、消费保护、运营商绑定或解绑和 MAC 解绑各自读取当前页面提供的令牌，令牌限定于对应操作。
 
