@@ -14,13 +14,16 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/hicancan/njupt-net/v3/network"
+	"github.com/hicancan/njupt-net/v4/network"
 	"golang.org/x/net/html"
 )
 
 const selfHost = "zfw.njupt.edu.cn"
 
 var ErrSessionExpired = errors.New("zfw management session is not authenticated")
+
+var plainPasswordPattern = regexp.MustCompile(`\bvar\s+md5\s*=\s*false\s*;`)
+var sessionPathPattern = regexp.MustCompile(`;jsessionid=[^/;?]*`)
 
 // Outcome describes a submitted operation independently from its final-state
 // verification. A lost response remains unknown and is never resubmitted.
@@ -48,22 +51,68 @@ func New(link *network.Link) *Session {
 	return &Session{client: link.ClientFor(selfHost, netip.AddrFrom4([4]byte{10, 10, 244, 240})), base: base}
 }
 func (s *Session) request(ctx context.Context, method, path string, values url.Values) ([]byte, *url.URL, http.Header, error) {
+	u, err := s.endpoint(path)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	data, final, header, err := network.Request(ctx, s.client, method, u, values)
+	return data, final, header, s.sessionError(err)
+}
+
+func (s *Session) navigate(ctx context.Context, method, path string, values url.Values, readPaths ...string) ([]byte, *url.URL, http.Header, error) {
+	u, err := s.endpoint(path)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	data, final, header, err := network.Navigate(ctx, s.client, method, u, values, func(target *url.URL) bool {
+		for _, path := range readPaths {
+			if pathWithoutSession(target.Path) == path {
+				return true
+			}
+		}
+		return false
+	})
+	return data, final, header, s.sessionError(err)
+}
+
+func (s *Session) sessionError(err error) error {
+	var redirect *network.RedirectError
+	if err != nil && s.identity != "" && errors.As(err, &redirect) {
+		target := redirect.Destination()
+		if target.Scheme == s.base.Scheme && target.Host == s.base.Host && target.User == nil && strings.TrimSuffix(pathWithoutSession(target.Path), "/") == "/Self/login" {
+			s.identity, s.authenticated, s.loginSubmitted = "", false, false
+			return ErrSessionExpired
+		}
+	}
+	return err
+}
+
+func (s *Session) read(ctx context.Context, path string, values url.Values) ([]byte, *url.URL, http.Header, error) {
+	u, err := s.endpoint(path)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	data, final, header, err := network.Read(ctx, s.client, u, values)
+	return data, final, header, s.sessionError(err)
+}
+
+func (s *Session) endpoint(path string) (string, error) {
 	reference, err := url.Parse(path)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("invalid Self endpoint")
+		return "", fmt.Errorf("invalid Self endpoint")
 	}
 	u := s.base.ResolveReference(reference)
 	if u.Scheme != s.base.Scheme || u.Host != s.base.Host || !strings.HasPrefix(u.Path, s.base.Path) || u.User != nil {
-		return nil, nil, nil, fmt.Errorf("endpoint is outside Self")
+		return "", fmt.Errorf("endpoint is outside Self")
 	}
-	return network.Request(ctx, s.client, method, u.String(), values)
+	return u.String(), nil
 }
 
 func (s *Session) page(ctx context.Context, path string) (*html.Node, error) {
 	if s.identity == "" {
 		return nil, ErrSessionExpired
 	}
-	data, final, _, err := s.request(ctx, http.MethodGet, path, nil)
+	data, final, _, err := s.read(ctx, path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +143,17 @@ func (s *Session) json(ctx context.Context, path string, params url.Values, out 
 	}
 	query := cloneValues(params)
 	query.Set("t", selfNonce())
-	data, final, _, err := s.request(ctx, http.MethodGet, path, query)
+	var data []byte
+	var final *url.URL
+	var err error
+	switch path {
+	case "dashboard/getOnlineList", "dashboard/getLoginHistory", "dashboard/refreshMauthType", "service/getMacList":
+		data, final, _, err = s.read(ctx, path, query)
+	default:
+		// Offline actions and bill queries with current-page export context
+		// retain single-use connections even though the server uses GET.
+		data, final, _, err = s.request(ctx, http.MethodGet, path, query)
+	}
 	if err != nil {
 		return err
 	}
@@ -180,7 +239,7 @@ func (s *Session) Login(ctx context.Context, account, password string) (err erro
 	}
 	defer s.closeRejectedLogin(&err)
 	s.identity = ""
-	data, final, _, err := s.request(ctx, http.MethodGet, "login", nil)
+	data, final, _, err := s.request(ctx, http.MethodGet, "login/", nil)
 	if err != nil {
 		return err
 	}
@@ -201,7 +260,7 @@ func (s *Session) Login(ctx context.Context, account, password string) (err erro
 	if values.Get("checkcode") == "" {
 		return fmt.Errorf("Session login form has an empty checkcode")
 	}
-	if !regexp.MustCompile(`\bvar\s+md5\s*=\s*false\s*;`).MatchString(scriptText(doc)) {
+	if !plainPasswordPattern.MatchString(scriptText(doc)) {
 		return fmt.Errorf("Session password submission contract changed")
 	}
 	captcha := find(doc, func(n *html.Node) bool { return attr(n, "id") == "randomDiv" })
@@ -223,7 +282,7 @@ func (s *Session) Login(ctx context.Context, account, password string) (err erro
 		return fmt.Errorf("invalid Session login form action")
 	}
 	s.loginSubmitted = true
-	data, final, _, err = s.request(ctx, http.MethodPost, action.String(), values)
+	data, final, _, err = s.navigate(ctx, http.MethodPost, action.String(), values, "/Self/dashboard")
 	if err != nil {
 		return err
 	}
@@ -251,7 +310,7 @@ func (s *Session) LoginBridge(ctx context.Context, expectedAccount, bridgeURL st
 	s.identity = ""
 	s.base = &url.URL{Scheme: target.Scheme, Host: target.Host, Path: "/Self/"}
 	s.loginSubmitted = true
-	data, final, _, err := s.request(ctx, http.MethodGet, target.String(), nil)
+	data, final, _, err := s.navigate(ctx, http.MethodGet, target.String(), nil, "/Self/dashboard")
 	if err != nil {
 		return err
 	}
@@ -322,7 +381,7 @@ func (s *Session) Logout(ctx context.Context) error {
 	if !s.authenticated && !s.loginSubmitted {
 		return ErrSessionExpired
 	}
-	data, final, _, err := s.request(ctx, http.MethodGet, "login/logout", nil)
+	data, final, _, err := s.navigate(ctx, http.MethodGet, "login/logout", nil, "/Self/", "/Self/dashboard", "/Self/login", "/Self/login/")
 	if err != nil {
 		return err
 	}
@@ -345,7 +404,7 @@ func selfLoginPath(u *url.URL) bool {
 }
 
 func pathWithoutSession(path string) string {
-	return regexp.MustCompile(`;jsessionid=[^/;?]*`).ReplaceAllString(path, "")
+	return sessionPathPattern.ReplaceAllString(path, "")
 }
 
 func loginForm(doc *html.Node) *html.Node {
@@ -361,7 +420,7 @@ func (s *Session) Language(ctx context.Context, language string) error {
 	if language != "zh_cn" && language != "English" {
 		return fmt.Errorf("language must be zh_cn or English")
 	}
-	_, final, _, err := s.request(ctx, http.MethodGet, "login/changeLanguage?=t"+selfNonce(), url.Values{"language": {language}})
+	_, final, _, err := s.navigate(ctx, http.MethodGet, "login/changeLanguage?=t"+selfNonce(), url.Values{"language": {language}}, "/Self/", "/Self/dashboard", "/Self/login", "/Self/login/")
 	if err != nil {
 		return err
 	}
@@ -369,7 +428,7 @@ func (s *Session) Language(ctx context.Context, language string) error {
 		s.identity, s.authenticated, s.loginSubmitted = "", false, false
 		return ErrSessionExpired
 	}
-	data, _, _, err := s.request(ctx, http.MethodGet, "login", nil)
+	data, _, _, err := s.read(ctx, "login/", nil)
 	if err != nil {
 		return err
 	}

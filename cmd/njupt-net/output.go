@@ -34,11 +34,7 @@ func finish(stdout, stderr io.Writer, command string, data any, err error) int {
 		return 0
 	}
 	if err != nil {
-		code := 1
-		var argument *argumentError
-		if errors.As(err, &argument) {
-			code = 2
-		}
+		code := errorCode(err)
 		_ = json.NewEncoder(stderr).Encode(envelope{Command: command, Data: data, Error: &errorDetail{Message: err.Error()}})
 		return code
 	}
@@ -49,6 +45,17 @@ func finish(stdout, stderr io.Writer, command string, data any, err error) int {
 		return 1
 	}
 	return 0
+}
+
+func errorCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var argument *argumentError
+	if errors.As(err, &argument) {
+		return 2
+	}
+	return 1
 }
 
 func readCaptcha(ctx context.Context, input io.Reader) (string, error) {

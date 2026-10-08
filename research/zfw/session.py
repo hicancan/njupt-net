@@ -61,7 +61,7 @@ class Session:
     def login(self, account, password, initialize_image=True):
         if self.authenticated:
             raise ValueError("session is already authenticated")
-        response = self.request("GET", "login")
+        response = self.request("GET", "login/")
         page = Page(response.text())
         form = page.form("/Self/login/verify")
         values = fields(form)
@@ -117,7 +117,7 @@ class Session:
         if language not in {"English", "zh_cn"}:
             raise ValueError("unknown deployed language value")
         response = self.request("GET", "login/changeLanguage", {"language": language})
-        page_response = self.request("GET", "login")
+        page_response = self.request("GET", "login/")
         button = Page(page_response.text()).root.find(id="language")
         expected = "中文" if language == "English" else "English"
         if button is None or button.text().strip() != expected:

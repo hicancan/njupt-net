@@ -7,15 +7,12 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/hicancan/njupt-net/v3/network"
+	"github.com/hicancan/njupt-net/v4/network"
 )
 
 func (p *Portal) Captcha(ctx context.Context) ([]byte, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if err := p.ensure(ctx); err != nil {
-		return nil, err
-	}
 	nonce, err := requestNonce()
 	if err != nil {
 		return nil, err
@@ -49,7 +46,7 @@ func (p *Portal) ChangePassword(ctx context.Context, account, password, newPassw
 	}
 	raw, err := p.call(ctx, "change_pass", url.Values{"user_account": {base64Text(account)}, "user_old_password": {base64Text(password)}, "user_new_password": {base64Text(newPassword)}, "registerMode": {scalar(p.settings["register_mode"])}, "captcha": {captcha}})
 	if err != nil {
-		return &OperationResult{Outcome: Unknown}, fmt.Errorf("portal password change outcome unknown: %w", err)
+		return unknown("password change", err)
 	}
 	return operationResult(raw, "password change")
 }

@@ -65,24 +65,3 @@ func (c config) credential(alias string) (credential, error) {
 	}
 	return value, nil
 }
-
-func configured(opt options) (config, credential, error) {
-	cfg, _, err := configuredIdentity(opt)
-	if err != nil {
-		return cfg, credential{}, err
-	}
-	value, err := cfg.credential(opt.account)
-	return cfg, value, err
-}
-
-func configuredIdentity(opt options) (config, credential, error) {
-	if opt.account == "" {
-		return config{}, credential{}, invalid("--account is required")
-	}
-	cfg, err := loadConfig(opt.config)
-	if err != nil {
-		return cfg, credential{}, err
-	}
-	value, err := cfg.identity(opt.account)
-	return cfg, value, err
-}

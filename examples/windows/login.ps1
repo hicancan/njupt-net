@@ -12,20 +12,23 @@ param(
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$Account,
     [ValidateNotNullOrEmpty()][string]$Config = 'config.json',
     [ValidateNotNullOrEmpty()][string]$Executable = 'njupt-net',
+    [ValidateSet(801, 802, 803, 804)][int]$PortalPort = 801,
     [ValidateRange(1, 300)][int]$TimeoutSeconds = 15,
-    [ValidateRange(0, 120)][int]$BindingWaitSeconds = 30
+    [ValidateRange(0, 120)][int]$BindingTimeoutSeconds = 45,
+    [switch]$Probe
 )
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 function New-CampusContext {
-    param([string]$Command, [string]$Executable, [string]$Config, [string]$Interface, [string]$Source, [int]$TimeoutSeconds)
+    param([string]$Command, [string]$Executable, [string]$Config, [string]$Interface, [string]$Source, [int]$TimeoutSeconds, [int]$PortalPort)
     return @{
         Command = $Command; Executable = $Executable; Config = $Config
         Interface = $Interface; Source = $Source; TimeoutSeconds = $TimeoutSeconds
         Stage = 'configuration'; Steps = [System.Collections.Generic.List[object]]::new()
-        Settings = $null; ConfigHash = $null; ConfigFile = $null
+        Settings = $null; ConfigFile = $null
         Mutex = $null; MutexOwned = $false; Online = $null; Internet = $null; InternetError = $null
+        Session = $null; SessionErrors = $null; PortalPort = $PortalPort
     }
 }
 
@@ -39,7 +42,6 @@ function Initialize-CampusContext {
         $reader = [System.IO.StreamReader]::new($Context.ConfigFile, [System.Text.Encoding]::UTF8, $true, 1024, $true)
         try { $Context.Settings = $reader.ReadToEnd() | ConvertFrom-Json -AsHashtable -ErrorAction Stop }
         finally { $reader.Dispose() }
-        $Context.ConfigHash = (Get-FileHash -LiteralPath $Context.Config -Algorithm SHA256 -ErrorAction Stop).Hash
     } catch { throw 'Cannot read the campus account configuration as JSON.' }
     $settings = $Context.Settings
     if ($settings -isnot [System.Collections.IDictionary] -or -not $settings.Contains('accounts') -or $settings.accounts -isnot [System.Collections.IDictionary]) {
@@ -84,11 +86,72 @@ function Initialize-CampusContext {
 
 function Close-CampusContext {
     param($Context)
+    if ($Context.Session) {
+        try {
+            if (-not $Context.Session.HasExited) { $Context.Session.Kill($true); $Context.Session.WaitForExit() }
+        } finally { $Context.Session.Dispose(); $Context.Session = $null }
+    }
     if ($Context.Mutex) {
         try { if ($Context.MutexOwned) { $Context.Mutex.ReleaseMutex() } }
         finally { $Context.Mutex.Dispose() }
     }
     if ($Context.ConfigFile) { $Context.ConfigFile.Dispose() }
+}
+
+function Start-CampusSession {
+    param($Context)
+    $start = [System.Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $Context.Executable
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardInput = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $start.StandardInputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $start.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $start.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
+    $selection = if ($Context.Interface) { @('--interface', $Context.Interface) } else { @('--source', $Context.Source) }
+    foreach ($argument in ($selection + @('--config', $Context.Config, '--timeout', "$($Context.TimeoutSeconds)s", 'session'))) {
+        $start.ArgumentList.Add($argument)
+    }
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $start
+    try {
+        if (-not $process.Start()) { throw 'Could not start the CLI session.' }
+        $Context.Session = $process
+        $Context.SessionErrors = $process.StandardError.ReadToEndAsync()
+    } catch { $process.Dispose(); throw }
+}
+
+function Close-CampusSession {
+    param($Context)
+    if (-not $Context.Session) { return }
+    $process = $Context.Session
+    try {
+        $process.StandardInput.WriteLine('{"args":["close"]}')
+        $process.StandardInput.Flush()
+        $line = $process.StandardOutput.ReadLine()
+        $response = ConvertFrom-Json -InputObject $line -AsHashtable -ErrorAction Stop
+        $process.StandardInput.Close()
+        $extraTask = $process.StandardOutput.ReadToEndAsync()
+        $process.WaitForExit()
+        $extra = $extraTask.GetAwaiter().GetResult()
+        $errors = $Context.SessionErrors.GetAwaiter().GetResult()
+        if ($response.command -cne 'close' -or $response.exit_code -ne 0 -or $process.ExitCode -ne 0 -or
+            $response.Contains('error') -or $response.data.closed -ne $true -or
+            -not [string]::IsNullOrWhiteSpace($extra) -or -not [string]::IsNullOrWhiteSpace($errors)) {
+            $message = 'CLI management session cleanup failed.'
+            if ($response.command -ceq 'close' -and $response.Contains('error') -and
+                $response.error -is [System.Collections.IDictionary] -and $response.error.message -is [string]) {
+                $message += ' ' + (Protect-CampusMessage $Context $response.error.message)
+            }
+            throw $message
+        }
+    } finally {
+        if (-not $process.HasExited) { $process.Kill($true); $process.WaitForExit() }
+        $process.Dispose()
+        $Context.Session = $null
+    }
 }
 
 function Protect-CampusMessage {
@@ -108,80 +171,83 @@ function Protect-CampusMessage {
 }
 
 function Invoke-CampusCommand {
-    param($Context, [string]$Stage, [string]$AccountAlias, [string[]]$Arguments, [switch]$ObserveProbeFailure)
+    param($Context, [string]$Stage, [string]$AccountAlias, [string[]]$Arguments, [switch]$ObserveProbeFailure, [switch]$Result)
     $Context.Stage = $Stage
-    if ((Get-FileHash -LiteralPath $Context.Config -Algorithm SHA256 -ErrorAction Stop).Hash -cne $Context.ConfigHash) {
-        throw 'Configuration changed during the workflow.'
-    }
+    if ($Arguments[0] -ceq 'p') { $Arguments += @('--port', [string]$Context.PortalPort) }
     $command = $Arguments[0]
     if ($command -in @('p', 'zfw')) { $command += ' ' + $Arguments[1] }
     if ($ObserveProbeFailure -and $command -cne 'probe') { throw 'Only the Internet probe can report an observation failure.' }
     if ($command -in @('p login', 'zfw offline')) { $Context.Online = $null; $Context.Internet = $null; $Context.InternetError = $null }
-    $start = [System.Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = $Context.Executable
-    $start.UseShellExecute = $false
-    $start.CreateNoWindow = $true
-    $start.RedirectStandardOutput = $true
-    $start.RedirectStandardError = $true
-    $start.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
-    $start.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
-    if ($command -ne 'interfaces') {
-        foreach ($argument in @('--source', $Context.Source, '--config', $Context.Config, '--timeout', "$($Context.TimeoutSeconds)s")) { $start.ArgumentList.Add($argument) }
-        if ($AccountAlias) { $start.ArgumentList.Add('--account'); $start.ArgumentList.Add($AccountAlias) }
-    }
-    foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
-    $event = [ordered]@{ stage = $Stage; command = $command; account_alias = $AccountAlias; exit_code = $null; outcome = $null; verified = $null }
+    $event = [ordered]@{ stage = $Stage; command = $command; account_alias = $AccountAlias; exit_code = $null; outcome = $null; verified = $null; elapsed_ms = $null }
     $Context.Steps.Add($event)
-    $process = [System.Diagnostics.Process]::new()
-    $process.StartInfo = $start
-    $started = $false
+    $startedAt = [System.Diagnostics.Stopwatch]::GetTimestamp()
+    if (-not $Context.Session) { Start-CampusSession $Context }
+    $request = @{ account = $AccountAlias; args = @($Arguments) } | ConvertTo-Json -Compress
     try {
-        if (-not $process.Start()) { throw 'Could not start the CLI.' }
-        $started = $true
-        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $Context.Session.StandardInput.WriteLine($request)
+        $Context.Session.StandardInput.Flush()
+        $json = $Context.Session.StandardOutput.ReadLine()
+    } catch [System.IO.IOException] { $json = $null }
+    if ($null -eq $json) {
+        $process = $Context.Session
         $process.WaitForExit()
-        $stdout = $stdoutTask.GetAwaiter().GetResult()
-        $stderr = $stderrTask.GetAwaiter().GetResult()
+        $errors = $Context.SessionErrors.GetAwaiter().GetResult()
         $event.exit_code = $process.ExitCode
-    } finally {
-        try {
-            if ($started -and -not $process.HasExited) {
-                $process.Kill($true)
-                $process.WaitForExit()
-            }
-        } finally { $process.Dispose() }
+        $event.elapsed_ms = [Math]::Round([System.Diagnostics.Stopwatch]::GetElapsedTime($startedAt).TotalMilliseconds, 3)
+        $process.Dispose()
+        $Context.Session = $null
+        $failure = $null
+        try { $failure = ConvertFrom-Json -InputObject $errors -AsHashtable -ErrorAction Stop } catch { }
+        if ($failure -is [System.Collections.IDictionary] -and $failure.Contains('command') -and $failure.command -ceq 'session' -and
+            $failure.Contains('error') -and $failure.error -is [System.Collections.IDictionary] -and
+            $failure.error.Contains('message') -and $failure.error.message -is [string] -and -not [string]::IsNullOrWhiteSpace($failure.error.message)) {
+            throw (Protect-CampusMessage $Context $failure.error.message)
+        }
+        throw "CLI session ended before '$command' returned a result."
     }
-    $json = if ($event.exit_code -eq 0) { $stdout } else { $stderr }
+    $event.elapsed_ms = [Math]::Round([System.Diagnostics.Stopwatch]::GetElapsedTime($startedAt).TotalMilliseconds, 3)
     try { $envelope = ConvertFrom-Json -InputObject $json -AsHashtable -ErrorAction Stop }
     catch { throw "CLI '$command' did not return one JSON result." }
     if ($envelope -isnot [System.Collections.IDictionary] -or -not $envelope.Contains('command') -or $envelope.command -cne $command -or -not $envelope.Contains('data')) {
         throw "CLI '$command' returned an unexpected result envelope."
     }
+    if (-not $envelope.Contains('exit_code') -or $envelope.exit_code -isnot [long] -and $envelope.exit_code -isnot [int] -or
+        $envelope.exit_code -notin @(0, 1, 2)) { throw "CLI '$command' returned an invalid exit code." }
+    $event.exit_code = $envelope.exit_code
     $data = $envelope.data
     if ($data -is [System.Collections.IDictionary]) {
         if ($data.Contains('outcome')) { $event.outcome = $data.outcome }
         if ($data.Contains('verified')) { $event.verified = $data.verified }
     }
     if ($event.exit_code -ne 0) {
-        if (-not [string]::IsNullOrWhiteSpace($stdout)) { throw "CLI '$command' returned output alongside failure." }
         if ($envelope.Contains('error') -and $envelope.error -is [System.Collections.IDictionary] -and $envelope.error.Contains('message') -and $envelope.error.message -is [string]) {
             $message = Protect-CampusMessage $Context $envelope.error.message
             if ($ObserveProbeFailure -and $event.exit_code -eq 1 -and -not [string]::IsNullOrWhiteSpace($message)) {
                 $Context.InternetError = $message
                 return ,$data
             }
+            if ($Result -and -not [string]::IsNullOrWhiteSpace($message)) {
+                $envelope.error.message = $message
+                return ,$envelope
+            }
             throw $message
         }
         throw "CLI '$command' failed with exit code $($event.exit_code)."
     }
-    if (-not [string]::IsNullOrWhiteSpace($stderr) -or $envelope.Contains('error')) { throw "CLI '$command' returned an error alongside success." }
+    if ($envelope.Contains('error')) { throw "CLI '$command' returned an error alongside success." }
+    if ($Result) { return ,$envelope }
     return ,$data
 }
 
 function Get-CampusStatus {
     param($Context, [string]$Stage)
     $state = Invoke-CampusCommand $Context $Stage '' @('p', 'status')
+    return Confirm-CampusStatus $Context $state
+}
+
+function Confirm-CampusStatus {
+    param($Context, $State)
+    $state = $State
     if ($state -isnot [System.Collections.IDictionary] -or -not $state.Contains('online') -or $state.online -isnot [bool] -or
         -not $state.Contains('source') -or $state.source -cne $Context.Source -or -not $state.Contains('terminal')) { throw 'Portal status does not describe the selected source.' }
     if ($state.online) {
@@ -237,6 +303,22 @@ function Assert-CampusOperation {
         -not $Result.Contains('verified') -or $Result.verified -isnot [bool] -or -not $Result.verified) { throw 'The operation was not accepted and verified.' }
 }
 
+function Connect-CampusTerminal {
+    param($Context, [string]$AccountAlias, [string]$Operator, $BindingTimer, [int]$BindingTimeoutSeconds, $Details)
+    while ($true) {
+        $Details.login_attempts++
+        $response = Invoke-CampusCommand $Context 'login' $AccountAlias @('p', 'login', '--operator', $Operator) -Result
+        if ($response.exit_code -eq 0) { return ,$response.data }
+        $result = $response.data
+        $bindingPending = $BindingTimer -and $response.exit_code -eq 1 -and $result -is [System.Collections.IDictionary] -and
+            $result.Contains('outcome') -and $result.outcome -ceq 'rejected' -and
+            $result.Contains('verified') -and $result.verified -is [bool] -and -not $result.verified -and
+            $result.Contains('message') -and $result.message -ceq '未绑定运营商账号,请正确绑定运营商账号再试！'
+        if (-not $bindingPending -or $BindingTimer.Elapsed.TotalSeconds -ge $BindingTimeoutSeconds) { throw $response.error.message }
+        $Context.Stage = 'binding-activation'
+    }
+}
+
 function Disconnect-CampusTerminal {
     param($Context, [string]$AccountAlias, $State, $Connection)
     $result = Invoke-CampusCommand $Context 'offline' $AccountAlias @('zfw', 'offline', '--session', $Connection.session_id)
@@ -244,12 +326,14 @@ function Disconnect-CampusTerminal {
     if ($result.session_id -cne $Connection.session_id) { throw 'Offline result refers to a different Self session.' }
     $deadline = [System.Diagnostics.Stopwatch]::StartNew()
     do {
+        $observedAt = [System.Diagnostics.Stopwatch]::GetTimestamp()
         $observed = Get-CampusStatus $Context 'offline-status'
         if (-not $observed.online) { return }
         Assert-CampusIdentity $Context $observed $AccountAlias
         if ((ConvertTo-CampusMac $observed.terminal.mac) -cne (ConvertTo-CampusMac $State.terminal.mac)) { throw 'Terminal identity changed during disconnection.' }
         if ($deadline.Elapsed.TotalSeconds -ge 10) { throw 'Self session was removed, but the portal still lists the terminal online.' }
-        Start-Sleep -Milliseconds 500
+        $delay = [Math]::Max(0, 50 - [System.Diagnostics.Stopwatch]::GetElapsedTime($observedAt).TotalMilliseconds)
+        if ($delay -gt 0) { Start-Sleep -Milliseconds ([int][Math]::Ceiling($delay)) }
     } while ($true)
 }
 
@@ -300,8 +384,9 @@ function Assert-CampusEmptyBinding {
     }
 }
 
-$context = New-CampusContext 'login' $Executable $Config $Interface $Source $TimeoutSeconds
-$details = @{ account_alias = $Account; operator = $null; previous_account_alias = $null; binding_from = $null; binding_moved = $false; binding_wait_seconds = 0 }
+$context = New-CampusContext 'login' $Executable $Config $Interface $Source $TimeoutSeconds $PortalPort
+$details = @{ account_alias = $Account; portal_port = $PortalPort; operator = $null; previous_account_alias = $null; binding_from = $null; binding_moved = $false; binding_activation_seconds = 0; login_attempts = 0 }
+$bindingTimer = $null
 try {
     Initialize-CampusContext $context @($Account)
     $context.Stage = 'configuration'
@@ -337,13 +422,13 @@ try {
         if ($holders.Count -gt 1) { throw 'Configured broadband has multiple campus account holders.' }
         if ($holders.Count -eq 1) { $holder = [string]$holders[0]; $details.binding_from = $holder }
     }
-    $alreadyOnline = $false
-    if ($state.online -and $currentAlias -ceq $Account -and $targetReady) {
+    $portalReady = $false
+    if ($state.online -and $currentAlias -ceq $Account) {
         $identity = [regex]::Match($state.terminal.account, '^(?:,[01],)?([^,@]+)(?:@(njxy|cmcc))?$')
-        $alreadyOnline = $identity.Groups[2].Value -ceq $operator
+        $portalReady = $identity.Groups[2].Value -ceq $operator
     }
-    if (-not $alreadyOnline) {
-        if ($state.online) {
+    if (-not $portalReady -or -not $targetReady) {
+        if ($state.online -and -not $portalReady) {
             $connection = Get-CampusConnection $context $currentAlias $state
             $targetBefore = Get-CampusBindings $context 'before-offline-target-binding' $Account
             if ($targetReady) {
@@ -358,13 +443,6 @@ try {
             if ($before.terminal.account -cne $state.terminal.account -or
                 (ConvertTo-CampusMac $before.terminal.mac) -cne (ConvertTo-CampusMac $state.terminal.mac)) { throw 'Terminal identity changed before disconnection.' }
             Disconnect-CampusTerminal $context $currentAlias $state $connection
-        } else {
-            foreach ($alias in @(@($Account, $holder) | Where-Object { $_ } | Select-Object -Unique)) {
-                $rows = Invoke-CampusCommand $context 'offline-connections' $alias @('zfw', 'online')
-                if ($rows -isnot [array] -or @($rows | Where-Object { $_.ip -ceq $context.Source }).Count -ne 0) {
-                    throw 'Portal is offline, but Self still lists a session at the selected source.'
-                }
-            }
         }
         if (-not $targetReady) {
             if ($holder) {
@@ -383,36 +461,33 @@ try {
             Assert-CampusOperation $bound
             if ($bound.operator -cne $operator -or $bound.account -cne $broadband.account -or
                 -not (Test-CampusBroadband $bound.bindings $broadband)) { throw 'Target broadband binding does not match the configured account.' }
-            $context.Stage = 'binding-wait'
-            $details.binding_wait_seconds = $BindingWaitSeconds
-            if ($BindingWaitSeconds -gt 0) { Start-Sleep -Seconds $BindingWaitSeconds }
-            $targetAfter = Get-CampusBindings $context 'bound-target-binding' $Account
-            if (-not (Test-CampusBroadband $targetAfter $broadband)) { throw 'Target broadband binding changed before authentication.' }
-            if ($holder) {
-                $holderAfter = Get-CampusBindings $context 'unbound-holder-binding' $holder
-                if ($holderAfter[$operator].account -cne '' -or $holderAfter[$operator].password_set -ne $false) {
-                    throw 'Previous campus account still has a broadband binding before authentication.'
-                }
-            }
+            $bindingTimer = [System.Diagnostics.Stopwatch]::StartNew()
             $details.binding_moved = [bool]$holder
         }
-        $loggedIn = Invoke-CampusCommand $context 'login' $Account @('p', 'login', '--operator', $operator)
-        Assert-CampusOperation $loggedIn
-        $after = Get-CampusStatus $context 'login-status'
+        if ($portalReady) {
+            $after = Get-CampusStatus $context 'binding-status'
+            $portalReady = $after.online
+        }
+        if (-not $portalReady) {
+            $loggedIn = Connect-CampusTerminal $context $Account $operator $bindingTimer $BindingTimeoutSeconds $details
+            if ($bindingTimer) { $details.binding_activation_seconds = [Math]::Round($bindingTimer.Elapsed.TotalSeconds, 3) }
+            Assert-CampusOperation $loggedIn
+            if (-not $loggedIn.Contains('status')) { throw 'Verified login did not return the terminal status.' }
+            $after = Confirm-CampusStatus $context $loggedIn.status
+        }
         Assert-CampusIdentity $context $after $Account $operator
         if ($state.online -and (ConvertTo-CampusMac $after.terminal.mac) -cne (ConvertTo-CampusMac $state.terminal.mac)) { throw 'Terminal MAC changed during login.' }
-        $targetFinal = Get-CampusBindings $context 'final-target-binding' $Account
-        if (-not (Test-CampusBroadband $targetFinal $broadband)) { throw 'Final target broadband binding does not match the configured account.' }
-        if ($holder) {
-            $oldFinal = Get-CampusBindings $context 'final-old-binding' $holder
-            if ($oldFinal[$operator].account -cne '' -or $oldFinal[$operator].password_set -ne $false) { throw 'Previous campus account still has a broadband binding.' }
-        }
     }
-    Confirm-CampusInternet $context
+    if ($Probe) { Confirm-CampusInternet $context }
+    $context.Stage = 'session-close'
+    Close-CampusSession $context
     $context.Stage = 'complete'
     Write-CampusResult $context $details
     exit 0
 } catch {
-    Write-CampusResult $context $details $_.Exception.Message
+    $message = $_.Exception.Message
+    if ($bindingTimer) { $details.binding_activation_seconds = [Math]::Round($bindingTimer.Elapsed.TotalSeconds, 3) }
+    try { Close-CampusSession $context } catch { $message += " Management session cleanup failed: $($_.Exception.Message)" }
+    Write-CampusResult $context $details $message
     exit 1
 } finally { Close-CampusContext $context }

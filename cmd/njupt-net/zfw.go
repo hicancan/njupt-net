@@ -2,16 +2,16 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
 
-	"github.com/hicancan/njupt-net/v3/zfw"
+	"github.com/hicancan/njupt-net/v4/zfw"
 )
 
-func zfwCommand(ctx context.Context, opt options, command string, args []string) (result any, resultErr error) {
+func zfwCommand(ctx context.Context, owner *commandContext, alias, command string, args []string) (result any, resultErr error) {
+	opt := owner.opt
 	fs := commandFlags("zfw " + command)
 	var sessionID, mac, limit, output, unbindOperator string
 	var bind, change, all bool
@@ -114,9 +114,9 @@ func zfwCommand(ctx context.Context, opt options, command string, args []string)
 	if !public {
 		var err error
 		if bridgeURL == "" {
-			cfg, value, err = configured(opt)
+			cfg, value, err = owner.configured(alias, true)
 		} else {
-			cfg, value, err = configuredIdentity(opt)
+			cfg, value, err = owner.configured(alias, false)
 		}
 		if err != nil {
 			return nil, err
@@ -131,29 +131,22 @@ func zfwCommand(ctx context.Context, opt options, command string, args []string)
 			}
 		}
 	}
-	link, err := openLink(opt)
-	if err != nil {
-		return nil, err
-	}
-	defer link.Close()
-	self := zfw.New(link)
 	if public {
-		return self.PublicPage(ctx, command)
+		if owner.public == nil {
+			link, err := owner.openLink()
+			if err != nil {
+				return nil, err
+			}
+			owner.public = zfw.New(link)
+		}
+		return owner.public.PublicPage(ctx, command)
 	}
-	if bridgeURL == "" {
-		err = self.Login(ctx, value.Account, value.Password)
-	} else {
-		err = self.LoginBridge(ctx, value.Account, bridgeURL)
-	}
+	self, err := owner.self(ctx, alias, value, bridgeURL)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
-		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), opt.timeout)
-		defer cancel()
-		if err := self.Logout(closeCtx); err != nil {
-			resultErr = errors.Join(resultErr, fmt.Errorf("close zfw management session: %w", err))
-		}
+		owner.forgetExpired(alias, resultErr)
 	}()
 	switch command {
 	case "verify":
@@ -170,14 +163,11 @@ func zfwCommand(ctx context.Context, opt options, command string, args []string)
 			IdentityVerified bool   `json:"identity_verified"`
 			LoginMethod      string `json:"login_method"`
 			AccountAlias     string `json:"account_alias"`
-		}{passwordValid, true, method, opt.account}, nil
+		}{passwordValid, true, method, alias}, nil
 	case "account":
 		return self.Overview(ctx)
 	case "refresh":
-		if err := self.RefreshAccount(ctx); err != nil {
-			return nil, err
-		}
-		return self.Overview(ctx)
+		return nil, self.RefreshAccount(ctx)
 	case "profile":
 		return self.Profile(ctx)
 	case "online":

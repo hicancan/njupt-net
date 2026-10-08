@@ -18,7 +18,11 @@ func TestSelfOfflineRequiresBooleanSuccessAndNeverRepeats(t *testing.T) {
 			calls := 0
 			s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/Self/dashboard/getOnlineList" {
-					fmt.Fprint(w, "[]")
+					if calls == 0 {
+						fmt.Fprint(w, "["+connectionTestJSON+"]")
+					} else {
+						fmt.Fprint(w, "[]")
+					}
 					return
 				}
 				calls++
@@ -34,6 +38,60 @@ func TestSelfOfflineRequiresBooleanSuccessAndNeverRepeats(t *testing.T) {
 			}
 			if result == nil || (response == `{}` && result.Outcome != Unknown) || (response == `{"success":false}` && result.Outcome != Rejected) {
 				t.Fatalf("submission outcome lost: result=%+v error=%v", result, err)
+			}
+		})
+	}
+}
+
+func TestOfflineDoesNotSubmitAnAbsentSession(t *testing.T) {
+	for _, response := range []struct{ name, body string }{
+		{"empty-list", `[]`},
+		{"different-id", "[" + strings.Replace(connectionTestJSON, "session-123", "session-other", 1) + "]"},
+		{"matching-prefix", "[" + strings.Replace(connectionTestJSON, "session-123", "session-1234", 1) + "]"},
+	} {
+		t.Run(response.name, func(t *testing.T) {
+			writes, reads := 0, 0
+			s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/Self/dashboard/getOnlineList" {
+					reads++
+					fmt.Fprint(w, response.body)
+					return
+				}
+				writes++
+				fmt.Fprint(w, `{"success":true}`)
+			})
+			result, err := s.Offline(context.Background(), "session-123")
+			if err == nil || result == nil || result.SessionID != "session-123" || result.Outcome != NotSubmitted || result.Accepted || result.Verified || writes != 0 || reads != 1 {
+				t.Fatalf("offline=%+v writes=%d reads=%d error=%v", result, writes, reads, err)
+			}
+		})
+	}
+}
+
+func TestOfflineDoesNotSubmitAfterFailedPreconditionQuery(t *testing.T) {
+	for _, response := range []struct {
+		name, body string
+		status     int
+	}{
+		{"http", "unavailable", http.StatusServiceUnavailable},
+		{"invalid-json", "not json", http.StatusOK},
+		{"expired-session", selfTestLoginPage(), http.StatusOK},
+	} {
+		t.Run(response.name, func(t *testing.T) {
+			writes, reads := 0, 0
+			s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/Self/dashboard/getOnlineList" {
+					reads++
+					w.WriteHeader(response.status)
+					fmt.Fprint(w, response.body)
+					return
+				}
+				writes++
+				fmt.Fprint(w, `{"success":true}`)
+			})
+			result, err := s.Offline(context.Background(), "session-123")
+			if err == nil || result == nil || result.Outcome != NotSubmitted || result.Accepted || result.Verified || writes != 0 || reads != 1 {
+				t.Fatalf("offline=%+v writes=%d reads=%d error=%v", result, writes, reads, err)
 			}
 		})
 	}
@@ -83,14 +141,14 @@ func TestOfflineWaitsWithoutResubmitting(t *testing.T) {
 			return
 		}
 		reads++
-		if reads == 1 {
+		if reads <= 2 {
 			fmt.Fprint(w, "["+connectionTestJSON+"]")
 			return
 		}
 		fmt.Fprint(w, `[]`)
 	})
 	result, err := s.Offline(context.Background(), "session-123")
-	if err != nil || !result.Accepted || !result.Verified || writes != 1 || reads != 2 {
+	if err != nil || !result.Accepted || !result.Verified || writes != 1 || reads != 3 {
 		t.Fatalf("offline=%+v writes=%d reads=%d error=%v", result, writes, reads, err)
 	}
 }
@@ -108,7 +166,28 @@ func TestOfflineKeepsAcceptedSeparateFromVerified(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 	result, err := s.Offline(ctx, "session-123")
-	if err == nil || result == nil || !result.Accepted || result.Verified || writes != 1 {
+	if err == nil || result == nil || result.Outcome != Accepted || !result.Accepted || result.Verified || writes != 1 {
 		t.Fatalf("offline=%+v writes=%d error=%v", result, writes, err)
+	}
+}
+
+func TestOfflineKeepsAcceptedAfterFailedObservation(t *testing.T) {
+	writes, reads := 0, 0
+	s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/Self/dashboard/tooffline" {
+			writes++
+			fmt.Fprint(w, `{"success":true}`)
+			return
+		}
+		reads++
+		if writes == 0 {
+			fmt.Fprint(w, "["+connectionTestJSON+"]")
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	result, err := s.Offline(context.Background(), "session-123")
+	if err == nil || result == nil || result.Outcome != Accepted || !result.Accepted || result.Verified || writes != 1 || reads != 2 {
+		t.Fatalf("offline=%+v writes=%d reads=%d error=%v", result, writes, reads, err)
 	}
 }

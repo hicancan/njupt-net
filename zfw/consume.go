@@ -76,7 +76,7 @@ func (s *Session) SetConsumeProtect(ctx context.Context, limit string) (*Consume
 	}
 	values.Set("consumeLimit", limit)
 	result.Outcome = Unknown
-	data, final, _, err := s.request(ctx, http.MethodPost, attr(form, "action"), values)
+	data, final, _, err := s.navigate(ctx, http.MethodPost, attr(form, "action"), values, "/Self/service/consumeProtect")
 	if err != nil {
 		return result, fmt.Errorf("consume limit submission failed; result is unknown: %w", err)
 	}
@@ -84,11 +84,12 @@ func (s *Session) SetConsumeProtect(ctx context.Context, limit string) (*Consume
 	if err != nil {
 		return result, err
 	}
-	result.ConsumeLimit, err = consumeProtect(doc)
-	if err != nil {
-		return result, err
+	var current *ConsumeLimit
+	if pathWithoutSession(final.Path) == "/Self/service/consumeProtect" {
+		current, err = consumeProtect(doc)
+	} else {
+		current, err = s.ConsumeProtect(ctx)
 	}
-	current, err := s.ConsumeProtect(ctx)
 	if err != nil {
 		return result, fmt.Errorf("consume limit was submitted; final state is unverified: %w", err)
 	}

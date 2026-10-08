@@ -94,9 +94,9 @@ func TestInvalidBusinessArgumentsFailBeforeNetwork(t *testing.T) {
 		t.Run(check.group+" "+check.command+strings.Join(check.args, ""), func(t *testing.T) {
 			var err error
 			if check.group == "p" {
-				_, err = pCommand(context.Background(), options{}, check.command, check.args, io.Discard)
+				_, err = pCommand(context.Background(), newCommandContext(options{}), "", check.command, check.args, io.Discard)
 			} else {
-				_, err = zfwCommand(context.Background(), options{}, check.command, check.args)
+				_, err = zfwCommand(context.Background(), newCommandContext(options{}), "", check.command, check.args)
 			}
 			var argument *argumentError
 			if !errors.As(err, &argument) {
@@ -113,13 +113,13 @@ func TestOperatorUnbindUsesAccountWithoutBroadbandConfiguration(t *testing.T) {
 	}
 	for _, operator := range []string{"njxy", "cmcc"} {
 		opt := options{config: path, account: "fixture"}
-		_, err := zfwCommand(context.Background(), opt, "operator", []string{"--unbind", operator})
+		_, err := zfwCommand(context.Background(), newCommandContext(opt), opt.account, "operator", []string{"--unbind", operator})
 		var argument *argumentError
 		if !errors.As(err, &argument) || !strings.Contains(err.Error(), "--interface") {
 			t.Fatalf("unbind required broadband configuration before link selection: %v", err)
 		}
 		opt.account = ""
-		_, err = zfwCommand(context.Background(), opt, "operator", []string{"--unbind", operator})
+		_, err = zfwCommand(context.Background(), newCommandContext(opt), opt.account, "operator", []string{"--unbind", operator})
 		if !errors.As(err, &argument) || !strings.Contains(err.Error(), "--account is required") {
 			t.Fatalf("unbind did not require account identity: %v", err)
 		}

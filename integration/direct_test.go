@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hicancan/njupt-net/v3/p"
+	"github.com/hicancan/njupt-net/v4/p"
 )
 
 // The DNS outage is confined to this test process. Campus sessions remain online.

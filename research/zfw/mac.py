@@ -14,11 +14,23 @@ def bindings(value, size):
     if total < len(rows) or total < 0 or len(rows) > size:
         raise ValueError("MAC response has inconsistent row counts")
     for row in rows:
-        if (not isinstance(row, list) or len(row) != 5 or type(row[0]) is not int
+        if (not isinstance(row, list) or len(row) != 5 or row[0] not in ("0", "1")
                 or not isinstance(row[1], str) or not re.fullmatch(r"[0-9a-fA-F]{12}", row[1])
                 or any(item is not None and not isinstance(item, str) for item in row[2:])):
             raise ValueError("MAC response has an invalid five-column row")
     return total, rows
+
+
+def initialization(session, page_number=1, page_size=10):
+    """Compare a fresh session's direct list query with opening myMac first."""
+    params = {"pageNumber": page_number, "pageSize": page_size, "searchText": "", "sortName": "2", "sortOrder": "DESC"}
+    before = session.query("service/getMacList", params)
+    total, rows = bindings(before, page_size)
+    session.page("service/myMac")
+    after = session.query("service/getMacList", params)
+    bindings(after, page_size)
+    return {"direct_query_valid": True, "total": total, "rows": len(rows),
+            "same_after_page": before == after, "list_shape": shape(before)}
 
 
 def binding_present(session, mac, observations):
@@ -85,11 +97,15 @@ def main():
     parser.add_argument("--page", type=int, default=1)
     parser.add_argument("--size", type=int, choices=(10, 25, 50, 100), default=10)
     parser.add_argument("--unbind")
+    parser.add_argument("--compare-initialization", action="store_true")
     args = parser.parse_args()
     if args.page < 1:
         parser.error("page must be positive")
+    if args.compare_initialization and args.unbind:
+        parser.error("initialization comparison only reads the device list")
     with opened(args) as session:
-        print(json.dumps(inspect(session, args.page, args.size, args.unbind), ensure_ascii=False, indent=2))
+        result = initialization(session, args.page, args.size) if args.compare_initialization else inspect(session, args.page, args.size, args.unbind)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

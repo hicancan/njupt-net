@@ -2,12 +2,9 @@ package p
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
-	"net"
 	"net/url"
 	"strconv"
-	"strings"
 )
 
 type BridgeResult struct {
@@ -28,14 +25,7 @@ func (p *Portal) SelfURL(ctx context.Context, account, password string, selfType
 	if err := validateCredential(account, password); err != nil {
 		return nil, err
 	}
-	if err := p.ensure(ctx); err != nil {
-		return nil, err
-	}
-	if _, err := p.status(ctx); err != nil {
-		return nil, err
-	}
-	address := strconv.FormatUint(uint64(binary.BigEndian.Uint32(net.ParseIP(p.ip).To4())), 10)
-	raw, err := p.call(ctx, "self", url.Values{"self_type": {strconv.Itoa(selfType)}, "user_account": {account}, "user_password": {password}, "wlan_user_mac": {strings.ToUpper(p.mac)}, "wlan_user_ip": {address}})
+	raw, err := p.call(ctx, "self", url.Values{"self_type": {strconv.Itoa(selfType)}, "user_account": {account}, "user_password": {password}})
 	if err != nil {
 		return nil, err
 	}

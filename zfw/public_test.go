@@ -26,7 +26,7 @@ func TestHelpFollowsTheDiscoveredContentID(t *testing.T) {
 		calls := []string{}
 		s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 			calls = append(calls, r.URL.Path)
-			if r.URL.Path == "/Self/login" {
+			if r.URL.Path == "/Self/login/" {
 				http.SetCookie(w, &http.Cookie{Name: "JSESSIONID", Value: "public-session", Path: "/Self"})
 				fmt.Fprint(w, `<html><body>登录页</body></html>`)
 				return
@@ -41,7 +41,7 @@ func TestHelpFollowsTheDiscoveredContentID(t *testing.T) {
 			fmt.Fprint(w, `<html><body><p>`+content+`</p></body></html>`)
 		})
 		page, err := s.PublicPage(context.Background(), "help")
-		if err != nil || page.Text != content || page.Available != (content != "暂无使用帮助信息") || page.HTTPStatus != http.StatusOK || !strings.HasSuffix(page.ContentURL, "/Self/unlogin/helpinfo/0") || len(calls) != 3 || calls[0] != "/Self/login" {
+		if err != nil || page.Text != content || page.Available != (content != "暂无使用帮助信息") || page.HTTPStatus != http.StatusOK || !strings.HasSuffix(page.ContentURL, "/Self/unlogin/helpinfo/0") || len(calls) != 3 || calls[0] != "/Self/login/" {
 			t.Fatalf("help=%+v calls=%v error=%v", page, calls, err)
 		}
 	}
@@ -52,7 +52,7 @@ func TestHelpRejectsAnUnrelatedIframeBeforeRequest(t *testing.T) {
 		calls := 0
 		s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 			calls++
-			if r.URL.Path == "/Self/login" {
+			if r.URL.Path == "/Self/login/" {
 				http.SetCookie(w, &http.Cookie{Name: "JSESSIONID", Value: "public-session", Path: "/Self"})
 				return
 			}
@@ -66,7 +66,7 @@ func TestHelpRejectsAnUnrelatedIframeBeforeRequest(t *testing.T) {
 
 func TestHelpContentHTTPFailurePreservesObservedStatus(t *testing.T) {
 	s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/Self/login" {
+		if r.URL.Path == "/Self/login/" {
 			http.SetCookie(w, &http.Cookie{Name: "JSESSIONID", Value: "public-session", Path: "/Self"})
 			return
 		}
@@ -85,20 +85,22 @@ func TestHelpContentHTTPFailurePreservesObservedStatus(t *testing.T) {
 func TestHelpRejectsAContentRedirectToAnotherPage(t *testing.T) {
 	for _, destination := range []string{"/Self/unlogin/notice", "/Self/unlogin/helpinfo/1"} {
 		t.Run(destination, func(t *testing.T) {
+			destinationReads := 0
 			s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
-				case "/Self/login":
+				case "/Self/login/":
 					http.SetCookie(w, &http.Cookie{Name: "JSESSIONID", Value: "public-session", Path: "/Self"})
 				case "/Self/unlogin/help":
 					fmt.Fprint(w, `<html><body>帮助<iframe src="/Self/unlogin/helpinfo/0"></iframe></body></html>`)
 				case "/Self/unlogin/helpinfo/0":
 					http.Redirect(w, r, destination, http.StatusFound)
 				default:
+					destinationReads++
 					fmt.Fprint(w, `<html><body>无关页面正文</body></html>`)
 				}
 			})
 			page, err := s.PublicPage(context.Background(), "help")
-			if err == nil || page == nil || page.Available || page.Text != "" || page.HTTPStatus != http.StatusOK || !strings.HasSuffix(page.ContentURL, destination) {
+			if err == nil || page == nil || page.Available || page.Text != "" || page.HTTPStatus != 0 || !strings.HasSuffix(page.ContentURL, "/Self/unlogin/helpinfo/0") || destinationReads != 0 {
 				t.Fatalf("redirected content became discovered help: page=%+v error=%v", page, err)
 			}
 		})
@@ -107,7 +109,7 @@ func TestHelpRejectsAContentRedirectToAnotherPage(t *testing.T) {
 
 func TestHelpPreservesAnExistingSessionCookie(t *testing.T) {
 	s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/Self/login" {
+		if r.URL.Path == "/Self/login/" {
 			t.Error("existing help session was needlessly initialized again")
 		}
 		cookie, err := r.Cookie("JSESSIONID")

@@ -11,7 +11,7 @@ def inspect(session):
     # Without the /Self Cookie, this deployment URL-rewrites helpinfo/0 as
     # helpinfo/;jsessionid=<id>0. Establish the public-page session first.
     if not any(cookie.name == "JSESSIONID" and cookie.path == "/Self" for cookie in session.link.cookies):
-        session.page("login")
+        session.page("login/")
     results = {}
     for kind in ("notice", "help", "agreement"):
         response = session.request("GET", "unlogin/" + kind)

@@ -2,7 +2,6 @@ package zfw
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -22,9 +21,19 @@ type MACBinding struct {
 type macBindingWire MACBinding
 
 func (b *macBindingWire) UnmarshalJSON(data []byte) error {
-	// The five column positions come from myMac's actual table definitions.
-	// A valid nonempty response from the current deployment is still unobserved.
-	return decodeColumns(data, &b.Online, &b.MAC, &b.TerminalType, &b.LastLoginTime, &b.LastIP)
+	var online string
+	if err := decodeColumns(data, &online, &b.MAC, &b.TerminalType, &b.LastLoginTime, &b.LastIP); err != nil {
+		return err
+	}
+	switch online {
+	case "0":
+		b.Online = 0
+	case "1":
+		b.Online = 1
+	default:
+		return fmt.Errorf("Self MAC binding online column must be the string 0 or 1")
+	}
+	return nil
 }
 
 type MACPage struct {
@@ -35,9 +44,6 @@ type MACPage struct {
 func (s *Session) Devices(ctx context.Context, page, size int) (*MACPage, error) {
 	if page < 1 || (size != 10 && size != 25 && size != 50 && size != 100) {
 		return nil, fmt.Errorf("device page must be positive and size must be 10, 25, 50 or 100")
-	}
-	if _, err := s.page(ctx, "service/myMac"); err != nil {
-		return nil, err
 	}
 	return s.macList(ctx, page, size)
 }
@@ -96,21 +102,16 @@ func (s *Session) Unbind(ctx context.Context, mac string) (*UnbindResult, error)
 	if len(token) != 2 || token[1] == "" {
 		return result, fmt.Errorf("Self device page is missing its unbind CSRF token")
 	}
-	present, beforeErr := s.hasMACBinding(ctx, mac)
-	if beforeErr == nil && !present {
+	present, err := s.hasMACBinding(ctx, mac)
+	if err != nil {
+		return result, fmt.Errorf("MAC unbind precondition failed; no request was submitted: %w", err)
+	}
+	if !present {
 		result.Verified = true
 		return result, nil
 	}
-	if errors.Is(beforeErr, ErrSessionExpired) {
-		return result, beforeErr
-	}
-	if err := ctx.Err(); err != nil {
-		return result, err
-	}
-	// An unavailable list cannot establish absence. The caller has explicitly
-	// named this MAC, so a single submission is still allowed in that case.
 	result.Outcome = Unknown
-	data, final, _, err := s.request(ctx, http.MethodGet, "service/unbindmac", url.Values{"mac": {mac}, "ajaxCsrfToken": {token[1]}})
+	data, final, _, err := s.navigate(ctx, http.MethodGet, "service/unbindmac", url.Values{"mac": {mac}, "ajaxCsrfToken": {token[1]}}, "/Self/service/myMac")
 	if err != nil {
 		return result, fmt.Errorf("MAC unbind request failed; result is unknown: %w", err)
 	}
@@ -128,18 +129,15 @@ func (s *Session) Unbind(ctx context.Context, mac string) (*UnbindResult, error)
 		result.Outcome = Accepted
 	case "false":
 		result.Outcome = Rejected
+		return result, fmt.Errorf("Self rejected the MAC unbind submission")
+	default:
+		return result, fmt.Errorf("Self MAC unbind result has no recognized acceptance state")
 	}
 	present, err = s.hasMACBinding(ctx, mac)
 	if err != nil {
 		return result, fmt.Errorf("MAC unbind was submitted; binding removal is unverified: %w", err)
 	}
 	result.Verified = !present
-	if result.Outcome == Rejected {
-		return result, fmt.Errorf("Self rejected the MAC unbind submission")
-	}
-	if result.Outcome == Unknown {
-		return result, fmt.Errorf("Self MAC unbind result has no recognized acceptance state")
-	}
 	if present {
 		return result, fmt.Errorf("Self accepted the unbind submission but the MAC binding is still listed")
 	}

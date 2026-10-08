@@ -12,9 +12,19 @@ go vet ./...
 go build -trimpath -o njupt-net ./cmd/njupt-net
 ```
 
-Windows 输出文件名使用 `njupt-net.exe`。生产代码直接依赖 `golang.org/x/net/html` 解析实际表单；其他网络与 CLI 功能使用 Go 标准库。
+Windows 输出文件名使用 `njupt-net.exe`。生产代码使用 `golang.org/x/net/html` 解析实际表单，使用 `golang.org/x/sys/windows` 查询 Windows 网卡与地址；其余功能使用 Go 标准库。
 
 业务文件包含自己的类型、请求、解析和状态确认。协议测试贴近对应源码，固定夹具保护真实契约与异常边界。新接口应先说明请求来源、必要参数、认证前提和返回语义，再加入实现。
+
+CLI 的单次命令与 `session` 共用业务分发。会话测试检查单行 JSON 请求和响应、账号隔离、配置快照、门户实例复用、错误后的下一条请求、取消与全部管理会话清理。协议见 [连续命令会话](architecture.md#连续命令会话)。
+
+网络测试分别核对只读连接复用与修改请求的新连接，确保具有修改效果的 GET 也保持每次调用单次提交。网卡绑定测试检查源 IPv4 的唯一启用网卡、连接后套接字的实际网卡索引，以及原生绑定失败的错误传播。Windows、Linux 与 macOS 分别使用 `IP_UNICAST_IF`、`SO_BINDTOIFINDEX` 与 `IP_BOUND_IF`；Linux 运行要求内核 5.7 或更新版本。
+
+重定向测试核对普通读取对跳转的拒绝、GET 与 POST 的单次提交、业务声明的结果页导航和跳转后的读取传输。签名登录入口、退出链和页面修改分别覆盖允许的读取目标、返回初始动作、跨站跳转及管理会话过期。
+
+业务操作所需的动态配置、鉴权、令牌和状态确认由对应包测试。门户登录覆盖直接提交、原生拒绝与 `ret_code` 保留、等待目标账号出现、持续错误身份的核验超时，以及未知结果的立即返回。下线测试覆盖提交前目标 session ID 已不存在、前置查询失败和接受后的状态观察。设备列表覆盖真实字符串在线标记到公开整数的转换及直接查询路径；MAC 解绑覆盖前提失败、明确拒绝、未知结果和接受后的分页确认。
+
+运营商关系与消费保护的测试分别核对 POST 直接返回与 POST 跳转到独立 GET 结果页的流程。独立 GET 已取得当前业务字段时复用该响应，POST 返回的字段通过另一次 GET 核验。每项请求的必要性见 [原子动作与请求边界](../research/requests.md)。
 
 ## Python 离线研究
 
@@ -38,7 +48,7 @@ uv run --locked python -m unittest discover -p "test_*.py" -v
 pwsh -NoProfile -File examples/windows/tests/test.ps1 -OutputDirectory <OUTPUT_DIRECTORY>
 ```
 
-将 `<OUTPUT_DIRECTORY>` 替换为本次测试输出目录。离线测试使用模拟 CLI JSON，核对目标已在线、保留已有绑定、迁移唯一持有人绑定、直接绑定等状态分支，以及身份与绑定前提、单次修改和失败后的阶段记录。示例脚本的参数与使用方法见 [Windows 示例](../examples/windows/README.md)。
+将 `<OUTPUT_DIRECTORY>` 替换为本次测试输出目录。离线测试使用模拟 CLI 会话，核对目标已在线、保留已有绑定、迁移唯一持有人绑定、直接绑定等状态分支，以及身份与绑定前提、绑定和下线的单次提交、失败后的阶段记录与会话清理。目标身份已在线但宽带需要迁移时，完成关系变更后读取门户确认身份与 MAC，实际离线时再认证；其他身份在线时按精确 Self 连接清退，并确认门户离线。门户原本离线时直接处理绑定和认证。新绑定的认证测试区分立即成功、明确未绑定后立即串行再次认证、其他拒绝和结果未知；登录成功后使用内核返回的已核对状态。示例脚本的参数与使用方法见 [Windows 示例](../examples/windows/README.md)。
 
 ## 校园网集成测试
 
@@ -59,7 +69,7 @@ go test ./integration -run '^(TestLiveReadOnly|TestLiveBills)$' -count=1 -v
 go test ./integration -run '^TestLiveCampusWithoutDNS$' -count=1 -v
 ```
 
-`TestLiveCampusWithoutDNS` 仅在测试进程内拒绝默认解析器的 DNS 查询，读取门户配置与状态，核对配置账号的运营商绑定、在线连接及门户签名管理会话，并退出所建管理会话。机器的 DNS 与 TUN 设置保持原值。该用例验证固定地址访问及会话流程。
+`TestLiveCampusWithoutDNS` 仅在测试进程内拒绝默认解析器的 DNS 查询，读取门户配置与状态，核对配置账号的运营商绑定、在线连接及门户签名管理会话，并退出所建管理会话。机器的 DNS 与 TUN 设置保持原值。校园 TCP 连接通过固定 IP 访问服务，同时绑定源地址和所属网卡；该用例验证固定地址访问及会话流程。普通客户端与公网探测的 DNS 查询仍使用操作系统解析路径。
 
 `TestLivePortalCycle` 与 `TestLiveSelfOfflinePortalLogin` 会下线并恢复属于配置账号的终端，另需设置 `NJUPT_NET_CYCLE=1`。执行时使用独立网络保持其他应用连接。测试同时报告业务错误与恢复错误；任一步失败均使测试失败。
 
@@ -69,7 +79,7 @@ GitHub Actions 在 Windows、Linux、macOS 运行 Go 测试、vet 与 Python 离
 
 ## 发布
 
-推送形如 `v3.0.0` 的标签触发发布工作流。工作流先运行同一套 CI，再构建六个目标：
+推送形如 `v4.0.0` 的标签触发发布工作流。工作流先运行同一套 CI，再构建六个目标：
 
 | 系统 | 架构 | 归档 |
 |---|---|---|

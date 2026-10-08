@@ -48,7 +48,7 @@ func TestSelfLoginUsesDynamicFormAndPrefetch(t *testing.T) {
 		path := pathWithoutSession(r.URL.Path)
 		calls = append(calls, r.Method+" "+path)
 		switch path {
-		case "/Self/login":
+		case "/Self/login/":
 			http.SetCookie(w, &http.Cookie{Name: "JSESSIONID", Value: "session", Path: "/Self"})
 			fmt.Fprint(w, selfTestLoginPage())
 		case "/Self/login/randomCode":
@@ -88,7 +88,7 @@ func TestSelfLoginUsesDynamicFormAndPrefetch(t *testing.T) {
 	if s.identity != "fixture-account" {
 		t.Fatal("authenticated identity was not retained")
 	}
-	want := []string{"GET /Self/login", "GET /Self/login/randomCode", "POST /Self/login/verify", "GET /Self/dashboard"}
+	want := []string{"GET /Self/login/", "GET /Self/login/randomCode", "POST /Self/login/verify", "GET /Self/dashboard"}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %v", calls)
 	}
@@ -98,7 +98,7 @@ func TestSelfLoginRejectsMismatchedIdentity(t *testing.T) {
 	logouts := 0
 	s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		switch pathWithoutSession(r.URL.Path) {
-		case "/Self/login":
+		case "/Self/login/":
 			fmt.Fprint(w, selfTestLoginPage())
 		case "/Self/login/randomCode":
 			w.Header().Set("Content-Type", "image/png")
@@ -109,7 +109,7 @@ func TestSelfLoginRejectsMismatchedIdentity(t *testing.T) {
 			fmt.Fprint(w, selfTestPage("", "another-account"))
 		case "/Self/login/logout":
 			logouts++
-			http.Redirect(w, r, "/Self/login", http.StatusFound)
+			http.Redirect(w, r, "/Self/login/", http.StatusFound)
 		}
 	})
 	s.identity, s.authenticated = "", false
@@ -127,7 +127,7 @@ func TestSelfLoginRejectsMismatchedIdentity(t *testing.T) {
 func TestLoginDoesNotUseRefreshTokenAsAuthenticationState(t *testing.T) {
 	s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		switch pathWithoutSession(r.URL.Path) {
-		case "/Self/login":
+		case "/Self/login/":
 			fmt.Fprint(w, selfTestLoginPage())
 		case "/Self/login/randomCode":
 			w.Header().Set("Content-Type", "image/png")
@@ -194,6 +194,9 @@ func TestSelfLanguageUsesActualValuesAndVerifiesButton(t *testing.T) {
 					}
 					return
 				}
+				if r.URL.Path != "/Self/login/" {
+					t.Errorf("language verification requested a noncanonical login page: %s", r.URL.Path)
+				}
 				button := "English"
 				if language == "English" {
 					button = "中文"
@@ -213,7 +216,7 @@ func TestSelfLanguageUsesActualValuesAndVerifiesButton(t *testing.T) {
 func TestSelfLogoutRequiresLoginPage(t *testing.T) {
 	s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/Self/login/logout" {
-			http.Redirect(w, r, "/Self/login", http.StatusFound)
+			http.Redirect(w, r, "/Self/login/", http.StatusFound)
 			return
 		}
 		fmt.Fprint(w, selfTestLoginPage())
@@ -221,6 +224,94 @@ func TestSelfLogoutRequiresLoginPage(t *testing.T) {
 	s.identity = "fixture-account"
 	if err := s.Logout(context.Background()); err != nil || s.identity != "" {
 		t.Fatalf("logout error = %v; retained token = %t", err, s.identity != "")
+	}
+}
+
+func TestSelfLogoutFollowsOnlyItsNativeReadNavigation(t *testing.T) {
+	var calls []string
+	s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.URL.Path)
+		switch r.URL.Path {
+		case "/Self/login/logout":
+			http.Redirect(w, r, "/Self/", http.StatusFound)
+		case "/Self/":
+			http.Redirect(w, r, "/Self/dashboard;jsessionid=own-session", http.StatusFound)
+		case "/Self/dashboard;jsessionid=own-session":
+			http.Redirect(w, r, "/Self/login/", http.StatusFound)
+		case "/Self/login/":
+			fmt.Fprint(w, selfTestLoginPage())
+		default:
+			t.Errorf("logout reached another action: %s", r.URL.Path)
+		}
+	})
+	if err := s.Logout(context.Background()); err != nil || s.authenticated {
+		t.Fatalf("logout navigation failed: calls=%v error=%v", calls, err)
+	}
+	want := []string{"/Self/login/logout", "/Self/", "/Self/dashboard;jsessionid=own-session", "/Self/login/"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("unexpected logout requests: %v", calls)
+	}
+}
+
+func TestSelfWriteRedirectToLoginInvalidatesSessionWithoutNavigation(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		for _, destination := range []string{"/Self/login/", "/Self/login;jsessionid=expired"} {
+			t.Run(method+destination, func(t *testing.T) {
+				calls := 0
+				s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					http.Redirect(w, r, destination, http.StatusFound)
+				})
+				_, _, _, err := s.request(context.Background(), method, "dashboard/tooffline", nil)
+				if !errors.Is(err, ErrSessionExpired) || calls != 1 || s.identity != "" || s.authenticated || s.loginSubmitted {
+					t.Fatalf("expired write was followed or retained authentication: calls=%d error=%v", calls, err)
+				}
+			})
+		}
+	}
+}
+
+func TestSelfWriteRedirectCannotExpireSessionThroughAnotherOrigin(t *testing.T) {
+	calls := 0
+	s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		http.Redirect(w, r, "http://example.com/Self/login/", http.StatusFound)
+	})
+	_, _, _, err := s.request(context.Background(), http.MethodGet, "dashboard/tooffline", nil)
+	if err == nil || errors.Is(err, ErrSessionExpired) || calls != 1 || s.identity != "fixture-account" || !s.authenticated {
+		t.Fatalf("foreign login redirect changed the session: calls=%d error=%v", calls, err)
+	}
+}
+
+func TestSelfReadRedirectToLoginInvalidatesSessionWithoutNavigation(t *testing.T) {
+	calls := 0
+	s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		http.Redirect(w, r, "/Self/login/", http.StatusFound)
+	})
+	_, err := s.Online(context.Background())
+	if !errors.Is(err, ErrSessionExpired) || calls != 1 || s.identity != "" || s.authenticated {
+		t.Fatalf("expired read was followed or retained authentication: calls=%d error=%v", calls, err)
+	}
+}
+
+func TestLanguageAcceptsItsLoginPageRedirectBeforeAuthentication(t *testing.T) {
+	changes, reads := 0, 0
+	s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/Self/login/changeLanguage":
+			changes++
+			http.Redirect(w, r, "/Self/login/", http.StatusFound)
+		case "/Self/login/":
+			reads++
+			fmt.Fprint(w, `<html><body><a id="language">中文</a></body></html>`)
+		default:
+			t.Error("language navigated to another action")
+		}
+	})
+	s.identity, s.authenticated = "", false
+	if err := s.Language(context.Background(), "English"); err != nil || changes != 1 || reads != 2 {
+		t.Fatalf("language navigation failed: changes=%d reads=%d error=%v", changes, reads, err)
 	}
 }
 

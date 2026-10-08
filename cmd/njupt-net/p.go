@@ -6,15 +6,14 @@ import (
 	"io"
 	"os"
 	"strings"
-
-	"github.com/hicancan/njupt-net/v3/p"
 )
 
-func pCommand(ctx context.Context, opt options, command string, args []string, prompt io.Writer) (any, error) {
+func pCommand(ctx context.Context, owner *commandContext, alias, command string, args []string, prompt io.Writer) (any, error) {
 	fs := commandFlags("p " + command)
 	var terminal, operator, newPasswordFile, captchaOutput string
-	var selfType int
+	var selfType, port int
 	fs.StringVar(&terminal, "terminal", "pc", "terminal type")
+	fs.IntVar(&port, "port", 804, "portal API port: 801, 802, 803 or 804")
 	switch command {
 	case "login":
 		fs.StringVar(&operator, "operator", "campus", "campus, njxy or cmcc")
@@ -33,6 +32,9 @@ func pCommand(ctx context.Context, opt options, command string, args []string, p
 	if terminal != "pc" && terminal != "mobile" && terminal != "hipad" && terminal != "vipad" {
 		return nil, invalid("terminal must be pc, mobile, hipad or vipad")
 	}
+	if port < 801 || port > 804 {
+		return nil, invalid("portal port must be 801, 802, 803 or 804")
+	}
 	if command == "login" && operator != "campus" && operator != "njxy" && operator != "cmcc" {
 		return nil, invalid("operator must be campus, njxy or cmcc")
 	}
@@ -41,6 +43,9 @@ func pCommand(ctx context.Context, opt options, command string, args []string, p
 	}
 	var newPassword string
 	if command == "password" {
+		if owner.stream {
+			return nil, invalid("p password requires interactive stdin and is unavailable in a session")
+		}
 		if newPasswordFile == "" {
 			return nil, invalid("password requires --new-password-file")
 		}
@@ -62,17 +67,12 @@ func pCommand(ctx context.Context, opt options, command string, args []string, p
 	var value credential
 	if command == "login" || command == "self" || command == "password" {
 		var err error
-		_, value, err = configured(opt)
+		_, value, err = owner.configured(alias, true)
 		if err != nil {
 			return nil, err
 		}
 	}
-	link, err := openLink(opt)
-	if err != nil {
-		return nil, err
-	}
-	defer link.Close()
-	portal, err := p.New(link, terminal)
+	portal, err := owner.portal(terminal, port)
 	if err != nil {
 		return nil, err
 	}

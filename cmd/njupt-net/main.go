@@ -6,19 +6,21 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"runtime"
 	"runtime/debug"
 	"time"
 
-	"github.com/hicancan/njupt-net/v3/network"
+	"github.com/hicancan/njupt-net/v4/network"
 )
 
 const usage = `njupt-net — NJUPT campus network CLI
 
 njupt-net interfaces
 njupt-net version
+njupt-net [GLOBAL FLAGS] session
 njupt-net [GLOBAL FLAGS] probe
 njupt-net [GLOBAL FLAGS] p COMMAND [COMMAND FLAGS]
 njupt-net [GLOBAL FLAGS] zfw COMMAND [COMMAND FLAGS]
@@ -39,6 +41,8 @@ p commands:
   self        [--type 0|1|2]         obtain the self-service entry URL
   password    --new-password-file PATH --captcha-output PATH
 Every p command accepts --terminal pc|mobile|hipad|vipad (default: pc).
+Every p command accepts --port 801|802|803|804 (default: 804).
+Ports 801/803 use HTTP; ports 802/804 use HTTPS.
 login, self and password require --account. Password reads the image answer
 from stdin; the new password file contains one password with an optional newline.
 
@@ -57,6 +61,11 @@ zfw commands:
   bills       --kind online|monthly|operations [QUERY FLAGS]
   export      --kind online|monthly|operations --output PATH [--all] [QUERY FLAGS]
 Each private zfw command logs in, executes once, and closes its management session.
+session reads one JSON request per line: {"account":"ALIAS","args":["zfw","operator"]}.
+It reuses portal context and per-account management sessions. Responses are one-line
+JSON on stdout with command, data, optional error, and exit_code. Send {"args":["close"]}
+to close all management sessions and exit; stdin EOF also closes them. Source, config
+and timeout remain fixed. Interactive p password and --self-url-file are unavailable.
 With --self-url-file, --account still selects the expected identity; its password
 is unused. The file contains one bridge URL with an optional trailing newline.
 
@@ -126,40 +135,77 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, usage)
 		return 0
 	}
-	if group == "interfaces" || group == "probe" || group == "version" {
+	owner := newCommandContext(opt)
+	if group == "session" {
 		if err := parse(commandFlags(group), remaining[1:]); err != nil {
 			return finish(stdout, stderr, group, nil, err)
 		}
-		if group == "interfaces" {
-			data, err := network.Interfaces()
-			return finish(stdout, stderr, group, data, err)
-		}
-		if group == "version" {
-			return finish(stdout, stderr, group, versionInfo{buildVersion(), runtime.Version(), runtime.GOOS, runtime.GOARCH}, nil)
-		}
-		link, err := openLink(opt)
-		if err != nil {
+		owner.stream = true
+		if _, err := owner.openLink(); err != nil {
 			return finish(stdout, stderr, group, nil, err)
 		}
-		defer link.Close()
+		return runSession(ctx, owner, os.Stdin, stdout)
+	}
+	command, data, err := owner.execute(ctx, opt.account, remaining, stderr)
+	err = errors.Join(err, owner.close(ctx))
+	return finish(stdout, stderr, command, data, err)
+}
+
+func (owner *commandContext) execute(ctx context.Context, alias string, args []string, prompt io.Writer) (string, any, error) {
+	if len(args) == 0 {
+		return "njupt-net", nil, invalid("a command is required")
+	}
+	group := args[0]
+	if owner.stream {
+		for _, argument := range args {
+			if argument == "--help" || argument == "-h" {
+				return commandName(args), nil, invalid("help is available outside a session")
+			}
+		}
+	}
+	if group == "interfaces" || group == "probe" || group == "version" {
+		if err := parse(commandFlags(group), args[1:]); err != nil {
+			return group, nil, err
+		}
+		if group == "interfaces" {
+			data, err := network.Interfaces()
+			return group, data, err
+		}
+		if group == "version" {
+			return group, versionInfo{buildVersion(), runtime.Version(), runtime.GOOS, runtime.GOARCH}, nil
+		}
+		link, err := owner.openLink()
+		if err != nil {
+			return group, nil, err
+		}
 		data, err := link.Probe(ctx)
-		return finish(stdout, stderr, group, data, err)
+		return group, data, err
 	}
 	if group != "p" && group != "zfw" {
-		return finish(stdout, stderr, group, nil, invalid("unknown command; use version, interfaces, probe, p or zfw"))
+		return group, nil, invalid("unknown command; use version, interfaces, probe, p or zfw")
 	}
-	if len(remaining) < 2 {
-		return finish(stdout, stderr, group, nil, invalid("a command is required; use --help"))
+	if len(args) < 2 {
+		return group, nil, invalid("a command is required; use --help")
 	}
-	command := remaining[1]
+	command := args[1]
 	var data any
 	var err error
 	if group == "p" {
-		data, err = pCommand(ctx, opt, command, remaining[2:], stderr)
+		data, err = pCommand(ctx, owner, alias, command, args[2:], prompt)
 	} else {
-		data, err = zfwCommand(ctx, opt, command, remaining[2:])
+		data, err = zfwCommand(ctx, owner, alias, command, args[2:])
 	}
-	return finish(stdout, stderr, group+" "+command, data, err)
+	return group + " " + command, data, err
+}
+
+func commandName(args []string) string {
+	if len(args) == 0 {
+		return "njupt-net"
+	}
+	if len(args) >= 2 && (args[0] == "p" || args[0] == "zfw") {
+		return args[0] + " " + args[1]
+	}
+	return args[0]
 }
 
 type argumentError struct{ err error }
@@ -189,9 +235,18 @@ func openLink(opt options) (*network.Link, error) {
 	if (opt.iface == "") == (opt.source == "") {
 		return nil, invalid("specify exactly one of --interface or --source")
 	}
-	source, err := network.SourceAddress(opt.iface, opt.source)
-	if err != nil {
-		return nil, &argumentError{err}
+	source := opt.source
+	if source == "" {
+		var err error
+		source, err = network.SourceAddress(opt.iface, "")
+		if err != nil {
+			return nil, &argumentError{err}
+		}
+	} else {
+		ip := net.ParseIP(source)
+		if ip == nil || ip.To4() == nil || ip.IsUnspecified() || ip.IsLoopback() {
+			return nil, invalid("source must be an assigned non-loopback IPv4 address")
+		}
 	}
 	link, err := network.NewLink(source, opt.timeout)
 	if err != nil {

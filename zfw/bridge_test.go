@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hicancan/njupt-net/v3/network"
+	"github.com/hicancan/njupt-net/v4/network"
 )
 
 const testBridgeURL = "http://10.10.244.240:8080/Self/login/eportalLogin?params=fixture-params&timestamp=fixture-timestamp&sign=fixture-sign"
@@ -124,6 +124,25 @@ func TestBridgeRejectsCrossOriginRedirectWithoutPasswordFallback(t *testing.T) {
 	err := s.LoginBridge(context.Background(), "fixture-account", testBridgeURL)
 	if err == nil || calls != 1 || s.authenticated || strings.Contains(err.Error(), "fixture-sign") || strings.Contains(err.Error(), "fixture-params") {
 		t.Fatalf("bridge redirected or exposed its signed query: calls=%d error=%v", calls, err)
+	}
+}
+
+func TestBridgeDoesNotReplayItsSignedEntryOrNavigateToAnotherAction(t *testing.T) {
+	for _, target := range []string{
+		"/Self/login/eportalLogin?params=new&timestamp=new&sign=new",
+		"/Self/login/eportalLogin;jsessionid=changed?params=new&timestamp=new&sign=new",
+		"/Self/login/logout", "/Self/dashboard/tooffline?sessionid=fixture",
+	} {
+		t.Run(target, func(t *testing.T) {
+			calls := 0
+			s := bridgeTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				http.Redirect(w, r, target, http.StatusFound)
+			})
+			if err := s.LoginBridge(context.Background(), "fixture-account", testBridgeURL); err == nil || calls != 1 || s.authenticated {
+				t.Fatalf("signed navigation repeated or called another action: calls=%d error=%v", calls, err)
+			}
+		})
 	}
 }
 

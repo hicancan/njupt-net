@@ -9,8 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/hicancan/njupt-net/v3/network"
 )
 
 // Terminal is the online session belonging to the selected source address.
@@ -38,29 +36,23 @@ const (
 )
 
 type OperationResult struct {
-	Outcome     Outcome `json:"outcome"`
-	Verified    bool    `json:"verified"`
-	Message     string  `json:"message,omitempty"`
-	Status      *Status `json:"status,omitempty"`
-	SelfURL     string  `json:"self_url,omitempty"`
-	OperatorURL string  `json:"operator_url,omitempty"`
+	Outcome     Outcome         `json:"outcome"`
+	Verified    bool            `json:"verified"`
+	Message     string          `json:"message,omitempty"`
+	RetCode     json.RawMessage `json:"ret_code,omitempty"`
+	Status      *Status         `json:"status,omitempty"`
+	SelfURL     string          `json:"self_url,omitempty"`
+	OperatorURL string          `json:"operator_url,omitempty"`
 }
 
 func (p *Portal) Status(ctx context.Context) (*Status, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if err := p.ensure(ctx); err != nil {
-		return nil, err
-	}
 	return p.status(ctx)
 }
 
 func (p *Portal) status(ctx context.Context) (*Status, error) {
-	raw, err := p.call(ctx, "online_list", url.Values{"user_account": {""}, "user_password": {""}, "wlan_user_mac": {strings.ToUpper(p.mac)}, "wlan_user_ip": {base64Text(p.ip)}, "wlan_user_ipv6": {base64Text(p.ipv6)}})
-	if err != nil {
-		return nil, err
-	}
-	obj, err := decodeObject(raw)
+	obj, err := p.call(ctx, "online_list", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +90,7 @@ func (p *Portal) status(ctx context.Context) (*Status, error) {
 		if net.ParseIP(address) == nil {
 			return nil, fmt.Errorf("portal session has an invalid terminal IP")
 		}
-		if address != p.ip {
+		if address != p.source {
 			continue
 		}
 		if state.Terminal != nil {
@@ -119,6 +111,8 @@ func (p *Portal) status(ctx context.Context) (*Status, error) {
 	return state, nil
 }
 
+// Login submits one native password authentication without a status preflight.
+// A server acceptance is verified against the requested terminal identity.
 func (p *Portal) Login(ctx context.Context, account, password, operator string) (*OperationResult, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -133,48 +127,30 @@ func (p *Portal) Login(ctx context.Context, account, password, operator string) 
 	if strings.ContainsAny(account, ",@") {
 		return nil, fmt.Errorf("portal account must not contain a terminal prefix or operator suffix")
 	}
-	if err := p.ensure(ctx); err != nil {
-		return nil, err
-	}
-	before, err := p.status(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if before.Online {
-		return &OperationResult{Outcome: NotSubmitted, Status: before}, fmt.Errorf("terminal is already online; no password authentication was submitted")
-	}
 	macType := "0"
-	if p.terminal == 2 || (p.terminal >= 3 && scalar(p.settings["ipad_terminal_identity"]) == "1") {
+	if p.terminal == 2 {
 		macType = "1"
 	}
 	account += suffix
-	wireAccount := account
-	if scalar(p.settings["account_prefix"]) == "1" {
-		wireAccount = "," + macType + "," + wireAccount
-	}
-	encoded := scalar(p.settings["no_filter_accandpwd"])
-	if encoded == "1" {
-		wireAccount, password = base64Text(wireAccount), base64Text(password)
-	}
-	data := p.terminalFields()
-	for key, value := range map[string]string{"login_method": "1", "is_base64encode": encoded, "user_account": wireAccount, "user_password": password, "authex_enable": "", "terminal_type": strconv.Itoa(p.terminal), "lang": "zh-cn", "user_agent": network.UserAgent, "enable_r3": "0", "mac_type": macType, "rcn": scalar(p.settings["rcn"]), "operate": "portal_login", "business_type": "1"} {
-		data.Set(key, value)
+	data := url.Values{
+		"enable_r3": {"0"}, "login_method": {"1"},
+		"terminal_type": {strconv.Itoa(p.terminal)},
+		"user_account":  {"," + macType + "," + account}, "user_password": {password},
+		"wlan_user_ip": {p.source}, "wlan_user_ipv6": {""},
 	}
 	raw, err := p.call(ctx, "login", data)
 	if err != nil {
-		return p.unknown(ctx, "login", err)
+		return unknown("login", err)
 	}
 	result, err := operationResult(raw, "login")
 	if err != nil {
 		return result, err
 	}
-	result.Status, err = p.waitState(ctx, true)
+	result.Status, err = p.waitState(ctx, func(state *Status) bool {
+		return state.Online && (state.Terminal.Account == account || state.Terminal.Account == ","+macType+","+account)
+	})
 	if err != nil {
 		return result, fmt.Errorf("portal accepted login; online verification failed: %w", err)
-	}
-	uid := result.Status.Terminal.Account
-	if uid != account && uid != ","+macType+","+account {
-		return result, fmt.Errorf("portal online account does not match the submitted account")
 	}
 	result.Verified = true
 	return result, nil
@@ -183,9 +159,6 @@ func (p *Portal) Login(ctx context.Context, account, password, operator string) 
 func (p *Portal) Logout(ctx context.Context) (*OperationResult, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if err := p.ensure(ctx); err != nil {
-		return nil, err
-	}
 	before, err := p.status(ctx)
 	if err != nil {
 		return nil, err
@@ -193,19 +166,22 @@ func (p *Portal) Logout(ctx context.Context) (*OperationResult, error) {
 	if !before.Online {
 		return &OperationResult{Outcome: NotSubmitted, Status: before}, fmt.Errorf("terminal is already offline; no logout was submitted")
 	}
+	if err := p.ensure(ctx); err != nil {
+		return nil, err
+	}
 	data := p.terminalFields()
 	for key, value := range map[string]string{"login_method": "1", "user_account": "drcom", "user_password": "123", "ac_logout": scalar(p.settings["ac_logout"]), "register_mode": scalar(p.settings["register_mode"])} {
 		data.Set(key, value)
 	}
 	raw, err := p.call(ctx, "logout", data)
 	if err != nil {
-		return p.unknown(ctx, "logout", err)
+		return unknown("logout", err)
 	}
 	result, err := operationResult(raw, "logout")
 	if err != nil {
 		return result, err
 	}
-	result.Status, err = p.waitState(ctx, false)
+	result.Status, err = p.waitState(ctx, func(state *Status) bool { return !state.Online })
 	if err != nil {
 		return result, fmt.Errorf("portal accepted logout; offline verification failed: %w", err)
 	}
@@ -215,20 +191,21 @@ func (p *Portal) Logout(ctx context.Context) (*OperationResult, error) {
 
 // Radius accounting propagates after a successful reply. Observe that change;
 // the credential submission itself is never repeated.
-func (p *Portal) waitState(ctx context.Context, online bool) (*Status, error) {
+func (p *Portal) waitState(ctx context.Context, matches func(*Status) bool) (*Status, error) {
 	ctx, cancel := context.WithTimeout(ctx, p.stateTimeout)
 	defer cancel()
 	var last *Status
 	for {
+		started := time.Now()
 		state, err := p.status(ctx)
 		if err != nil {
 			return last, err
 		}
 		last = state
-		if state.Online == online {
+		if matches(state) {
 			return state, nil
 		}
-		timer := time.NewTimer(500 * time.Millisecond)
+		timer := time.NewTimer(max(0, 50*time.Millisecond-time.Since(started)))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -238,23 +215,16 @@ func (p *Portal) waitState(ctx context.Context, online bool) (*Status, error) {
 	}
 }
 
-// A lost response remains unknown even if a single subsequent observation is
-// online. That observation cannot prove the submitted password was accepted.
-func (p *Portal) unknown(ctx context.Context, operation string, cause error) (*OperationResult, error) {
-	status, err := p.status(ctx)
-	result := &OperationResult{Outcome: Unknown, Status: status}
-	if err != nil {
-		return result, fmt.Errorf("portal %s outcome unknown: %w; state observation failed: %v", operation, cause, err)
-	}
-	return result, fmt.Errorf("portal %s outcome unknown: %w; terminal state was observed without resubmission", operation, cause)
+// A state query cannot prove acceptance of an unreadable submission response.
+// The caller may explicitly observe Status without changing this outcome.
+func unknown(operation string, cause error) (*OperationResult, error) {
+	return &OperationResult{Outcome: Unknown}, fmt.Errorf("portal %s outcome unknown: %w", operation, cause)
 }
 
-func operationResult(raw json.RawMessage, operation string) (*OperationResult, error) {
-	obj, err := decodeObject(raw)
-	if err != nil {
-		return &OperationResult{Outcome: Unknown}, err
-	}
-	result := &OperationResult{Outcome: Unknown, Message: scalar(obj["msg"]), SelfURL: scalar(obj["self_auth_url"]), OperatorURL: scalar(obj["self_auth_url2"])}
+func operationResult(obj map[string]json.RawMessage, operation string) (*OperationResult, error) {
+	result := &OperationResult{Outcome: Unknown, Message: scalar(obj["msg"]),
+		RetCode: append(json.RawMessage(nil), obj["ret_code"]...),
+		SelfURL: scalar(obj["self_auth_url"]), OperatorURL: scalar(obj["self_auth_url2"])}
 	switch scalar(obj["result"]) {
 	case "1", "ok":
 		result.Outcome = Accepted
@@ -278,17 +248,10 @@ type ErrorInfo struct {
 func (p *Portal) ErrorInfo(ctx context.Context) (*ErrorInfo, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if err := p.ensure(ctx); err != nil {
-		return nil, err
-	}
-	raw, err := p.call(ctx, "err_code", url.Values{"wlan_user_ip": {p.ip}, "wlan_user_ipv6": {p.ipv6}, "wlan_user_mac": {p.mac}})
+	obj, err := p.call(ctx, "err_code", url.Values{"wlan_user_ip": {p.source}, "wlan_user_ipv6": {""}, "wlan_user_mac": {p.mac}})
 	if err != nil {
 		return nil, err
 	}
-	result, resultErr := operationResult(raw, "error information")
-	obj, err := decodeObject(raw)
-	if err != nil {
-		return nil, err
-	}
+	result, resultErr := operationResult(obj, "error information")
 	return &ErrorInfo{Outcome: result.Outcome, Message: result.Message, Code: scalar(obj["error_code"]), PromptChinese: scalar(obj["error_prompt_zh"]), PromptEnglish: scalar(obj["error_prompt_en"])}, resultErr
 }

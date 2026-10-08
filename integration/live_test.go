@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hicancan/njupt-net/v3/network"
-	"github.com/hicancan/njupt-net/v3/p"
-	"github.com/hicancan/njupt-net/v3/zfw"
+	"github.com/hicancan/njupt-net/v4/network"
+	"github.com/hicancan/njupt-net/v4/p"
+	"github.com/hicancan/njupt-net/v4/zfw"
 )
 
 // Live tests are explicit compositions of the public core API. Normal tests

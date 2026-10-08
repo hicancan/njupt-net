@@ -204,25 +204,24 @@ func (b *operationBillWire) UnmarshalJSON(data []byte) error {
 	return decodeColumns(data, &b.Time, &b.Description, &b.Terminal, &b.ServerField3, &b.Remark)
 }
 
-// Validate checks filters without contacting the school. Available monthly
-// years are additionally checked against the actual page during the query.
+// Validate checks filters without contacting the school.
 func (q BillQuery) Validate() error {
 	_, err := normalizeBill(q, time.Now())
 	return err
 }
 
 type billTable struct {
-	page, query, export, id string
+	kind, query, export string
 }
 
 func billTableFor(kind string) (billTable, error) {
 	switch kind {
 	case "online":
-		return billTable{"/Self/bill/userOnlineLog", "/Self/bill/getUserOnlineLog", "/Self/bill/exportUserOnlineLog", "userOnlineList"}, nil
+		return billTable{kind, "/Self/bill/getUserOnlineLog", "/Self/bill/exportUserOnlineLog"}, nil
 	case "monthly":
-		return billTable{"/Self/bill/monthPay", "/Self/bill/getMonthPay", "/Self/bill/exportMonthPay", "monthPay"}, nil
+		return billTable{kind, "/Self/bill/getMonthPay", "/Self/bill/exportMonthPay"}, nil
 	case "operations":
-		return billTable{"/Self/bill/operatorLog", "/Self/bill/getOperatorLog", "/Self/bill/exportOperatorLog", "operatorLog"}, nil
+		return billTable{kind, "/Self/bill/getOperatorLog", "/Self/bill/exportOperatorLog"}, nil
 	default:
 		return billTable{}, fmt.Errorf("bill kind must be online, monthly or operations")
 	}
@@ -253,8 +252,8 @@ func (s *Session) queryBill(ctx context.Context, table billTable, params url.Val
 		return nil, fmt.Errorf("%s: expected bill table rows array", table.query)
 	}
 	result := &BillPage{}
-	switch table.id {
-	case "userOnlineList":
+	switch table.kind {
+	case "online":
 		result.Kind = "online"
 		result.Online = &OnlineBills{Total: *wire.Total}
 		var rows []onlineBillWire
@@ -276,10 +275,7 @@ func (s *Session) queryBill(ctx context.Context, table billTable, params url.Val
 		if result.Online.Summary.Count == nil {
 			return nil, fmt.Errorf("online bill summary is missing its count")
 		}
-		if len(result.Online.Rows) > result.Online.Total {
-			return nil, fmt.Errorf("online bill rows exceed their total")
-		}
-	case "monthPay":
+	case "monthly":
 		result.Kind = "monthly"
 		result.Monthly = &MonthlyBills{Total: *wire.Total}
 		var rows []monthlyBillWire
@@ -302,10 +298,7 @@ func (s *Session) queryBill(ctx context.Context, table billTable, params url.Val
 		if summary.UseTime == "" || summary.BaseMoney == "" || summary.Flow == "" || summary.UsedMoney == "" {
 			return nil, fmt.Errorf("monthly bill summary is missing its amounts")
 		}
-		if len(result.Monthly.Rows) > result.Monthly.Total {
-			return nil, fmt.Errorf("monthly bill rows exceed their total")
-		}
-	case "operatorLog":
+	case "operations":
 		result.Kind = "operations"
 		result.Operations = &OperationBills{Total: *wire.Total}
 		var rows []operationBillWire
@@ -315,9 +308,6 @@ func (s *Session) queryBill(ctx context.Context, table billTable, params url.Val
 		result.Operations.Rows = make([]OperationBill, len(rows))
 		for index, row := range rows {
 			result.Operations.Rows[index] = OperationBill(row)
-		}
-		if len(result.Operations.Rows) > result.Operations.Total {
-			return nil, fmt.Errorf("operation bill rows exceed their total")
 		}
 	}
 	return result, nil
@@ -385,25 +375,25 @@ func (s *Session) prepareBill(ctx context.Context, q BillQuery) (billTable, url.
 	if err != nil {
 		return table, nil, err
 	}
-	page, err := s.page(ctx, table.page)
-	if err != nil {
-		return table, nil, err
-	}
-	if find(page, func(n *html.Node) bool {
-		return n.Type == html.ElementNode && n.Data == "table" && attr(n, "id") == table.id
-	}) == nil {
-		return table, nil, fmt.Errorf("%s: expected bill table is absent", table.page)
+	if s.identity == "" {
+		return table, nil, ErrSessionExpired
 	}
 	params := url.Values{
 		"pageNumber": {strconv.Itoa(q.Page)}, "pageSize": {strconv.Itoa(q.Size)},
 		"searchText": {""}, "sortName": {q.Sort}, "sortOrder": {q.Order},
 	}
 	if q.Kind == "monthly" {
-		year, err := billYear(page, q.Year)
-		if err != nil {
-			return table, nil, err
+		if q.Year == 0 {
+			page, err := s.page(ctx, "/Self/bill/monthPay")
+			if err != nil {
+				return table, nil, err
+			}
+			q.Year, err = billYear(page)
+			if err != nil {
+				return table, nil, err
+			}
 		}
-		params.Set("year", strconv.Itoa(year))
+		params.Set("year", strconv.Itoa(q.Year))
 	} else {
 		params.Set("startTime", q.Start)
 		params.Set("endTime", q.End)
@@ -485,15 +475,13 @@ func normalizeBill(q BillQuery, now time.Time) (BillQuery, error) {
 }
 
 // The default year is the selected option (or first option, as in the browser).
-// Explicit years must also be present in the currently served year selector.
-func billYear(page *html.Node, requested int) (int, error) {
+func billYear(page *html.Node) (int, error) {
 	selectNode := find(page, func(n *html.Node) bool {
 		return n.Type == html.ElementNode && n.Data == "select" && attr(n, "id") == "year"
 	})
 	if selectNode == nil {
 		return 0, fmt.Errorf("monthly bill year selector is absent")
 	}
-	available := make(map[int]bool)
 	defaultValue := ""
 	first := true
 	walk(selectNode, func(n *html.Node) {
@@ -508,17 +496,10 @@ func billYear(page *html.Node, requested int) (int, error) {
 			defaultValue = value
 		}
 		first = false
-		year, err := strconv.Atoi(value)
-		if err != nil || len(value) != 4 || year < 1 {
-			return
-		}
-		available[year] = true
 	})
-	if requested == 0 {
-		requested, _ = strconv.Atoi(defaultValue)
+	year, err := strconv.Atoi(defaultValue)
+	if err != nil || len(defaultValue) != 4 || year < 1 {
+		return 0, fmt.Errorf("monthly bill default year is invalid")
 	}
-	if !available[requested] {
-		return 0, fmt.Errorf("monthly bill year is not offered by the current page")
-	}
-	return requested, nil
+	return year, nil
 }

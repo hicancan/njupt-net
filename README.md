@@ -7,14 +7,14 @@
 - `network`：网卡枚举、源地址选择与外网通达性检测。
 - `research`：独立 Python 协议研究、公开样本与离线实验。
 
-上网认证使用 `https://p.njupt.edu.cn:804/eportal/portal/`，账号自助服务使用 `http://zfw.njupt.edu.cn:8080/Self/`。每项命令的请求、参数与结果见 [p](docs/p.md) 和 [zfw](docs/zfw.md)。
+上网认证提供 801–804 四个入口，CLI 默认使用 `https://p.njupt.edu.cn:804/eportal/portal/`，通过 `--port` 选择端口。账号自助服务使用 `http://zfw.njupt.edu.cn:8080/Self/`。每项命令的请求、参数与结果见 [p](docs/p.md) 和 [zfw](docs/zfw.md)。
 
 ## 安装
 
 使用 Go 1.26 或更新版本：
 
 ```text
-go install github.com/hicancan/njupt-net/v3/cmd/njupt-net@v3.2.3
+go install github.com/hicancan/njupt-net/v4/cmd/njupt-net@v4.0.0
 ```
 
 也可以从源码构建：
@@ -23,9 +23,9 @@ go install github.com/hicancan/njupt-net/v3/cmd/njupt-net@v3.2.3
 go build -trimpath -o njupt-net ./cmd/njupt-net
 ```
 
-Windows 构建输出使用 `njupt-net.exe`。预编译归档面向 Windows、Linux、macOS 的 amd64 与 arm64；下载入口为 [Releases](https://github.com/hicancan/njupt-net/releases)。
+Windows 构建输出使用 `njupt-net.exe`。预编译归档面向 Windows、Linux、macOS 的 amd64 与 arm64；Linux 要求内核 5.7 或更新版本。下载入口为 [Releases](https://github.com/hicancan/njupt-net/releases)。
 
-Windows 归档另附 [PowerShell 登录脚本](examples/windows/README.md)：选择目标校园账号，按当前绑定状态完成宽带迁移与登录。脚本使用 PowerShell 7，通过 CLI 完成操作。
+Windows 归档另附 [PowerShell 登录脚本](examples/windows/README.md)：选择目标校园账号，按当前绑定状态完成宽带迁移与登录。脚本使用 PowerShell 7，通过一个 CLI 会话完成操作。
 
 ## 快速使用
 
@@ -66,15 +66,19 @@ njupt-net --interface "Ethernet" --account default zfw export --kind monthly --y
 
 全局参数放在命令组之前，业务参数放在子命令之后。配置默认从当前目录的 `config.json` 读取，可用 `--config PATH` 指定；私有管理命令和门户认证使用 `--account ALIAS` 选择凭据。
 
+脚本和程序可使用 `session` 连续发送命令，复用门户实例与各账号的管理会话。标准输入、输出均为每行一个 JSON，使用方法见 [连续命令会话](docs/architecture.md#连续命令会话)。
+
 已在线终端还可通过门户签名链接进入自助服务。全局 `--self-url-file PATH` 读取仅含一行完整 URL 的文件，`--account` 选择期望账号；命令使用该链接登录并核对身份，登录失败时返回错误。操作示例见 [管理会话](docs/zfw.md#管理会话)。
 
 ## 网络行为
 
-校园请求绑定选定源 IPv4，p 与 zfw 按[当前部署地址](docs/deployment.md)直连校园服务。URL 保留服务域名，HTTPS 按域名验证证书；校园认证和自助服务访问使用协议包内的地址映射。所有连接设置仅作用于当前进程。
+内核按选定源 IPv4 找到唯一启用网卡，TCP 同时绑定源地址和该网卡。p 与 zfw 按[当前部署地址](docs/deployment.md)直拨校园服务 IP，URL 与 HTTP Host 保留服务域名，HTTPS 使用同一域名发送 SNI 并验证证书。所有连接设置仅作用于当前进程。
 
-`probe` 使用系统 DNS 解析外部域名，TCP 连接绑定同一源 IPv4。`p status` 表示门户在线状态，`probe` 单独观测外网响应。Windows 登录脚本以门户身份与宽带绑定确认作为成功条件，公网探测结果另行报告。
+只读页面和查询复用 HTTP 连接；认证及修改请求使用新连接，每次修改调用提交一次业务请求。需要导航到结果页的操作，由业务接口明确声明允许读取的目标。
 
-双网环境中，可选择校园接口执行业务，让另一条独立网络承担其他应用流量。绑定源地址仍受操作系统路由、TUN 策略和校园网络可达性约束；系统 DNS 的查询路径由操作系统管理。
+`probe` 使用系统 DNS 解析外部域名，TCP 连接绑定同一源 IPv4 和网卡。`p status` 表示门户在线状态，`probe` 单独观测外网响应。Windows 登录脚本默认选择 801，以门户身份与宽带绑定确认作为成功条件；指定 `-Probe` 时另行报告公网探测结果。
+
+双网环境中，校园业务的 TCP 连接固定从所选校园网卡发出，其他应用按各自代理和系统路由连接。校园服务使用固定 IP；普通域名与公网探测的 DNS 查询仍走操作系统的解析路径。
 
 ## 命令与结果
 
@@ -83,21 +87,21 @@ njupt-net p --help
 njupt-net zfw --help
 ```
 
-普通输出为 JSON：
+单次命令输出为 JSON：
 
 ```json
 {"command":"p status","data":{"source":"192.0.2.10","online":false,"terminal":null}}
 ```
 
-错误写入标准错误，结构为 `{command,data,error:{message}}`，保留已经确认的业务结果。退出码：`0` 成功、`1` 操作失败、`2` 参数错误。帮助为文本。输出文件使用新路径创建，路径已存在时返回错误。
+单次命令的错误写入标准错误，结构为 `{command,data,error:{message}}`，保留已经确认的业务结果。退出码：`0` 成功、`1` 操作失败、`2` 参数错误。帮助为文本。输出文件使用新路径创建，路径已存在时返回错误。
 
-私有 zfw 命令依次登录、执行业务、退出管理会话。上网终端通过 `p logout` 或 `zfw offline` 下线。修改请求只提交一次；`outcome` 表达服务器处理结果，`verified` 表达最终状态是否确认。
+单次私有 zfw 命令依次登录、执行业务、退出管理会话；`session` 按账号分别保留会话，在结束时统一退出。上网终端通过 `p logout` 或 `zfw offline` 下线。每次内核修改调用提交一次请求；`outcome` 表达服务器处理结果，`verified` 表达最终状态是否确认。
 
 ## 当前服务行为
 
-门户普通登录使用账号、密码与运营商选择，电脑、手机和平板通过 `--terminal` 选择。当前 PC 有线登录、门户签名登录、账号与账单读取、指定连接下线后重新认证均已有校园网实测结果。移动宽带从一个校园账号解绑、绑定到另一个校园账号并登录上网的流程也已实测通过。
+门户普通登录使用账号、密码与运营商选择，电脑、手机和平板通过 `--terminal` 选择。登录直接提交一次原生认证，服务器接受后查询选定源 IPv4 的目标在线身份；拒绝和未知结果按本次响应返回。运营商关系通过 zfw 绑定与解绑，Windows 登录脚本组合这些原子操作完成目标账号登录。
 
-当前门户注销返回拒绝，MAC 列表接口返回空正文，充值页面显示服务菜单。对应命令返回具体服务端结果或协议错误。各接口的当前行为与待验证项列于协议文档。
+MAC 绑定列表已读取到真实设备记录。当前门户注销返回拒绝，充值页面显示服务菜单；命令按实际响应返回处理结果与可用状态。各接口的行为列于协议文档。
 
 ## 文档与开发
 
@@ -108,5 +112,6 @@ njupt-net zfw --help
 - [开发、测试与发布](docs/development.md)
 - [Windows 账号登录](examples/windows/README.md)
 - [Python 协议研究](research/README.md)
+- [原子动作与请求边界](research/requests.md)
 
 许可证：[MIT](LICENSE)。

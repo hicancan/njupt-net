@@ -70,7 +70,7 @@ function New-Case([string] $Plan = 'migrate_online', [string] $Provider = 'cmcc'
         broadband_account = @{ operator = $Provider; account = 'broadband-fixture'; password = $secrets[2] }
     }
     $state = @{
-        scenario = $Scenario; fail_at = 0; failure_mode = ''; calls = @(); writes = @{}; reads = @{}; offline_ids = @(); residual = @{}
+        scenario = $Scenario; fail_at = 0; failure_mode = ''; calls = @(); writes = @{}; reads = @{}; offline_ids = @(); residual = @{}; session_starts = 0; session_closes = 0
         online = $true; online_account = "old-campus@$Provider"; provider = $Provider
         bindings = @{
             old = @{ $Provider = @{ account = 'broadband-fixture'; password_set = $true }; $other = @{ account = 'old-other-provider'; password_set = $true } }
@@ -116,7 +116,9 @@ function Invoke-Login([hashtable] $Case, [string[]] $Selection = @('-Interface',
     $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot '../login.ps1'))
     $arguments += $Selection
     if (-not $UseDefaultConfig) { $arguments += @('-Config', ($Case.ConfigArgument ?? $Case.ConfigPath)) }
-    $arguments += @('-Executable', ($Case.Executable ?? $executable), '-TimeoutSeconds', '1', '-Account', ($Case.Account ?? 'new'), '-BindingWaitSeconds', [string]($Case.BindingWaitSeconds ?? 0))
+    $arguments += @('-Executable', ($Case.Executable ?? $executable), '-TimeoutSeconds', '1', '-Account', ($Case.Account ?? 'new'), '-BindingTimeoutSeconds', [string]($Case.BindingTimeoutSeconds ?? 0))
+    if ($Case.ContainsKey('PortalPort')) { $arguments += @('-PortalPort', [string]$Case.PortalPort) }
+    if ($Case.Probe ?? $true) { $arguments += '-Probe' }
     $environment = @{ NJUPT_NET_FAKE_STATE = $Case.StatePath }
     if ($Case.Environment) { foreach ($name in $Case.Environment.Keys) { $environment[$name] = $Case.Environment[$name] } }
     $workingDirectory = $Case.Directory
@@ -124,7 +126,11 @@ function Invoke-Login([hashtable] $Case, [string[]] $Selection = @('-Interface',
         $wrapperPath = Join-Path $Case.Directory 'set location.ps1'
         $argumentPath = Join-Path $Case.Directory 'workflow arguments.json'
         $workflowParameters = @{}
-        for ($index = 5; $index -lt $arguments.Count; $index += 2) { $workflowParameters[$arguments[$index].TrimStart('-')] = $arguments[$index + 1] }
+        for ($index = 5; $index -lt $arguments.Count; $index++) {
+            $parameter = $arguments[$index].TrimStart('-')
+            if ($parameter -eq 'Probe') { $workflowParameters[$parameter] = $true }
+            else { $index++; $workflowParameters[$parameter] = $arguments[$index] }
+        }
         [IO.File]::WriteAllText($argumentPath, (ConvertTo-Json -InputObject $workflowParameters -Depth 5), [Text.UTF8Encoding]::new($false))
         [IO.File]::WriteAllText($wrapperPath, @'
 #requires -Version 7.0
@@ -163,12 +169,31 @@ exit $LASTEXITCODE
         Assert-True ($process.ExitCode -eq 1 -and [string]::IsNullOrWhiteSpace($process.Stdout) -and $envelope.error.message) 'Login omitted its JSON error or mixed output streams.'
     }
     foreach ($call in $observed.calls) {
+        $portIndex = [Array]::IndexOf([string[]] $call.args, '--port')
+        if ($call.command -like 'p *') {
+            Assert-True (@($call.args | Where-Object { $_ -ceq '--port' }).Count -eq 1 -and $portIndex -ge 0 -and $call.args[$portIndex + 1] -eq [string]($Case.PortalPort ?? $defaultPortalPort)) 'Login did not pass the selected portal port exactly once to each p command.'
+        } else {
+            Assert-True ($portIndex -lt 0) 'Login passed the portal port to a non-portal command.'
+        }
         if ($call.command -eq 'interfaces') { continue }
         $sourceIndex = [Array]::IndexOf([string[]] $call.args, '--source')
         Assert-True ($sourceIndex -ge 0 -and $call.args[$sourceIndex + 1] -eq '10.20.30.40') 'Login did not pin all network calls to the selected source.'
         Assert-True (-not ($call.args -contains '--interface')) 'Login selected an interface again after source resolution.'
     }
-    foreach ($group in @($observed.calls | Where-Object write | Group-Object write)) { Assert-True ($group.Count -eq 1) 'Login repeated a mutation submission.' }
+    foreach ($group in @($observed.calls | Where-Object write | Group-Object write)) {
+        $activationRetry = $group.Name -eq 'new:login' -and $observed.writes['new:bind'] -gt 0 -and
+            $Case.State.scenario -in @('binding_activation_delayed', 'portal_binding_unsynchronized') -and ($Case.BindingTimeoutSeconds ?? 0) -gt 0
+        Assert-True ($group.Count -eq 1 -or $activationRetry) 'Login repeated a mutation outside a newly assigned binding activation window.'
+    }
+    $startupFailure = $Case.State.scenario -like 'session_start_*'
+    $expectedSessions = $(if ($observed.calls.Count -gt 0 -or $startupFailure) { 1 } else { 0 })
+    $expectedCloses = $(if ($startupFailure) { 0 } else { $expectedSessions })
+    Assert-True ($observed.session_starts -eq $expectedSessions -and $observed.session_closes -eq $expectedCloses) "Login did not use one CLI process from interface selection through closure: starts=$($observed.session_starts), closes=$($observed.session_closes), expected=$expectedSessions/$expectedCloses."
+    if ($expectedSessions -eq 1) {
+        $selectionFlag = $(if ($Selection[0] -eq '-Interface') { '--interface' } else { '--source' })
+        $selectionIndex = [Array]::IndexOf([string[]] $observed.session_args, $selectionFlag)
+        Assert-True ($selectionIndex -ge 0 -and $observed.session_args[$selectionIndex + 1] -ceq $Selection[1]) 'CLI session did not retain the initial interface or source selection.'
+    }
     return @{ Process = $process; Result = $envelope; State = $observed }
 }
 
@@ -177,39 +202,26 @@ function Assert-Writes([hashtable] $Observed, [string[]] $Expected = @()) {
     Assert-True ([string]::Join(',', $actual) -ceq [string]::Join(',', $Expected)) "Mutation sequence differs: expected $([string]::Join(',', $Expected)), got $([string]::Join(',', $actual))."
 }
 
-function Assert-BindingReadbackBeforeLogin([hashtable] $Observed, [hashtable] $Case) {
-    $steps = @($Observed.Result.data.steps)
-    $bindIndex = [Array]::IndexOf([string[]] @($steps | ForEach-Object stage), 'bind')
-    if ($bindIndex -lt 0) { return }
-    $targetIndex = [Array]::IndexOf([string[]] @($steps | ForEach-Object stage), 'bound-target-binding')
-    $loginIndex = [Array]::IndexOf([string[]] @($steps | ForEach-Object stage), 'login')
-    Assert-True ($targetIndex -gt $bindIndex -and $loginIndex -gt $targetIndex) 'Login did not independently read the target binding after submission and before authentication.'
-    $target = $Observed.State.calls[$targetIndex]
-    Assert-True ($target.command -eq 'zfw operator' -and $target.account -eq 'new' -and -not $target.write) 'Target binding confirmation did not use a separate readonly CLI invocation.'
-    if ($Case.Holder) {
-        $holderIndex = [Array]::IndexOf([string[]] @($steps | ForEach-Object stage), 'unbound-holder-binding')
-        Assert-True ($holderIndex -gt $targetIndex -and $loginIndex -gt $holderIndex) 'Login did not independently confirm the previous holder after binding and before authentication.'
-        $holder = $Observed.State.calls[$holderIndex]
-        Assert-True ($holder.command -eq 'zfw operator' -and $holder.account -eq $Case.Holder -and -not $holder.write) 'Previous holder confirmation did not use a separate readonly CLI invocation.'
-    }
-}
-
 function Assert-Success([hashtable] $Observed, [hashtable] $Case, [string] $Name, $ExpectedInternet = $true) {
     Assert-True ($Observed.Process.ExitCode -eq 0) "$Name failed: $($Observed.Process.Stderr)"
     $data = $Observed.Result.data
     Assert-True ($data.stage -eq 'complete' -and $data.account_alias -eq 'new' -and $data.operator -eq $Case.State.provider -and $data.online -eq $true -and $data.internet -eq $ExpectedInternet) "$Name returned incomplete success metadata."
     Assert-True ($data.ContainsKey('internet_error')) "$Name omitted the Internet observation error field."
-    if ($ExpectedInternet -eq $true) { Assert-True ($null -eq $data.internet_error) "$Name reported an Internet error alongside confirmed connectivity." }
+    if (-not ($Case.Probe ?? $true)) { Assert-True ($null -eq $data.internet -and $null -eq $data.internet_error) "$Name reported an external connectivity observation without a probe." }
+    elseif ($ExpectedInternet -eq $true) { Assert-True ($null -eq $data.internet_error) "$Name reported an Internet error alongside confirmed connectivity." }
     else { Assert-True ($data.internet_error -is [string] -and -not [string]::IsNullOrWhiteSpace($data.internet_error)) "$Name lost the Internet observation failure." }
     Assert-True ($data.previous_account_alias -eq $Case.Previous -and $data.binding_from -eq $Case.Holder -and $data.binding_moved -eq [bool]$Case.Holder) "$Name returned an incorrect previous account or binding holder."
-    $bindingSubmitted = @($Observed.State.calls | Where-Object write -eq 'new:bind').Count -gt 0
-    $expectedBindingWait = $(if ($bindingSubmitted) { $Case.BindingWaitSeconds ?? 0 } else { 0 })
-    Assert-True ($data.ContainsKey('binding_wait_seconds') -and $data.binding_wait_seconds -eq $expectedBindingWait) "$Name returned an incorrect binding activation wait."
+    $loginCalls = @($Observed.State.calls | Where-Object command -eq 'p login')
+    Assert-True ($data.ContainsKey('login_attempts') -and $data.login_attempts -eq $loginCalls.Count) "$Name returned an incorrect authentication attempt count."
+    Assert-True ($data.ContainsKey('binding_activation_seconds') -and $data.binding_activation_seconds -ge 0) "$Name omitted binding activation duration."
+    if (@($Observed.State.calls | Where-Object write -eq 'new:bind').Count -eq 0) {
+        Assert-True ($data.binding_activation_seconds -eq 0) "$Name activated an existing binding."
+    }
+    Assert-True (@($Observed.Result.data.steps | Where-Object stage -in @('login-status', 'final-target-binding', 'final-old-binding', 'bound-target-binding', 'unbound-holder-binding')).Count -eq 0) 'Login repeated verification already provided by the core operation result.'
     $other = $(if ($Case.State.provider -eq 'cmcc') { 'njxy' } else { 'cmcc' })
     foreach ($alias in $Case.State.bindings.Keys) {
         Assert-True ($Observed.State.bindings[$alias][$other].account -eq $Case.State.bindings[$alias][$other].account -and $Observed.State.bindings[$alias][$other].password_set -eq $Case.State.bindings[$alias][$other].password_set) 'Login changed an unselected operator binding.'
     }
-    Assert-BindingReadbackBeforeLogin $Observed $Case
     $script:completed.Add($Name)
 }
 
@@ -217,9 +229,34 @@ $workflowTokens = $null
 $workflowErrors = $null
 $workflowAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../login.ps1'), [ref]$workflowTokens, [ref]$workflowErrors)
 Assert-True ($workflowErrors.Count -eq 0) 'Login script could not be parsed.'
-$waitParameter = @($workflowAst.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'BindingWaitSeconds' })
-Assert-True ($waitParameter.Count -eq 1 -and $waitParameter[0].DefaultValue.SafeGetValue() -eq 30) 'Binding activation wait must default to 30 seconds.'
-$completed.Add('binding activation wait defaults to 30 seconds')
+$timeoutParameter = @($workflowAst.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'BindingTimeoutSeconds' })
+Assert-True ($timeoutParameter.Count -eq 1 -and $timeoutParameter[0].DefaultValue.SafeGetValue() -eq 45) 'Binding activation timeout must default to 45 seconds.'
+Assert-True (@($workflowAst.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'BindingWaitSeconds' }).Count -eq 0) 'Login retained its fixed binding wait parameter.'
+$completed.Add('binding activation timeout defaults to 45 seconds without a fixed wait')
+$portParameter = @($workflowAst.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'PortalPort' })
+Assert-True ($portParameter.Count -eq 1) 'Login omitted its portal port parameter.'
+$defaultPortalPort = $portParameter[0].DefaultValue.SafeGetValue()
+Assert-True ($defaultPortalPort -in @(801, 802, 803, 804)) 'Login defaults to an unsupported portal port.'
+$completed.Add('portal default selects a supported endpoint')
+
+foreach ($scenario in @('session_start_error', 'session_start_secret_error', 'session_start_malformed', 'session_start_eof')) {
+    $case = New-Case 'ready_offline' 'cmcc' $scenario
+    $observed = Invoke-Login $case
+    Assert-True ($observed.Process.ExitCode -eq 1 -and $observed.Result.data.stage -eq 'interfaces') "Login ignored $scenario."
+    Assert-True ($observed.State.calls.Count -eq 0) 'Login sent a command after its CLI session failed to start.'
+    Assert-Writes $observed
+    if ($scenario -in @('session_start_error', 'session_start_secret_error')) {
+        Assert-True ($observed.Result.error.message.StartsWith('cannot select the initial campus interface')) 'Login replaced the native session startup error.'
+        Assert-True (-not $observed.Result.error.message.Contains('cleanup')) 'Login added a cleanup error for an already exited session.'
+    }
+    $completed.Add("session initialization handles $scenario")
+}
+
+$case = New-Case 'ready_offline' 'cmcc' 'source_changes_after_session_start'
+$observed = Invoke-Login $case
+Assert-True ($observed.Process.ExitCode -eq 1 -and $observed.Result.data.stage -eq 'status') 'Login accepted a changed source after opening its fixed CLI session.'
+Assert-Writes $observed
+$completed.Add('fixed session source is checked against the interface snapshot before modification')
 
 $baselines = @{}
 foreach ($plan in @('ready_online', 'ready_offline', 'ready_other_online', 'target_wrong_operator', 'unowned_offline', 'unowned_online', 'migrate_online', 'migrate_offline', 'migrate_third_online', 'new_empty_online')) {
@@ -229,13 +266,13 @@ foreach ($plan in @('ready_online', 'ready_offline', 'ready_other_online', 'targ
     $baselines[$plan] = $observed
     $expected = @()
     if ($plan -ne 'ready_online') {
-        if ($case.State.online) { $expected += "$($case.Previous):offline" }
+        if ($case.State.online -and $plan -ne 'new_empty_online') { $expected += "$($case.Previous):offline" }
         if ($case.Holder) { $expected += "$($case.Holder):unbind" }
         if (-not ($plan -like 'ready_*' -or $plan -eq 'target_wrong_operator')) { $expected += 'new:bind' }
-        $expected += 'new:login'
+        if ($plan -ne 'new_empty_online') { $expected += 'new:login' }
     }
     Assert-Writes $observed $expected
-    if ($case.State.online -and $plan -ne 'ready_online') {
+    if ($case.State.online -and $plan -notin @('ready_online', 'new_empty_online')) {
         Assert-True ($observed.State.offline_ids.Count -eq 1 -and $observed.State.offline_ids[0] -eq "self-session-$($case.Previous)") 'Login disconnected the broadband holder or portal ID instead of the actual online Self session.'
     }
     if ($plan -like 'ready_*' -or $plan -eq 'target_wrong_operator') {
@@ -243,21 +280,73 @@ foreach ($plan in @('ready_online', 'ready_offline', 'ready_other_online', 'targ
     }
 }
 
+foreach ($provider in @('cmcc', 'njxy')) {
+    $case = New-Case 'new_empty_online' $provider
+    $observed = Invoke-Login $case
+    Assert-Success $observed $case "$provider target portal session survives a binding transfer"
+    Assert-Writes $observed @('old:unbind', 'new:bind')
+    Assert-True (@($observed.State.calls | Where-Object command -eq 'zfw online').Count -eq 0) 'Binding transfer queried sessions for an already selected target portal identity.'
+    Assert-True ($observed.Result.data.login_attempts -eq 0 -and $observed.Result.data.binding_activation_seconds -eq 0) 'Binding transfer reauthenticated the existing target portal session.'
+    Assert-True (@($observed.Result.data.steps | Where-Object stage -eq 'binding-status').Count -eq 1) 'Binding transfer did not confirm the preserved portal session.'
+}
+
+$case = New-Case 'new_empty_online' 'cmcc' 'binding_disconnects_terminal'
+$observed = Invoke-Login $case
+Assert-Success $observed $case 'target portal is authenticated when binding transfer actually disconnects it'
+Assert-Writes $observed @('old:unbind', 'new:bind', 'new:login')
+
+foreach ($scenario in @('binding_changes_portal_identity', 'binding_changes_portal_mac')) {
+    $case = New-Case 'new_empty_online' 'cmcc' $scenario
+    $observed = Invoke-Login $case
+    Assert-True ($observed.Process.ExitCode -eq 1) "Binding transfer ignored $scenario."
+    Assert-Writes $observed @('old:unbind', 'new:bind')
+    Assert-True (@($observed.State.calls | Where-Object command -in @('zfw online', 'p login', 'probe')).Count -eq 0) 'Binding transfer modified or probed an unexpected terminal identity.'
+    $completed.Add("binding transfer stops after $scenario")
+}
+
+foreach ($plan in @('ready_online', 'ready_offline', 'migrate_online')) {
+    $case = New-Case $plan
+    $case.Probe = $false
+    $observed = Invoke-Login $case
+    Assert-Success $observed $case "$plan completes without an optional Internet probe" $null
+    Assert-True (@($observed.State.calls | Where-Object command -eq 'probe').Count -eq 0 -and @($observed.Result.data.steps | Where-Object stage -eq 'internet').Count -eq 0) 'Login performed an external connectivity probe without -Probe.'
+    Assert-Writes $observed @($baselines[$plan].State.calls | Where-Object write | ForEach-Object write)
+}
+
 $case = New-Case 'migrate_online' 'njxy'
 $observed = Invoke-Login $case @('-Source', '10.20.30.40')
 Assert-Success $observed $case 'configured njxy migration with explicit source'
 Assert-Writes $observed @('old:offline', 'old:unbind', 'new:bind', 'new:login')
 
-$case = New-Case 'unowned_offline'
-$case.BindingWaitSeconds = 1
+foreach ($port in @(801, 802, 803, 804)) {
+    $case = New-Case 'migrate_online'
+    $case.PortalPort = $port
+    $observed = Invoke-Login $case
+    Assert-Success $observed $case "explicit portal port $port migration"
+    Assert-Writes $observed @('old:offline', 'old:unbind', 'new:bind', 'new:login')
+    Assert-True (@($observed.State.calls | Where-Object command -eq 'p status').Count -ge 2 -and @($observed.State.calls | Where-Object command -eq 'p login').Count -eq 1) 'Explicit portal selection did not exercise status and authentication.'
+}
+
+$case = New-Case 'unowned_offline' 'cmcc' 'binding_activation_delayed'
+$case.BindingTimeoutSeconds = 45
+$case.State.login_delay_ms = 350
 $observed = Invoke-Login $case
-Assert-Success $observed $case 'binding activation wait precedes independent readback and single authentication'
-Assert-Writes $observed @('new:bind', 'new:login')
+Assert-Success $observed $case 'binding activation authenticates as soon as the assignment is available'
+$loginCalls = @($observed.State.calls | Where-Object command -eq 'p login')
+Assert-True ($loginCalls.Count -ge 2) 'Login did not observe the pending binding activation.'
+Assert-Writes $observed (@('new:bind') + @('new:login') * $loginCalls.Count)
 $steps = @($observed.Result.data.steps)
 $stages = [string[]] @($steps | ForEach-Object stage)
 $bindCall = $observed.State.calls[[Array]::IndexOf($stages, 'bind')]
-$readbackCall = $observed.State.calls[[Array]::IndexOf($stages, 'bound-target-binding')]
-Assert-True (($readbackCall.at - $bindCall.at) -ge 1000) 'Login read the new binding before its configured activation wait elapsed.'
+Assert-True (($loginCalls[0].at - $bindCall.at) -lt 1000) 'Login waited before its first authentication attempt.'
+for ($index = 1; $index -lt $loginCalls.Count; $index++) {
+    $previous = $loginCalls[$index - 1]
+    Assert-True ($loginCalls[$index].received_ns -ge $previous.returned_ns) 'Login submitted another authentication before the previous response.'
+    Assert-True (($loginCalls[$index].received_ns - $previous.returned_ns) / 1000000 -lt 150) 'Login delayed another authentication after the previous rejection.'
+}
+$firstLoginStep = @($steps | Where-Object command -eq 'p login')[0]
+Assert-True ($firstLoginStep.elapsed_ms -ge 350) 'Authentication timing omitted the server request duration.'
+Assert-True ($observed.Result.data.binding_activation_seconds -lt 10) 'Login waited for the entire activation timeout after authentication was available.'
 
 $case = New-Case 'ready_online'
 $case.State.online_account = ',1,new-campus@cmcc'
@@ -354,24 +443,10 @@ Assert-Writes $observed
 $completed.Add('unowned binding is rechecked before submission')
 
 foreach ($provider in @('cmcc', 'njxy')) {
-    foreach ($scenario in @('bind_success_target_empty', 'bind_success_holder_retained')) {
-        $case = New-Case 'migrate_online' $provider $scenario
-        $observed = Invoke-Login $case
-        Assert-True ($observed.Process.ExitCode -ne 0) "Login accepted $scenario for $provider."
-        Assert-Writes $observed @('old:offline', 'old:unbind', 'new:bind')
-        $stage = $(if ($scenario -eq 'bind_success_target_empty') { 'bound-target-binding' } else { 'unbound-holder-binding' })
-        Assert-True ($observed.Result.data.stage -eq $stage) 'Login did not stop at the independent binding observation that contradicted the bind result.'
-        $bindStep = @($observed.Result.data.steps | Where-Object stage -eq 'bind')
-        Assert-True ($bindStep.Count -eq 1 -and $bindStep[0].outcome -eq 'accepted' -and $bindStep[0].verified -eq $true) 'Independent binding failure lost the accepted bind result.'
-        Assert-True (@($observed.State.calls | Where-Object command -eq 'p login').Count -eq 0) 'Login authenticated before independent binding observations agreed.'
-        $completed.Add("$provider independent binding verification rejects $scenario")
-    }
-
     $case = New-Case 'migrate_online' $provider 'portal_binding_unsynchronized'
     $observed = Invoke-Login $case
-    Assert-True ($observed.Process.ExitCode -ne 0 -and $observed.Result.data.stage -eq 'login') 'Login ignored a portal rejection after successful independent binding observations.'
+    Assert-True ($observed.Process.ExitCode -ne 0 -and $observed.Result.data.stage -eq 'login') 'Login ignored a portal rejection after a verified bind result.'
     Assert-Writes $observed @('old:offline', 'old:unbind', 'new:bind', 'new:login')
-    Assert-BindingReadbackBeforeLogin $observed $case
     Assert-True ($observed.Result.error.message -ceq 'portal rejected login: 未绑定运营商账号,请正确绑定运营商账号再试！') "Login replaced the authentication server rejection: $($observed.Result.error.message)"
     $last = @($observed.Result.data.steps)[-1]
     Assert-True ($last.command -eq 'p login' -and $last.exit_code -eq 1 -and $last.outcome -eq 'rejected' -and $last.verified -eq $false) 'Login lost the rejected authentication result or advanced after it.'
@@ -379,13 +454,61 @@ foreach ($provider in @('cmcc', 'njxy')) {
     $completed.Add("$provider portal binding rejection is preserved without retry")
 }
 
+foreach ($deadline in @(0, 1, 2)) {
+    $case = New-Case 'unowned_offline' 'cmcc' 'portal_binding_unsynchronized'
+    $case.BindingTimeoutSeconds = $deadline
+    $observed = Invoke-Login $case
+    Assert-True ($observed.Process.ExitCode -eq 1) 'Login accepted an assignment that remained unavailable for authentication.'
+    $loginCalls = @($observed.State.calls | Where-Object command -eq 'p login')
+    Assert-True ($loginCalls.Count -ge 1) 'Login omitted the first authentication attempt.'
+    if ($deadline -eq 0) { Assert-True ($loginCalls.Count -eq 1) 'Login retried authentication with a zero activation window.' }
+    else {
+        Assert-True (($loginCalls[-1].received_ns - $loginCalls[0].received_ns) / 1000000 -lt ($deadline * 1000 + 100)) 'Login started another authentication outside its binding activation deadline.'
+    }
+    Assert-Writes $observed (@('new:bind') + @('new:login') * $loginCalls.Count)
+    Assert-True ($observed.Result.data.login_attempts -eq $loginCalls.Count) 'Login lost the authentication attempt count at its activation deadline.'
+    for ($index = 1; $index -lt $loginCalls.Count; $index++) {
+        Assert-True ($loginCalls[$index].received_ns -ge $loginCalls[$index - 1].returned_ns) 'Login started another authentication before the previous request completed.'
+    }
+    Assert-True ($observed.Result.error.message -ceq 'portal rejected login: 未绑定运营商账号,请正确绑定运营商账号再试！') 'Activation timeout replaced the server rejection.'
+    Assert-True ($observed.Result.data.binding_activation_seconds -ge $deadline -and $observed.Result.data.binding_activation_seconds -lt ($deadline + 5)) 'Binding activation duration did not describe the elapsed deadline.'
+    Assert-True (@($observed.State.calls | Where-Object command -eq 'probe').Count -eq 0) 'Login probed after its authentication deadline expired.'
+    $completed.Add("new binding authentication respects the $deadline second activation deadline")
+}
+
+foreach ($scenario in @('login_password_rejected', 'login_binding_message_partial', 'login_binding_unknown', 'login_binding_unverified', 'login_binding_exit2', 'login_network_error')) {
+    $case = New-Case 'unowned_offline' 'cmcc' $scenario
+    $case.BindingTimeoutSeconds = 2
+    $observed = Invoke-Login $case
+    Assert-True ($observed.Process.ExitCode -eq 1 -and $observed.Result.data.login_attempts -eq 1) "Login retried $scenario."
+    Assert-Writes $observed @('new:bind', 'new:login')
+    Assert-True ($observed.Result.data.binding_activation_seconds -lt 1) 'Login delayed a rejection that did not exactly describe pending binding activation.'
+    $completed.Add("binding activation does not retry $scenario")
+}
+
+$case = New-Case 'ready_offline' 'cmcc' 'portal_binding_unsynchronized'
+$case.BindingTimeoutSeconds = 2
+$observed = Invoke-Login $case
+Assert-True ($observed.Process.ExitCode -eq 1 -and $observed.Result.data.login_attempts -eq 1 -and $observed.Result.data.binding_activation_seconds -eq 0) 'Login retried authentication for an existing binding.'
+Assert-Writes $observed @('new:login')
+$completed.Add('existing bindings do not enter the activation retry window')
+
+foreach ($scenario in @('close_error', 'close_wrong_envelope', 'close_eof', 'close_extra_output')) {
+    $case = New-Case 'ready_online' 'cmcc' $scenario
+    $observed = Invoke-Login $case
+    Assert-True ($observed.Process.ExitCode -eq 1 -and $observed.Result.data.online -eq $true -and $observed.Result.data.internet -eq $true) "Login ignored $scenario or lost the completed observations."
+    Assert-Writes $observed
+    Assert-True (@($observed.Result.data.steps | Where-Object command -eq 'close').Count -eq 0) 'Session closure became a business operation.'
+    $completed.Add("CLI session closure reports $scenario")
+}
+
 foreach ($alias in @('new', 'old')) {
     $case = New-Case 'migrate_offline'
     $case.State.residual[$alias] = $true
     $observed = Invoke-Login $case
-    Assert-True ($observed.Process.ExitCode -ne 0) "Login ignored the initial offline $alias Self session."
-    Assert-Writes $observed
-    $completed.Add("initial offline portal verifies $alias Self sessions")
+    Assert-Success $observed $case "offline portal proceeds despite residual $alias Self accounting"
+    Assert-Writes $observed @('old:unbind', 'new:bind', 'new:login')
+    Assert-True (@($observed.State.calls | Where-Object command -eq 'zfw online').Count -eq 0) 'Login used account-level accounting as an offline terminal prerequisite.'
 }
 
 foreach ($plan in @('ready_online', 'ready_offline', 'unowned_offline', 'migrate_online', 'migrate_offline')) {
@@ -450,17 +573,18 @@ Assert-True ($interrupted.State.bindings.old.cmcc.account -eq '' -and $interrupt
 $resume = New-Case 'unowned_offline'
 $resume.State = $interrupted.State
 $resume.State.calls = @(); $resume.State.writes = @{}; $resume.State.reads = @{}; $resume.State.offline_ids = @()
+$resume.State.session_starts = 0; $resume.State.session_closes = 0
 $resume.State.fail_at = 0; $resume.State.failure_mode = ''; $resume.State.portal_reads = 0
 $observed = Invoke-Login $resume
 Assert-Success $observed $resume 'manual invocation recomputes a previously interrupted transfer'
 Assert-Writes $observed @('new:bind', 'new:login')
 
-foreach ($scenario in @('login_wrong_identity', 'login_mac_changes', 'final_target_mismatch', 'final_holder_not_empty')) {
+foreach ($scenario in @('login_wrong_identity', 'login_mac_changes', 'login_missing_status')) {
     $case = New-Case 'migrate_online' 'cmcc' $scenario
     $observed = Invoke-Login $case
     Assert-True ($observed.Process.ExitCode -ne 0) "Login ignored $scenario."
     Assert-Writes $observed @('old:offline', 'old:unbind', 'new:bind', 'new:login')
-    Assert-True (@($observed.State.calls | Where-Object command -eq 'probe').Count -eq 0) 'Login probed before its identity and final binding checks succeeded.'
+    Assert-True (@($observed.State.calls | Where-Object command -eq 'probe').Count -eq 0) 'Login probed before the returned authenticated identity was verified.'
     $completed.Add("final verification rejects $scenario")
 }
 
@@ -475,7 +599,7 @@ foreach ($plan in @('ready_online', 'ready_offline', 'migrate_online')) {
         $calls = @($observed.State.calls)
         Assert-True (@($calls | Where-Object command -eq 'probe').Count -eq 1 -and $calls[-1].command -eq 'probe') 'Login repeated its probe or advanced to a business call after probing.'
         if ($plan -ne 'ready_online') {
-            Assert-True ($calls[-2].command -eq 'zfw operator' -and -not $calls[-2].write) 'Login probed before checking final operator bindings.'
+            Assert-True ($calls[-2].command -eq 'p login') 'Login repeated business calls after its verified authentication result.'
         }
         $probeStep = @($observed.Result.data.steps)[-1]
         $expectedCode = $(if ($scenario -eq 'probe_offline') { 0 } else { 1 })
@@ -547,6 +671,23 @@ try {
         catch [IO.IOException] { $writeBlocked = $true }
         Assert-True $writeBlocked 'Login did not prevent configuration writes while active.'
         $completed.Add('active login protects configuration from writes')
+        $replacementPath = Join-Path $case.Directory 'replacement config.json'
+        [IO.File]::WriteAllText($replacementPath, '{}', [Text.UTF8Encoding]::new($false))
+        $replacementBlocked = $false
+        try { [IO.File]::Move($replacementPath, $case.ConfigPath, $true) }
+        catch [IO.IOException], [UnauthorizedAccessException] { $replacementBlocked = $true }
+        Assert-True $replacementBlocked 'Login did not prevent configuration replacement while active.'
+        $completed.Add('active login protects configuration from replacement')
+        $renameBlocked = $false
+        try { [IO.File]::Move($case.ConfigPath, $case.ConfigPath + '.renamed') }
+        catch [IO.IOException], [UnauthorizedAccessException] { $renameBlocked = $true }
+        Assert-True $renameBlocked 'Login did not prevent configuration rename while active.'
+        $completed.Add('active login protects configuration from rename')
+        $deleteBlocked = $false
+        try { [IO.File]::Delete($case.ConfigPath) }
+        catch [IO.IOException], [UnauthorizedAccessException] { $deleteBlocked = $true }
+        Assert-True $deleteBlocked 'Login did not prevent configuration deletion while active.'
+        $completed.Add('active login protects configuration from deletion')
     }
     $contender = New-Case 'ready_offline'
     $observed = Invoke-Login $contender
@@ -565,6 +706,13 @@ finally {
 }
 Assert-True ($activeCode -eq 0 -and [string]::IsNullOrWhiteSpace($activeError)) "First login failed after release: $activeError"
 foreach ($secret in $secrets) { Assert-True (-not ($activeOutput + $activeError).Contains($secret)) 'Concurrent login output exposed a password.' }
+if ($IsWindows) {
+    $writer = [IO.File]::Open($case.ConfigPath, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+    $writer.Dispose()
+    [IO.File]::Move($case.ConfigPath, $case.ConfigPath + '.released')
+    [IO.File]::Move($case.ConfigPath + '.released', $case.ConfigPath)
+    $completed.Add('completed login releases its configuration file lock')
+}
 $case = New-Case 'ready_offline'
 $observed = Invoke-Login $case
 Assert-Success $observed $case 'completed login releases its source lock'

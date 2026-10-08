@@ -11,10 +11,12 @@ import (
 	"strings"
 )
 
-const UserAgent = "njupt-net/3"
+const UserAgent = "njupt-net/4"
+
+var sessionPathPattern = regexp.MustCompile(`(?i);jsessionid=[^/;?]*`)
 
 func safeEndpointPath(path string) string {
-	return regexp.MustCompile(`(?i);jsessionid=[^/;?]*`).ReplaceAllString(path, ";jsessionid=<session>")
+	return sessionPathPattern.ReplaceAllString(path, ";jsessionid=<session>")
 }
 
 // HTTPStatusError preserves the observed status without including credentials
@@ -29,8 +31,41 @@ func (e *HTTPStatusError) Error() string {
 	return fmt.Sprintf("%s %s: HTTP %d", e.Method, e.Path, e.StatusCode)
 }
 
-// Request executes one HTTP GET or form POST. It never includes a query string or a request body in an error.
+type readRequestKey struct{}
+
+// RedirectError records a rejected destination without putting its query or
+// session-bearing path in the error text.
+type RedirectError struct {
+	destination url.URL
+}
+
+func (e *RedirectError) Error() string { return "HTTP redirect rejected" }
+
+func (e *RedirectError) Destination() *url.URL {
+	u := e.destination
+	return &u
+}
+
+// Read executes an observed read-only GET without following redirects.
+// Link clients may reuse its connection.
+func Read(ctx context.Context, client *http.Client, rawURL string, values url.Values) ([]byte, *url.URL, http.Header, error) {
+	return request(context.WithValue(ctx, readRequestKey{}, true), client, http.MethodGet, rawURL, values, nil)
+}
+
+// Request executes one HTTP GET or form POST over Link's single-use connection
+// transport. It rejects redirects, including POST-to-GET conversions.
 func Request(ctx context.Context, client *http.Client, method, rawURL string, values url.Values) ([]byte, *url.URL, http.Header, error) {
+	return request(context.WithValue(ctx, readRequestKey{}, false), client, method, rawURL, values, nil)
+}
+
+// Navigate submits once over Link's single-use transport, then follows only
+// caller-confirmed read-only GET destinations. The initial entry is never a
+// navigation target, and 307/308 never replay the submission.
+func Navigate(ctx context.Context, client *http.Client, method, rawURL string, values url.Values, readOnly func(*url.URL) bool) ([]byte, *url.URL, http.Header, error) {
+	return request(context.WithValue(ctx, readRequestKey{}, false), client, method, rawURL, values, readOnly)
+}
+
+func request(ctx context.Context, client *http.Client, method, rawURL string, values url.Values, readOnly func(*url.URL) bool) ([]byte, *url.URL, http.Header, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("invalid endpoint URL")
@@ -53,7 +88,25 @@ func Request(ctx context.Context, client *http.Client, method, rawURL string, va
 	if method == http.MethodPost {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
-	resp, err := client.Do(req)
+	// Redirect policy belongs to the operation, not a mutable shared client.
+	// Keep the client's transport, CookieJar, timeout and additional restrictions.
+	operationClient := *client
+	operationClient.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if client.CheckRedirect != nil {
+			if err := client.CheckRedirect(next, via); err != nil {
+				return err
+			}
+		}
+		if err := checkRedirect(next, via); err != nil {
+			return err
+		}
+		if readOnly == nil || next.Method != http.MethodGet || next.URL.Path == u.Path || !readOnly(next.URL) {
+			return &RedirectError{destination: *next.URL}
+		}
+		*next = *next.WithContext(context.WithValue(next.Context(), readRequestKey{}, true))
+		return nil
+	}
+	resp, err := operationClient.Do(req)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("%s %s: %w", method, safeEndpointPath(u.Path), safeClientError(err, resp))
 	}
@@ -86,6 +139,10 @@ func safeClientError(err error, response *http.Response) error {
 	}
 	// Client.Do returns a response together with an error when CheckRedirect
 	// rejects navigation. Its callback may also quote the complete target URL.
+	var redirect *RedirectError
+	if errors.As(err, &redirect) {
+		return redirect
+	}
 	if response != nil {
 		return errors.New("HTTP redirect rejected")
 	}

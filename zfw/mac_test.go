@@ -12,16 +12,50 @@ import (
 
 func TestSelfDeviceEmptyBodyIsAProtocolFailure(t *testing.T) {
 	s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/Self/service/myMac" {
-			fmt.Fprint(w, selfTestPage("", "fixture-account"))
-			return
-		}
 		if r.URL.Query().Get("sortName") != "2" || r.URL.Query().Get("sortOrder") != "DESC" {
 			t.Error("device sort differs from the page")
 		}
 	})
 	if _, err := s.Devices(context.Background(), 1, 10); err == nil || !strings.Contains(err.Error(), "empty JSON") {
 		t.Fatalf("empty body was treated as a valid list: %v", err)
+	}
+}
+
+func TestSelfDevicesReadsObservedStringColumnsWithoutTheHTMLPage(t *testing.T) {
+	for _, online := range []string{"0", "1"} {
+		t.Run(online, func(t *testing.T) {
+			calls := 0
+			s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.URL.Path != "/Self/service/getMacList" || r.URL.Query().Get("pageNumber") != "1" || r.URL.Query().Get("pageSize") != "10" {
+					t.Error("device list requested an unused page or incorrect pagination")
+				}
+				fmt.Fprintf(w, `{"total":1,"rows":[[%q,"112233445566","#PC","2026-10-08 12:34:56","10.0.0.1"]]}`, online)
+			})
+			page, err := s.Devices(context.Background(), 1, 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, _ := strconv.Atoi(online)
+			if calls != 1 || page.Total != 1 || len(page.Rows) != 1 || page.Rows[0].Online != want || page.Rows[0].MAC != "112233445566" ||
+				page.Rows[0].TerminalType == nil || *page.Rows[0].TerminalType != "#PC" || page.Rows[0].LastLoginTime == nil || *page.Rows[0].LastLoginTime != "2026-10-08 12:34:56" ||
+				page.Rows[0].LastIP == nil || *page.Rows[0].LastIP != "10.0.0.1" {
+				t.Fatalf("observed MAC columns were not preserved: page=%+v calls=%d", page, calls)
+			}
+		})
+	}
+}
+
+func TestSelfDevicesRejectsUnobservedOnlineColumnTypesAndValues(t *testing.T) {
+	for _, online := range []string{`0`, `1`, `null`, `true`, `""`, `"2"`, `"01"`, `"true"`} {
+		t.Run(online, func(t *testing.T) {
+			s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprintf(w, `{"total":1,"rows":[[%s,"112233445566","#PC","2026-10-08 12:34:56","10.0.0.1"]]}`, online)
+			})
+			if _, err := s.Devices(context.Background(), 1, 10); err == nil {
+				t.Fatal("MAC online column with the wrong wire contract was accepted")
+			}
+		})
 	}
 }
 
@@ -33,6 +67,7 @@ func TestSelfUnbindUsesTheInlineUnbindToken(t *testing.T) {
 			return
 		}
 		if r.URL.Path == "/Self/service/getMacList" {
+			fmt.Fprint(w, `{"total":1,"rows":[["0","112233445566",null,null,null]]}`)
 			return
 		}
 		calls++
@@ -54,7 +89,7 @@ func TestSelfUnbindDoesNotTreatFailureMessageAsSuccess(t *testing.T) {
 			return
 		}
 		if r.URL.Path == "/Self/service/getMacList" {
-			fmt.Fprint(w, `{"total":1,"rows":[[1,"112233445566","terminal","time","10.0.0.1"]]}`)
+			fmt.Fprint(w, `{"total":1,"rows":[["1","112233445566","terminal","time","10.0.0.1"]]}`)
 			return
 		}
 		fmt.Fprint(w, selfTestPage(`<script>(function(msg) { if(msg != "") { swal({text:msg}); } })('解除绑定失败');</script>`, "fixture-account"))
@@ -62,6 +97,37 @@ func TestSelfUnbindDoesNotTreatFailureMessageAsSuccess(t *testing.T) {
 	result, err := s.Unbind(context.Background(), "112233445566")
 	if err == nil || result.Verified || result.Outcome != Unknown || result.Message != "解除绑定失败" {
 		t.Fatalf("failure message was accepted: %v, %v", result, err)
+	}
+}
+
+func TestMACUnbindNavigatesOnlyToItsReadOnlyResult(t *testing.T) {
+	writes, pages, lists := 0, 0, 0
+	s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/Self/service/myMac":
+			pages++
+			content := `<script>var target = "&ajaxCsrfToken=" + 'unbind-token';</script>`
+			if writes == 1 {
+				content += `<script>var state = "true"; (function(msg) { if(msg != "") { swal({text:msg}); } })('解除成功');</script>`
+			}
+			fmt.Fprint(w, selfTestPage(content, "fixture-account"))
+		case "/Self/service/getMacList":
+			lists++
+			if writes == 0 {
+				fmt.Fprint(w, `{"total":1,"rows":[["0","112233445566",null,null,null]]}`)
+			} else {
+				fmt.Fprint(w, `{"total":0,"rows":[]}`)
+			}
+		case "/Self/service/unbindmac":
+			writes++
+			http.Redirect(w, r, "/Self/service/myMac", http.StatusFound)
+		default:
+			t.Fatal("MAC unbind reached an unrelated endpoint")
+		}
+	})
+	result, err := s.Unbind(context.Background(), "112233445566")
+	if err != nil || writes != 1 || pages != 2 || lists != 2 || result.Outcome != Accepted || !result.Verified {
+		t.Fatalf("redirected unbind result=%+v writes=%d pages=%d lists=%d error=%v", result, writes, pages, lists, err)
 	}
 }
 
@@ -88,7 +154,7 @@ func TestUnbindConfirmsAbsenceAcrossEveryMACPage(t *testing.T) {
 						if (writes == 0 || targetRemains) && number == 101 {
 							mac = "112233445566"
 						}
-						rows = append(rows, []any{0, mac, nil, nil, nil})
+						rows = append(rows, []any{"0", mac, nil, nil, nil})
 					}
 					json.NewEncoder(w).Encode(map[string]any{"total": 101, "rows": rows})
 				default:
@@ -124,14 +190,14 @@ func TestUnbindDoesNotSubmitAnAlreadyAbsentMAC(t *testing.T) {
 	}
 }
 
-func TestUnbindSeparatesAcceptanceFromTheFinalBindingState(t *testing.T) {
+func TestUnbindDoesNotVerifyAnUnacceptedSubmission(t *testing.T) {
 	for _, test := range []struct {
 		name          string
 		beforeUnknown bool
 		state         string
 		outcome       Outcome
 	}{
-		{name: "unknown-before-message-is-not-an-acknowledgement", beforeUnknown: true, outcome: Unknown},
+		{name: "unreadable-before-does-not-submit", beforeUnknown: true, outcome: NotSubmitted},
 		{name: "known-before-message-is-not-an-acknowledgement", outcome: Unknown},
 		{name: "explicit-rejection-survives-final-absence", state: "false", outcome: Rejected},
 	} {
@@ -145,7 +211,7 @@ func TestUnbindSeparatesAcceptanceFromTheFinalBindingState(t *testing.T) {
 					reads++
 					if writes == 0 {
 						if !test.beforeUnknown {
-							fmt.Fprint(w, `{"total":1,"rows":[[1,"112233445566",null,null,null]]}`)
+							fmt.Fprint(w, `{"total":1,"rows":[["1","112233445566",null,null,null]]}`)
 						}
 						return
 					}
@@ -158,7 +224,11 @@ func TestUnbindSeparatesAcceptanceFromTheFinalBindingState(t *testing.T) {
 				}
 			})
 			result, err := s.Unbind(context.Background(), "112233445566")
-			if err == nil || result == nil || result.Outcome != test.outcome || !result.Verified || result.Message != "解除绑定失败" || writes != 1 || reads != 2 {
+			wantWrites, wantMessage := 1, "解除绑定失败"
+			if test.beforeUnknown {
+				wantWrites, wantMessage = 0, ""
+			}
+			if err == nil || result == nil || result.Outcome != test.outcome || result.Verified || result.Message != wantMessage || writes != wantWrites || reads != 1 {
 				t.Fatalf("final absence replaced submission evidence: result=%+v writes=%d reads=%d error=%v", result, writes, reads, err)
 			}
 		})
@@ -179,7 +249,7 @@ func TestUnbindDoesNotTreatAnIncompleteMACPageAsAbsence(t *testing.T) {
 		}
 	})
 	result, err := s.Unbind(context.Background(), "112233445566")
-	if err == nil || result == nil || result.Verified || result.Outcome != Unknown || writes != 1 {
+	if err == nil || result == nil || result.Verified || result.Outcome != NotSubmitted || writes != 0 {
 		t.Fatalf("incomplete list was mistaken for removal: result=%+v writes=%d error=%v", result, writes, err)
 	}
 }

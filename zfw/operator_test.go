@@ -81,6 +81,43 @@ func TestOperatorAcceptanceRequiresIndependentReadback(t *testing.T) {
 	}
 }
 
+func TestOperatorSubmissionNavigatesOnlyToItsReadOnlyResult(t *testing.T) {
+	for _, status := range []int{301, 302, 303} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			posts, reads := 0, 0
+			account, password := "old-account", "old-password"
+			s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/Self/service/bind-operator":
+					posts++
+					if r.Method != http.MethodPost {
+						t.Fatal("binding was replayed as GET")
+					}
+					r.ParseForm()
+					account, password = r.PostForm.Get("FLDEXTRA1"), r.PostForm.Get("FLDEXTRA2")
+					http.Redirect(w, r, "/Self/service/operatorId", status)
+				case "/Self/service/operatorId":
+					reads++
+					if r.Method != http.MethodGet {
+						t.Fatal("result page received another POST")
+					}
+					message, state := "", ""
+					if posts == 1 {
+						message, state = "绑定成功", "true"
+					}
+					fmt.Fprint(w, selfTestOperatorPage(account, password, "mobile-account", "mobile-password", message, state))
+				default:
+					t.Fatal("operator submission reached an unrelated endpoint")
+				}
+			})
+			result, err := s.BindOperator(context.Background(), "njxy", "new-account", "new-password")
+			if err != nil || posts != 1 || reads != 2 || result.Outcome != Accepted || !result.Verified {
+				t.Fatalf("redirected binding result=%+v posts=%d reads=%d error=%v", result, posts, reads, err)
+			}
+		})
+	}
+}
+
 func TestOperatorRejectedResultDoesNotLeakPassword(t *testing.T) {
 	posts := 0
 	s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {

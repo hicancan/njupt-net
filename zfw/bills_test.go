@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/cookiejar"
@@ -55,15 +56,10 @@ func TestPublicJSONUsesBusinessFieldNames(t *testing.T) {
 	})
 	for _, kind := range []string{"online", "monthly", "operations"} {
 		t.Run(kind, func(t *testing.T) {
-			table, _ := billTableFor(kind)
 			s := billTestSelf(t, func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == table.page {
-					fmt.Fprint(w, billTestPage(table.id))
-					return
-				}
 				fmt.Fprint(w, billTestJSON(kind))
 			})
-			page, err := s.Bills(context.Background(), BillQuery{Kind: kind})
+			page, err := s.Bills(context.Background(), BillQuery{Kind: kind, Year: map[string]int{"monthly": 2026}[kind]})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -103,8 +99,8 @@ func billTestJSON(kind string) string {
 	panic("unknown fixture bill kind")
 }
 
-func billTestPage(id string) string {
-	return `<html><script>$.get("/Self/dashboard/refreshaccount", { csrftoken: 'bill-token' });</script><a href="/Self/login/logout">退出</a><table id="` + id + `"></table>` +
+func monthlyYearTestPage() string {
+	return `<html><a href="/Self/login/logout">退出</a>` +
 		`<select id="year"><option value="2024">2024</option><option value="2025" selected>2025</option></select></html>`
 }
 
@@ -150,8 +146,6 @@ func TestBillsTableParameters(t *testing.T) {
 					t.Errorf("method = %s", r.Method)
 				}
 				switch r.URL.Path {
-				case table.page:
-					fmt.Fprint(w, billTestPage(table.id))
 				case table.query:
 					params := r.URL.Query()
 					if params.Has("ajaxCsrfToken") || params.Get("t") == "" {
@@ -187,7 +181,7 @@ func TestBillsTableParameters(t *testing.T) {
 					t.Fatalf("operation bill columns changed: %+v", got.Operations)
 				}
 			}
-			if !reflect.DeepEqual(seen, []string{table.page, table.query}) {
+			if !reflect.DeepEqual(seen, []string{table.query}) {
 				t.Errorf("requests = %v", seen)
 			}
 		})
@@ -210,11 +204,6 @@ func TestExportBillsScopeAndSession(t *testing.T) {
 				cached := false
 				s := billTestSelf(t, func(w http.ResponseWriter, r *http.Request) {
 					seen = append(seen, r.URL.Path)
-					if r.URL.Path == table.page {
-						http.SetCookie(w, &http.Cookie{Name: "bill-session", Value: "same", Path: "/"})
-						fmt.Fprint(w, billTestPage(table.id))
-						return
-					}
 					if cookie, err := r.Cookie("bill-session"); err != nil || cookie.Value != "same" {
 						t.Errorf("management session was not preserved")
 					}
@@ -250,6 +239,7 @@ func TestExportBillsScopeAndSession(t *testing.T) {
 						http.NotFound(w, r)
 					}
 				})
+				s.client.Jar.SetCookies(s.base, []*http.Cookie{{Name: "bill-session", Value: "same", Path: "/"}})
 				got, err := s.ExportBills(context.Background(), q, all)
 				if err != nil {
 					t.Fatal(err)
@@ -257,9 +247,9 @@ func TestExportBillsScopeAndSession(t *testing.T) {
 				if !bytes.Equal(got, workbook) {
 					t.Error("workbook changed")
 				}
-				wantSeen := []string{table.page, table.query, table.export}
+				wantSeen := []string{table.query, table.export}
 				if all {
-					wantSeen = []string{table.page, table.export}
+					wantSeen = []string{table.export}
 				}
 				if !reflect.DeepEqual(seen, wantSeen) {
 					t.Errorf("requests = %v, want %v", seen, wantSeen)
@@ -284,10 +274,6 @@ func TestExportBillsRejectsFakeSuccess(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := billTestSelf(t, func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/Self/bill/userOnlineLog" {
-					fmt.Fprint(w, billTestPage("userOnlineList"))
-					return
-				}
 				w.Header().Set("Content-Disposition", tt.disposition)
 				w.Header().Set("Content-Type", "file;charset=UTF-8")
 				fmt.Fprint(w, tt.body)
@@ -300,14 +286,10 @@ func TestExportBillsRejectsFakeSuccess(t *testing.T) {
 }
 
 func TestBillsRejectUnexpectedTableResponse(t *testing.T) {
-	for _, body := range []string{`{"success":false}`, `{"total":-1,"rows":[]}`, `{"total":1,"rows":{}}`, `{"total":1,"rows":null}`, `{"total":"1","rows":[]}`} {
+	for _, body := range []string{`{"success":false}`, `{"total":-1,"rows":[]}`, `{"total":1,"rows":{}}`, `{"total":1,"rows":null}`, `{"total":"1","rows":[]}`, `<html>unexpected page</html>`} {
 		t.Run(body, func(t *testing.T) {
 			s := billTestSelf(t, func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/Self/bill/userOnlineLog" {
-					fmt.Fprint(w, billTestPage("userOnlineList"))
-				} else {
-					fmt.Fprint(w, body)
-				}
+				fmt.Fprint(w, body)
 			})
 			if _, err := s.Bills(context.Background(), BillQuery{Kind: "online"}); err == nil {
 				t.Fatal("accepted invalid table response")
@@ -347,41 +329,108 @@ func TestNormalizeBillRejectsUnrelatedAndInvalidOptions(t *testing.T) {
 	}
 }
 
-func TestBillsMonthlyYearComesFromPage(t *testing.T) {
-	for _, year := range []int{0, 2024, 2023} {
+func TestBillsMonthlyDefaultYearAndExplicitYears(t *testing.T) {
+	for _, year := range []int{0, 2000, 2024, 2027} {
 		t.Run(fmt.Sprint(year), func(t *testing.T) {
 			var queriedYear string
+			var seen []string
 			s := billTestSelf(t, func(w http.ResponseWriter, r *http.Request) {
+				seen = append(seen, r.URL.Path)
 				if r.URL.Path == "/Self/bill/monthPay" {
-					fmt.Fprint(w, billTestPage("monthPay"))
+					fmt.Fprint(w, monthlyYearTestPage())
 				} else {
 					queriedYear = r.URL.Query().Get("year")
 					fmt.Fprint(w, billTestJSON("monthly"))
 				}
 			})
 			_, err := s.Bills(context.Background(), BillQuery{Kind: "monthly", Year: year})
-			if year == 2023 {
-				if err == nil || queriedYear != "" {
-					t.Error("queried a year not offered by the page")
-				}
-				return
-			}
 			want := "2025"
-			if year == 2024 {
-				want = "2024"
+			wantSeen := []string{"/Self/bill/monthPay", "/Self/bill/getMonthPay"}
+			if year != 0 {
+				want = fmt.Sprint(year)
+				wantSeen = []string{"/Self/bill/getMonthPay"}
 			}
 			if err != nil || queriedYear != want {
 				t.Errorf("year = %s, want %s; error %v", queriedYear, want, err)
+			}
+			if !reflect.DeepEqual(seen, wantSeen) {
+				t.Errorf("requests = %v, want %v", seen, wantSeen)
 			}
 		})
 	}
 }
 
-func TestBillsRejectWrongPage(t *testing.T) {
-	s := billTestSelf(t, func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, strings.ReplaceAll(billTestPage("userOnlineList"), "userOnlineList", "differentTable"))
-	})
-	if _, err := s.Bills(context.Background(), BillQuery{Kind: "online"}); err == nil {
-		t.Fatal("accepted a page without the expected bill table")
+func TestBillsDefaultMonthlyYearRequiresServerSelector(t *testing.T) {
+	for _, page := range []string{
+		strings.ReplaceAll(monthlyYearTestPage(), `id="year"`, `id="differentSelector"`),
+		`<a href="/Self/login/logout">退出</a><select id="year"></select>`,
+		`<a href="/Self/login/logout">退出</a><select id="year"><option value="invalid" selected>2025</option></select>`,
+	} {
+		t.Run(page, func(t *testing.T) {
+			s := billTestSelf(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/Self/bill/monthPay" {
+					t.Error("queried monthly bills without a valid default year")
+				}
+				fmt.Fprint(w, page)
+			})
+			if _, err := s.Bills(context.Background(), BillQuery{Kind: "monthly"}); err == nil {
+				t.Fatal("accepted a page without a valid monthly year selector")
+			}
+		})
+	}
+}
+
+func TestBillsPreserveServerTotalAndRows(t *testing.T) {
+	for _, kind := range []string{"online", "monthly", "operations"} {
+		t.Run(kind, func(t *testing.T) {
+			var wire map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(billTestJSON(kind)), &wire); err != nil {
+				t.Fatal(err)
+			}
+			var rows []json.RawMessage
+			if err := json.Unmarshal(wire["rows"], &rows); err != nil {
+				t.Fatal(err)
+			}
+			wire["rows"], _ = json.Marshal([]json.RawMessage{rows[0], rows[0], rows[0], rows[0], rows[0]})
+			body, _ := json.Marshal(wire)
+			s := billTestSelf(t, func(w http.ResponseWriter, r *http.Request) { w.Write(body) })
+			page, err := s.Bills(context.Background(), BillQuery{Kind: kind, Year: map[string]int{"monthly": 2026}[kind]})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var total, count int
+			switch kind {
+			case "online":
+				total, count = page.Online.Total, len(page.Online.Rows)
+			case "monthly":
+				total, count = page.Monthly.Total, len(page.Monthly.Rows)
+			case "operations":
+				total, count = page.Operations.Total, len(page.Operations.Rows)
+			}
+			if total != 1 || count != 5 {
+				t.Fatalf("server total/rows changed: total=%d rows=%d", total, count)
+			}
+		})
+	}
+}
+
+func TestBillsRequireAuthenticatedSessionBeforeRequests(t *testing.T) {
+	for _, kind := range []string{"online", "monthly", "operations"} {
+		for _, export := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/export=%t", kind, export), func(t *testing.T) {
+				s := billTestSelf(t, func(w http.ResponseWriter, r *http.Request) { t.Error("unauthenticated bill request") })
+				s.identity, s.authenticated = "", false
+				q := BillQuery{Kind: kind, Year: map[string]int{"monthly": 2026}[kind]}
+				var err error
+				if export {
+					_, err = s.ExportBills(context.Background(), q, true)
+				} else {
+					_, err = s.Bills(context.Background(), q)
+				}
+				if !errors.Is(err, ErrSessionExpired) {
+					t.Fatalf("unauthenticated operation error = %v", err)
+				}
+			})
+		}
 	}
 }

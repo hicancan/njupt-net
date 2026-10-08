@@ -213,19 +213,26 @@ func directTestCertificate(t *testing.T, host string) (tls.Certificate, *x509.Ce
 
 func directTestTrust(t *testing.T, client *http.Client, roots *x509.CertPool) {
 	t.Helper()
-	transport, ok := client.Transport.(*http.Transport)
+	transports, ok := client.Transport.(*linkTransport)
 	if !ok {
 		t.Fatalf("unexpected transport type %T", client.Transport)
 	}
-	config := &tls.Config{}
-	if transport.TLSClientConfig != nil {
-		config = transport.TLSClientConfig.Clone()
+	// Test trust belongs to this client. Production site transports keep the
+	// system roots and may be shared by other independent Cookie clients.
+	transports = &linkTransport{single: transports.single.Clone(), read: transports.read.Clone()}
+	client.Transport = transports
+	t.Cleanup(transports.CloseIdleConnections)
+	for _, transport := range []*http.Transport{transports.single, transports.read} {
+		config := &tls.Config{}
+		if transport.TLSClientConfig != nil {
+			config = transport.TLSClientConfig.Clone()
+		}
+		if config.InsecureSkipVerify {
+			t.Fatal("fixed dialing disabled certificate verification")
+		}
+		config.RootCAs = roots
+		transport.TLSClientConfig = config
 	}
-	if config.InsecureSkipVerify {
-		t.Fatal("fixed dialing disabled certificate verification")
-	}
-	config.RootCAs = roots
-	transport.TLSClientConfig = config
 }
 
 func TestClientForPreservesTLSIdentityAndCertificateVerification(t *testing.T) {

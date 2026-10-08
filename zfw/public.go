@@ -10,7 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/hicancan/njupt-net/v3/network"
+	"github.com/hicancan/njupt-net/v4/network"
 	"golang.org/x/net/html"
 )
 
@@ -31,7 +31,7 @@ func (s *Session) PublicPage(ctx context.Context, kind string) (*PublicPage, err
 			return nil, fmt.Errorf("Self help requires an independent CookieJar")
 		}
 		if !s.hasManagementCookie() {
-			if _, _, _, err := s.request(ctx, http.MethodGet, "login", nil); err != nil {
+			if _, _, _, err := s.request(ctx, http.MethodGet, "login/", nil); err != nil {
 				return nil, fmt.Errorf("initialize Self public-page session: %w", err)
 			}
 			if !s.hasManagementCookie() {
@@ -39,7 +39,7 @@ func (s *Session) PublicPage(ctx context.Context, kind string) (*PublicPage, err
 			}
 		}
 	}
-	data, final, _, err := s.request(ctx, http.MethodGet, "unlogin/"+kind, nil)
+	data, final, _, err := s.read(ctx, "unlogin/"+kind, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +65,7 @@ func (s *Session) PublicPage(ctx context.Context, kind string) (*PublicPage, err
 		return nil, fmt.Errorf("Self help iframe does not reference its same-origin helpinfo content")
 	}
 	result.ContentURL, result.Available = publicURL(target), false
-	data, final, _, err = s.request(ctx, http.MethodGet, target.String(), nil)
+	data, final, _, err = s.read(ctx, target.String(), nil)
 	if err != nil {
 		var status *network.HTTPStatusError
 		if errors.As(err, &status) {

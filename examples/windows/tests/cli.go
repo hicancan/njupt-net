@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,6 +12,8 @@ import (
 
 const source = "10.20.30.40"
 const mac = "aabbccddeeff"
+
+var fixtureStartedAt = time.Now()
 
 type binding struct {
 	Account     string `json:"account"`
@@ -22,6 +25,8 @@ type call struct {
 	Account    string   `json:"account"`
 	Executable string   `json:"executable"`
 	At         int64    `json:"at"`
+	ReceivedNS int64    `json:"received_ns"`
+	ReturnedNS int64    `json:"returned_ns"`
 	Write      string   `json:"write,omitempty"`
 }
 type state struct {
@@ -38,6 +43,11 @@ type state struct {
 	Reads         map[string]int                `json:"reads"`
 	OfflineIDs    []string                      `json:"offline_ids"`
 	PortalReads   int                           `json:"portal_reads"`
+	SessionStarts int                           `json:"session_starts"`
+	SessionCloses int                           `json:"session_closes"`
+	SessionArgs   []string                      `json:"session_args"`
+	BoundAt       int64                         `json:"bound_at"`
+	LoginDelayMS  int                           `json:"login_delay_ms"`
 }
 type config struct {
 	Accounts map[string]struct {
@@ -52,10 +62,107 @@ type config struct {
 }
 
 func main() {
+	args := os.Args[1:]
+	if len(args) > 0 && args[len(args)-1] == "session" {
+		os.Exit(runSession(args[:len(args)-1]))
+	}
+	os.Exit(runCommand(args, false))
+}
+
+func sessionState(change func(*state)) state {
+	path := os.Getenv("NJUPT_NET_FAKE_STATE")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		panic(err)
+	}
+	var s state
+	if err := json.Unmarshal(data, &s); err != nil {
+		panic(err)
+	}
+	change(&s)
+	data, err = json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		panic(err)
+	}
+	return s
+}
+
+func runSession(globalArgs []string) int {
+	s := sessionState(func(s *state) {
+		s.SessionStarts++
+		s.SessionArgs = append([]string{}, globalArgs...)
+	})
+	switch s.Scenario {
+	case "session_start_error", "session_start_secret_error":
+		message := "cannot select the initial campus interface"
+		if s.Scenario == "session_start_secret_error" {
+			message += ": BROADBAND_PASSWORD_91f4"
+		}
+		json.NewEncoder(os.Stderr).Encode(map[string]any{"command": "session", "data": nil, "error": map[string]string{"message": message}})
+		return 2
+	case "session_start_malformed":
+		fmt.Fprintln(os.Stderr, "invalid session startup response")
+		return 2
+	case "session_start_eof":
+		return 2
+	}
+	// The native session fixes its source when it opens the selected link.
+	globalArgs = append([]string{}, globalArgs...)
+	for index := 0; index+1 < len(globalArgs); index += 2 {
+		if globalArgs[index] == "--interface" {
+			globalArgs[index], globalArgs[index+1] = "--source", source
+		}
+	}
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		var request struct {
+			Account string   `json:"account"`
+			Args    []string `json:"args"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &request); err != nil {
+			panic(err)
+		}
+		if len(request.Args) == 1 && request.Args[0] == "close" {
+			s := sessionState(func(s *state) { s.SessionCloses++ })
+			envelope := map[string]any{"command": "close", "data": map[string]bool{"closed": true}, "exit_code": 0}
+			if s.Scenario == "close_error" {
+				envelope["data"], envelope["exit_code"] = nil, 1
+				envelope["error"] = map[string]string{"message": "management session logout failed"}
+			}
+			if s.Scenario == "close_wrong_envelope" {
+				envelope["command"] = "unrelated command"
+			}
+			if s.Scenario != "close_eof" {
+				if err := json.NewEncoder(os.Stdout).Encode(envelope); err != nil {
+					panic(err)
+				}
+				if s.Scenario == "close_extra_output" {
+					fmt.Fprintln(os.Stdout, strings.Repeat("unexpected output ", 131072))
+				}
+			}
+			return envelope["exit_code"].(int)
+		}
+		args := append([]string{}, globalArgs...)
+		if request.Account != "" {
+			args = append(args, "--account", request.Account)
+		}
+		args = append(args, request.Args...)
+		runCommand(args, true)
+	}
+	if err := scanner.Err(); err != nil {
+		panic(err)
+	}
+	return 0
+}
+
+func runCommand(args []string, session bool) int {
 	path := os.Getenv("NJUPT_NET_FAKE_STATE")
 	if path == "" {
 		fmt.Fprintln(os.Stderr, "offline fixture requires a state file")
-		os.Exit(2)
+		return 2
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -71,7 +178,6 @@ func main() {
 	if s.Reads == nil {
 		s.Reads = map[string]int{}
 	}
-	args := os.Args[1:]
 	flags := map[string]string{}
 	position := 0
 	for position < len(args) && strings.HasPrefix(args[position], "--") {
@@ -111,7 +217,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	entry := call{Args: append([]string{}, args...), Command: command, Account: alias, Executable: program, At: time.Now().UnixMilli()}
+	entry := call{Args: append([]string{}, args...), Command: command, Account: alias, Executable: program, At: time.Now().UnixMilli(), ReceivedNS: time.Since(fixtureStartedAt).Nanoseconds()}
 	switch {
 	case command == "p login":
 		entry.Write = alias + ":login"
@@ -133,46 +239,63 @@ func main() {
 			panic(err)
 		}
 	}
-	emit := func(result any, message string, exitCode int) {
+	emit := func(result any, message string, exitCode int) int {
+		s.Calls[len(s.Calls)-1].ReturnedNS = time.Since(fixtureStartedAt).Nanoseconds()
 		save()
 		if failed && s.FailureMode == "wrong_envelope" {
 			command = "unrelated command"
 		}
 		out := os.Stdout
-		if exitCode != 0 {
+		if exitCode != 0 && !session {
 			out = os.Stderr
 		}
 		envelope := map[string]any{"command": command, "data": result}
+		if session {
+			envelope["exit_code"] = exitCode
+		}
 		if message != "" {
 			envelope["error"] = map[string]string{"message": message}
 		}
 		if err := json.NewEncoder(out).Encode(envelope); err != nil {
 			panic(err)
 		}
-		os.Exit(exitCode)
+		return exitCode
+	}
+	if strings.HasPrefix(command, "p ") {
+		switch flags["--port"] {
+		case "801", "802", "803", "804":
+		default:
+			return emit(nil, "fixture requires an explicit supported portal port", 2)
+		}
+	} else if flags["--port"] != "" {
+		return emit(nil, "portal port was passed to a non-portal command", 2)
 	}
 	if failed && s.FailureMode == "malformed_json" {
 		save()
-		fmt.Fprintln(os.Stderr, "invalid fixture JSON")
-		os.Exit(1)
+		out := os.Stderr
+		if session {
+			out = os.Stdout
+		}
+		fmt.Fprintln(out, "invalid fixture JSON")
+		return 1
 	}
 	if failed && s.FailureMode == "secret_error" {
-		emit(nil, "injected error CAMPUS_OLD_PASSWORD_73e6 / CAMPUS_NEW_PASSWORD_82a1 / BROADBAND_PASSWORD_91f4", 1)
+		return emit(nil, "injected error CAMPUS_OLD_PASSWORD_73e6 / CAMPUS_NEW_PASSWORD_82a1 / BROADBAND_PASSWORD_91f4", 1)
 	}
 	if failed && s.FailureMode != "accepted_unverified" && s.FailureMode != "accepted_unverified_success" && s.FailureMode != "unknown_mutation" && s.FailureMode != "wrong_envelope" {
-		emit(nil, "injected CLI failure", 1)
+		return emit(nil, "injected CLI failure", 1)
 	}
 	var cfg config
 	if flags["--config"] != "" {
 		data, err := os.ReadFile(flags["--config"])
 		if err != nil || json.Unmarshal(data, &cfg) != nil {
-			emit(nil, "fixture could not load configuration", 1)
+			return emit(nil, "fixture could not load configuration", 1)
 		}
 	}
 	if strings.HasPrefix(command, "zfw ") {
 		credential, exists := cfg.Accounts[alias]
 		if !exists || credential.Account == "" || credential.Password == "" {
-			emit(nil, "configured campus account and password are required", 1)
+			return emit(nil, "configured campus account and password are required", 1)
 		}
 	}
 	baseAccount := func() string {
@@ -204,6 +327,9 @@ func main() {
 			if s.Scenario == "before_offline_mac_changes" && s.Reads["p status"] >= 2 && !wasDisconnected() || s.Scenario == "login_mac_changes" && s.Writes["new:login"] > 0 {
 				terminalMAC = "112233445566"
 			}
+			if s.Scenario == "binding_changes_portal_mac" && s.Writes["new:bind"] > 0 {
+				terminalMAC = "112233445566"
+			}
 			if s.Scenario == "wrong_status_ip" {
 				address = "10.20.30.99"
 			}
@@ -211,22 +337,25 @@ func main() {
 		}
 		return map[string]any{"source": source, "online": online, "terminal": terminal}
 	}
-	finishWrite := func(result map[string]any) {
+	finishWrite := func(result map[string]any) int {
 		if failed && s.FailureMode == "unknown_mutation" {
 			result["outcome"], result["verified"] = "unknown", false
-			emit(result, "submission outcome is unknown", 1)
+			return emit(result, "submission outcome is unknown", 1)
 		}
 		if failed && (s.FailureMode == "accepted_unverified" || s.FailureMode == "accepted_unverified_success") {
 			result["verified"] = false
 			if s.FailureMode != "accepted_unverified_success" {
-				emit(result, "operation accepted; final state is unverified", 1)
+				return emit(result, "operation accepted; final state is unverified", 1)
 			}
 		}
-		emit(result, "", 0)
+		return emit(result, "", 0)
 	}
 	switch command {
 	case "interfaces":
 		addresses := []string{source}
+		if s.Scenario == "source_changes_after_session_start" {
+			addresses = []string{"10.20.30.41"}
+		}
 		if s.Scenario == "multiple_ipv4" {
 			addresses = append(addresses, "10.20.30.41")
 		}
@@ -234,7 +363,7 @@ func main() {
 		if s.Scenario == "duplicate_source" {
 			rows = append(rows, map[string]any{"name": "duplicate", "index": 14, "up": true, "ipv4": []string{source}})
 		}
-		emit(rows, "", 0)
+		return emit(rows, "", 0)
 	case "p status":
 		s.Reads["p status"]++
 		if s.Scenario == "pause_status" {
@@ -248,7 +377,7 @@ func main() {
 					break
 				}
 				if time.Now().After(deadline) {
-					emit(nil, "offline pause was not released", 1)
+					return emit(nil, "offline pause was not released", 1)
 				}
 				time.Sleep(25 * time.Millisecond)
 			}
@@ -256,17 +385,39 @@ func main() {
 		if wasDisconnected() {
 			s.PortalReads++
 		}
-		emit(status(), "", 0)
+		return emit(status(), "", 0)
 	case "p login":
-		if s.Online {
-			emit(map[string]any{"outcome": "not_submitted", "verified": false, "status": status()}, "terminal is already online", 1)
-		}
 		s.Writes[entry.Write]++
+		if s.Online {
+			return emit(map[string]any{"outcome": "rejected", "verified": false, "ret_code": 2, "message": "终端IP已经在线"}, "portal rejected login: 终端IP已经在线", 1)
+		}
+		if s.Writes[entry.Write] == 1 && s.LoginDelayMS > 0 {
+			time.Sleep(time.Duration(s.LoginDelayMS) * time.Millisecond)
+		}
+		const bindingMessage = "未绑定运营商账号,请正确绑定运营商账号再试！"
+		loginFailure := func(outcome, message string, exitCode int) int {
+			return emit(map[string]any{"outcome": outcome, "verified": false, "message": message}, "portal rejected login: "+message, exitCode)
+		}
+		switch s.Scenario {
+		case "login_password_rejected":
+			return loginFailure("rejected", "账号或密码错误", 1)
+		case "login_binding_message_partial":
+			return loginFailure("rejected", "未绑定运营商账号", 1)
+		case "login_binding_unknown":
+			return loginFailure("unknown", bindingMessage, 1)
+		case "login_binding_unverified":
+			return loginFailure("accepted", bindingMessage, 1)
+		case "login_binding_exit2":
+			return loginFailure("rejected", bindingMessage, 2)
+		case "login_network_error":
+			return emit(nil, "authentication connection timed out", 1)
+		}
 		operator := flags["--operator"]
 		if operator == "cmcc" || operator == "njxy" {
 			bound := s.Bindings[alias][operator]
-			if bound.Account != cfg.Broadband.Account || !bound.PasswordSet || s.Scenario == "portal_binding_unsynchronized" {
-				emit(map[string]any{"outcome": "rejected", "verified": false}, "portal rejected login: 未绑定运营商账号,请正确绑定运营商账号再试！", 1)
+			pending := s.Scenario == "binding_activation_delayed" && time.Now().UnixMilli()-s.BoundAt < 1000
+			if bound.Account != cfg.Broadband.Account || !bound.PasswordSet || s.Scenario == "portal_binding_unsynchronized" || pending {
+				return loginFailure("rejected", bindingMessage, 1)
 			}
 		}
 		s.Online = true
@@ -277,39 +428,43 @@ func main() {
 		if s.Scenario == "login_wrong_identity" {
 			s.OnlineAccount = "unrelated-campus@" + s.Provider
 		}
-		finishWrite(map[string]any{"outcome": "accepted", "verified": true, "status": status()})
+		result := map[string]any{"outcome": "accepted", "verified": true, "status": status()}
+		if s.Scenario == "login_missing_status" {
+			delete(result, "status")
+		}
+		return finishWrite(result)
 	case "probe":
 		result := map[string]any{"source": source, "internet": s.Scenario != "probe_offline", "probe": "http://www.msftconnecttest.com/connecttest.txt"}
 		switch s.Scenario {
 		case "probe_dns_error":
-			emit(nil, "lookup connectivity host: DNS server returned failure", 1)
+			return emit(nil, "lookup connectivity host: DNS server returned failure", 1)
 		case "probe_http_error":
-			emit(nil, "connectivity HTTP request timed out", 1)
+			return emit(nil, "connectivity HTTP request timed out", 1)
 		case "probe_secret_error":
-			emit(nil, "connectivity error CAMPUS_OLD_PASSWORD_73e6 / CAMPUS_NEW_PASSWORD_82a1 / BROADBAND_PASSWORD_91f4", 1)
+			return emit(nil, "connectivity error CAMPUS_OLD_PASSWORD_73e6 / CAMPUS_NEW_PASSWORD_82a1 / BROADBAND_PASSWORD_91f4", 1)
 		case "probe_error_data_offline":
 			result["internet"] = false
-			emit(result, "connectivity HTTP response indicated offline", 1)
+			return emit(result, "connectivity HTTP response indicated offline", 1)
 		case "probe_wrong_source_success":
 			result["source"] = "10.20.30.99"
 		case "probe_wrong_source_error":
 			result["source"], result["internet"] = "10.20.30.99", false
-			emit(result, "connectivity request failed", 1)
+			return emit(result, "connectivity request failed", 1)
 		case "probe_invalid_data":
 			result["internet"] = "false"
 		case "probe_missing_error":
-			emit(nil, "", 1)
+			return emit(nil, "", 1)
 		case "probe_empty_error":
-			emit(nil, " ", 1)
+			return emit(nil, " ", 1)
 		case "probe_usage_error":
-			emit(nil, "invalid probe arguments", 2)
+			return emit(nil, "invalid probe arguments", 2)
 		case "probe_mixed_streams":
 			fmt.Fprintln(os.Stdout, "unexpected output")
-			emit(nil, "connectivity request failed", 1)
+			return emit(nil, "connectivity request failed", 1)
 		case "probe_conflicting_result":
-			emit(result, "connectivity request failed", 1)
+			return emit(result, "connectivity request failed", 1)
 		}
-		emit(result, "", 0)
+		return emit(result, "", 0)
 	case "zfw online":
 		rows := []any{map[string]any{"session_id": "another-device-" + alias, "ip": "10.20.30.41", "mac": "112233445566"}}
 		if s.Online && cfg.Accounts[alias].Account == baseAccount() || s.Residual[alias] {
@@ -326,10 +481,10 @@ func main() {
 				rows = append(rows, row("self-session-"+alias, "AA:BB:CC:DD:EE:FF"))
 			}
 		}
-		emit(rows, "", 0)
+		return emit(rows, "", 0)
 	case "zfw offline":
 		if flags["--session"] != "self-session-"+alias || cfg.Accounts[alias].Account != baseAccount() {
-			emit(nil, "offline used another account or a portal session", 1)
+			return emit(nil, "offline used another account or a portal session", 1)
 		}
 		s.Writes[entry.Write]++
 		s.OfflineIDs = append(s.OfflineIDs, flags["--session"])
@@ -340,43 +495,38 @@ func main() {
 		if s.Scenario == "holder_changes_after_offline" {
 			s.Bindings["old"][s.Provider] = binding{Account: "different-holder-binding", PasswordSet: true}
 		}
-		finishWrite(map[string]any{"session_id": flags["--session"], "outcome": "accepted", "accepted": true, "verified": true})
+		return finishWrite(map[string]any{"session_id": flags["--session"], "outcome": "accepted", "accepted": true, "verified": true})
 	case "zfw operator":
 		if entry.Write == "" {
 			s.Reads[alias+":operator"]++
-			if s.Writes["new:bind"] > 0 {
-				switch {
-				case alias == "new" && s.Scenario == "bind_success_target_empty":
-					s.Bindings[alias][s.Provider] = binding{}
-				case alias == "old" && s.Scenario == "bind_success_holder_retained":
-					s.Bindings[alias][s.Provider] = binding{Account: cfg.Broadband.Account, PasswordSet: true}
-				}
-			}
 			if alias == "new" && s.Reads[alias+":operator"] == 2 && (s.Scenario == "target_changes_before_offline_empty" || s.Scenario == "target_changes_before_offline_ready" || s.Scenario == "target_changes_before_bind") {
 				s.Bindings[alias][s.Provider] = binding{Account: "concurrent-target-binding", PasswordSet: true}
 			}
 			if alias == "old" && s.Reads[alias+":operator"] == 2 && s.Scenario == "holder_changes_before_offline" {
 				s.Bindings[alias][s.Provider] = binding{Account: "different-holder-binding", PasswordSet: true}
 			}
-			if s.Writes["new:login"] > 0 && alias == "new" && s.Scenario == "final_target_mismatch" {
-				s.Bindings[alias][s.Provider] = binding{Account: "different-final-binding", PasswordSet: true}
-			}
-			if s.Writes["new:login"] > 0 && alias == "old" && s.Scenario == "final_holder_not_empty" {
-				s.Bindings[alias][s.Provider] = binding{Account: cfg.Broadband.Account, PasswordSet: true}
-			}
-			emit(s.Bindings[alias], "", 0)
+			return emit(s.Bindings[alias], "", 0)
 		}
 		provider, account := flags["--unbind"], ""
 		if flags["--bind"] == "true" {
 			provider, account = cfg.Broadband.Operator, cfg.Broadband.Account
 		}
 		if provider != s.Provider {
-			emit(nil, "workflow attempted to migrate another provider", 1)
+			return emit(nil, "workflow attempted to migrate another provider", 1)
 		}
 		s.Writes[entry.Write]++
 		s.Bindings[alias][provider] = binding{Account: account, PasswordSet: account != ""}
-		finishWrite(map[string]any{"operator": provider, "account": account, "outcome": "accepted", "verified": true, "message": "", "bindings": s.Bindings[alias]})
+		if flags["--bind"] == "true" {
+			s.BoundAt = time.Now().UnixMilli()
+			switch s.Scenario {
+			case "binding_disconnects_terminal":
+				s.Online = false
+			case "binding_changes_portal_identity":
+				s.OnlineAccount = "unrelated-campus@" + s.Provider
+			}
+		}
+		return finishWrite(map[string]any{"operator": provider, "account": account, "outcome": "accepted", "verified": true, "message": "", "bindings": s.Bindings[alias]})
 	default:
-		emit(nil, "unsupported fixture command", 1)
+		return emit(nil, "unsupported fixture command", 1)
 	}
 }

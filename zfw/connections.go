@@ -109,16 +109,31 @@ type OfflineResult struct {
 	Verified  bool    `json:"verified"`
 }
 
-// Offline submits one request and observes the online list until that exact
-// session disappears. A failed observation never resubmits the request.
+// Offline requires the exact session in the current online list, submits one
+// request and observes its removal. A failed observation never resubmits.
 func (s *Session) Offline(ctx context.Context, sessionID string) (*OfflineResult, error) {
 	if sessionID == "" {
 		return nil, fmt.Errorf("offline requires an online session ID")
 	}
-	result := &OfflineResult{SessionID: sessionID, Outcome: Unknown}
+	result := &OfflineResult{SessionID: sessionID, Outcome: NotSubmitted}
+	before, err := s.Online(ctx)
+	if err != nil {
+		return result, fmt.Errorf("terminal offline precondition failed; no request was submitted: %w", err)
+	}
+	found := false
+	for _, connection := range before {
+		if connection.SessionID == sessionID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return result, fmt.Errorf("Self online list does not contain the requested session; no offline request was submitted")
+	}
 	var response struct {
 		Success *bool `json:"success"`
 	}
+	result.Outcome = Unknown
 	if err := s.json(ctx, "dashboard/tooffline", url.Values{"sessionid": {sessionID}}, &response); err != nil {
 		return result, fmt.Errorf("terminal offline request failed; result is unknown: %w", err)
 	}
@@ -134,6 +149,7 @@ func (s *Session) Offline(ctx context.Context, sessionID string) (*OfflineResult
 	observation, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	for {
+		started := time.Now()
 		connections, err := s.Online(observation)
 		if err != nil {
 			return result, fmt.Errorf("terminal offline request was accepted; final state is unverified: %w", err)
@@ -149,7 +165,7 @@ func (s *Session) Offline(ctx context.Context, sessionID string) (*OfflineResult
 			result.Verified = true
 			return result, nil
 		}
-		timer := time.NewTimer(250 * time.Millisecond)
+		timer := time.NewTimer(max(0, 50*time.Millisecond-time.Since(started)))
 		select {
 		case <-observation.Done():
 			timer.Stop()

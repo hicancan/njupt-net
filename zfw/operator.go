@@ -15,6 +15,10 @@ func (s *Session) operatorForm(ctx context.Context) (*html.Node, url.Values, err
 	if err != nil {
 		return nil, nil, err
 	}
+	return parseOperatorForm(doc)
+}
+
+func parseOperatorForm(doc *html.Node) (*html.Node, url.Values, error) {
 	form := findForm(doc, "/Self/service/bind-operator")
 	if form == nil {
 		return nil, nil, fmt.Errorf("Self operator binding form is missing")
@@ -100,7 +104,7 @@ func (s *Session) setOperator(ctx context.Context, operator, account, password s
 	values.Set(accountField, account)
 	values.Set(passwordField, password)
 	result.Outcome = Unknown
-	data, final, _, err := s.request(ctx, http.MethodPost, attr(form, "action"), values)
+	data, final, _, err := s.navigate(ctx, http.MethodPost, attr(form, "action"), values, "/Self/service/operatorId")
 	if err != nil {
 		return result, fmt.Errorf("operator binding submission failed; result is unknown: %w", err)
 	}
@@ -127,7 +131,12 @@ func (s *Session) setOperator(ctx context.Context, operator, account, password s
 	default:
 		return result, fmt.Errorf("Self operator result has no recognized acceptance state")
 	}
-	_, actual, err := s.operatorForm(ctx)
+	var actual url.Values
+	if pathWithoutSession(final.Path) == "/Self/service/operatorId" {
+		_, actual, err = parseOperatorForm(doc)
+	} else {
+		_, actual, err = s.operatorForm(ctx)
+	}
 	if err != nil {
 		return result, fmt.Errorf("operator binding was accepted; final state is unverified: %w", err)
 	}

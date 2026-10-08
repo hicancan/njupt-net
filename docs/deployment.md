@@ -6,7 +6,7 @@
 
 | 服务 | 地址观测 | 用途 | 内核范围 |
 |---|---|---|---|
-| `p.njupt.edu.cn` | `10.10.244.11` | 上网认证门户 | HTTPS 443 页面与 HTTPS 804 EPortal |
+| `p.njupt.edu.cn` | `10.10.244.11` | 上网认证门户 | 801–804 EPortal |
 | `zfw.njupt.edu.cn` | `10.10.244.240` | 账号自助管理 | HTTP 8080 `/Self/` |
 | `3a.njupt.edu.cn` | `192.168.168.168` | 历史认证入口 | 未纳入当前协议 |
 | `10.168.6.10` | 历史代码中的地址 | 旧 ACSetting 线索 | 未确认当前适用性 |
@@ -29,7 +29,7 @@
 | p | **804** | **HTTPS** | **当前脚本指定的 HTTPS API 端口** |
 | zfw | 8080 | HTTP | 独立 Self 管理服务 |
 
-`a41.js` 的当前初始化配置选择 HTTPS 804，内核使用 `https://p.njupt.edu.cn:804/eportal/portal/` 认证。801 至 804 均能读取配置，当前账号认证实验使用 804。[门户初始化脚本](https://p.njupt.edu.cn/a41.js)
+`a41.js` 的网页初始化选择 HTTPS 804。801 至 804 均已完成原生配置、在线状态和账号认证验证；内核通过 `--port` 明确选择入口，默认 804。原生 API 直接接收请求，认证独立于网页资源。[门户初始化脚本](https://p.njupt.edu.cn/a41.js)
 
 Self 的完整入口是 `http://zfw.njupt.edu.cn:8080/Self/`，主机地址为 `10.10.244.240`。
 
@@ -124,8 +124,10 @@ uv run --project research python research/deployment.py --source <CAMPUS_IPV4> -
 
 ## 网络约束
 
-内核使用 IPv4，TCP 绑定选定源地址，按当前部署映射直接连接校园服务，并保留 TLS 域名验证。系统路由与 TUN 策略决定数据包如何到达目标。`interfaces` 显示本机地址，`p status` 查询该源地址的门户会话。
+内核使用 IPv4，根据选定源地址找到唯一启用网卡，TCP 同时绑定该地址与网卡。校园服务按当前部署映射直拨 IP，URL、HTTP Host 与 TLS SNI 保留服务域名，证书按域名验证。`interfaces` 显示本机地址，`p status` 查询该源地址的门户会话。
 
-`probe` 使用普通客户端，通过系统 DNS 解析 `www.msftconnecttest.com`，再以同一源 IPv4 请求 `http://www.msftconnecttest.com/connecttest.txt`。HTTP 200 且正文为 `Microsoft Connect Test` 时，确认本次探测端点可达。DNS 查询使用操作系统的解析路径，TCP 源地址绑定约束该连接。
+Windows 使用 `IP_UNICAST_IF` 选择 TCP 出口网卡；Linux 使用 `SO_BINDTOIFINDEX`，最低内核版本为 5.7；macOS 使用 `IP_BOUND_IF`。这些选项在连接前应用于每个 TCP 套接字，校园请求固定从选定网卡发出。
 
-门户身份、宽带绑定和外网探测分别报告。Windows 登录脚本在身份与绑定确认后返回登录成功，公网探测失败时保留该次观测的错误信息。双网环境下选择校园 IPv4 执行业务，其他应用继续按自身代理和系统路由连接外网。
+`probe` 使用普通客户端，通过系统 DNS 解析 `www.msftconnecttest.com`，再以同一源 IPv4 和网卡请求 `http://www.msftconnecttest.com/connecttest.txt`。HTTP 200 且正文为 `Microsoft Connect Test` 时，确认本次探测端点可达。DNS 查询使用操作系统的解析路径，返回地址后的 TCP 连接使用选定网卡。
+
+门户身份、宽带绑定和外网探测分别报告。Windows 登录脚本默认选择门户 801，在身份与绑定确认后返回登录成功；指定 `-Probe` 时另行记录公网探测结果。双网环境下选择校园 IPv4 执行业务，其他应用继续按自身代理和系统路由连接外网。

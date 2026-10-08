@@ -13,6 +13,9 @@ func TestPortalPasswordSubmissionAndAcceptance(t *testing.T) {
 	if err != nil || string(image) != "test-image" {
 		t.Fatalf("captcha: %v", err)
 	}
+	if len(f.requests) != 1 || f.requests[0] != "/eportal/portal/captcha" {
+		t.Fatalf("captcha fetched unrelated configuration or browser resources: %v", f.requests)
+	}
 	result, err := f.portal.ChangePassword(context.Background(), account, password, "new &secret", "AB12")
 	if err != nil {
 		t.Fatal(err)
