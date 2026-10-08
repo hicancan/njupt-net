@@ -176,10 +176,13 @@ function Assert-Writes([hashtable] $Observed, [string[]] $Expected = @()) {
     $actual = @($Observed.State.calls | Where-Object write | ForEach-Object write)
     Assert-True ([string]::Join(',', $actual) -ceq [string]::Join(',', $Expected)) "Mutation sequence differs: expected $([string]::Join(',', $Expected)), got $([string]::Join(',', $actual))."
 }
-function Assert-Success([hashtable] $Observed, [hashtable] $Case, [string] $Name) {
+function Assert-Success([hashtable] $Observed, [hashtable] $Case, [string] $Name, $ExpectedInternet = $true) {
     Assert-True ($Observed.Process.ExitCode -eq 0) "$Name failed: $($Observed.Process.Stderr)"
     $data = $Observed.Result.data
-    Assert-True ($data.stage -eq 'complete' -and $data.account_alias -eq 'new' -and $data.operator -eq $Case.State.provider -and $data.online -eq $true -and $data.internet -eq $true) "$Name returned incomplete success metadata."
+    Assert-True ($data.stage -eq 'complete' -and $data.account_alias -eq 'new' -and $data.operator -eq $Case.State.provider -and $data.online -eq $true -and $data.internet -eq $ExpectedInternet) "$Name returned incomplete success metadata."
+    Assert-True ($data.ContainsKey('internet_error')) "$Name omitted the Internet observation error field."
+    if ($ExpectedInternet -eq $true) { Assert-True ($null -eq $data.internet_error) "$Name reported an Internet error alongside confirmed connectivity." }
+    else { Assert-True ($data.internet_error -is [string] -and -not [string]::IsNullOrWhiteSpace($data.internet_error)) "$Name lost the Internet observation failure." }
     Assert-True ($data.previous_account_alias -eq $Case.Previous -and $data.binding_from -eq $Case.Holder -and $data.binding_moved -eq [bool]$Case.Holder) "$Name returned an incorrect previous account or binding holder."
     $other = $(if ($Case.State.provider -eq 'cmcc') { 'njxy' } else { 'cmcc' })
     foreach ($alias in $Case.State.bindings.Keys) {
@@ -325,7 +328,11 @@ foreach ($plan in @('ready_online', 'ready_offline', 'unowned_offline', 'migrate
         $case.State.fail_at = $index
         $case.State.failure_mode = 'stderr_error'
         $observed = Invoke-Login $case
-        Assert-True ($observed.Process.ExitCode -ne 0 -and $observed.State.calls.Count -eq $index) "$plan advanced or retried after CLI failure at call $index."
+        if ($baseline[$index - 1].command -eq 'probe') {
+            Assert-Success $observed $case "$plan retains login success after a probe failure" $null
+        }
+        else { Assert-True ($observed.Process.ExitCode -ne 0) "$plan accepted a business CLI failure at call $index." }
+        Assert-True ($observed.State.calls.Count -eq $index) "$plan advanced or retried after CLI failure at call $index."
         for ($prefix = 0; $prefix -lt $index; $prefix++) {
             $actual, $expected = $observed.State.calls[$prefix], $baseline[$prefix]
             Assert-True ($actual.command -eq $expected.command -and $actual.account -eq $expected.account -and $actual.write -eq $expected.write) "$plan changed its call sequence before injected failure."
@@ -381,12 +388,53 @@ $observed = Invoke-Login $resume
 Assert-Success $observed $resume 'manual invocation recomputes a previously interrupted transfer'
 Assert-Writes $observed @('new:bind', 'new:login')
 
-foreach ($scenario in @('login_wrong_identity', 'login_mac_changes', 'probe_offline', 'final_target_mismatch', 'final_holder_not_empty')) {
+foreach ($scenario in @('login_wrong_identity', 'login_mac_changes', 'final_target_mismatch', 'final_holder_not_empty')) {
     $case = New-Case 'migrate_online' 'cmcc' $scenario
     $observed = Invoke-Login $case
     Assert-True ($observed.Process.ExitCode -ne 0) "Login ignored $scenario."
     Assert-Writes $observed @('old:offline', 'old:unbind', 'new:bind', 'new:login')
+    Assert-True (@($observed.State.calls | Where-Object command -eq 'probe').Count -eq 0) 'Login probed before its identity and final binding checks succeeded.'
     $completed.Add("final verification rejects $scenario")
+}
+
+foreach ($plan in @('ready_online', 'ready_offline', 'migrate_online')) {
+    foreach ($scenario in @('probe_dns_error', 'probe_http_error', 'probe_secret_error', 'probe_offline', 'probe_error_data_offline')) {
+        $case = New-Case $plan 'cmcc' $scenario
+        $observed = Invoke-Login $case
+        $expectedInternet = $(if ($scenario -in @('probe_offline', 'probe_error_data_offline')) { $false } else { $null })
+        Assert-Success $observed $case "$plan completes with $scenario" $expectedInternet
+        $expectedWrites = @($baselines[$plan].State.calls | Where-Object write | ForEach-Object write)
+        Assert-Writes $observed $expectedWrites
+        $calls = @($observed.State.calls)
+        Assert-True (@($calls | Where-Object command -eq 'probe').Count -eq 1 -and $calls[-1].command -eq 'probe') 'Login repeated its probe or advanced to a business call after probing.'
+        if ($plan -ne 'ready_online') {
+            Assert-True ($calls[-2].command -eq 'zfw operator' -and -not $calls[-2].write) 'Login probed before checking final operator bindings.'
+        }
+        $probeStep = @($observed.Result.data.steps)[-1]
+        $expectedCode = $(if ($scenario -eq 'probe_offline') { 0 } else { 1 })
+        Assert-True ($probeStep.command -eq 'probe' -and $probeStep.exit_code -eq $expectedCode) 'Login lost the probe exit status.'
+        if ($scenario -eq 'probe_secret_error') {
+            Assert-True ($observed.Result.data.internet_error.Contains('[password]')) 'Login discarded the sanitized Internet failure detail.'
+        }
+    }
+}
+
+foreach ($scenario in @('probe_wrong_source_success', 'probe_wrong_source_error', 'probe_invalid_data', 'probe_missing_error', 'probe_empty_error', 'probe_usage_error', 'probe_mixed_streams', 'probe_conflicting_result')) {
+    $case = New-Case 'ready_online' 'cmcc' $scenario
+    $observed = Invoke-Login $case
+    Assert-True ($observed.Process.ExitCode -ne 0 -and $observed.Result.data.online -eq $true) "Login accepted a corrupted probe result: $scenario."
+    Assert-Writes $observed
+    Assert-True (@($observed.State.calls | Where-Object command -eq 'probe').Count -eq 1) 'Login retried an invalid probe result.'
+    $completed.Add("probe protocol validation rejects $scenario")
+}
+foreach ($mode in @('malformed_json', 'wrong_envelope')) {
+    $case = New-Case 'ready_online'
+    $case.State.fail_at = $baselines.ready_online.State.calls.Count
+    $case.State.failure_mode = $mode
+    $observed = Invoke-Login $case
+    Assert-True ($observed.Process.ExitCode -ne 0) "Login accepted a probe with $mode."
+    Assert-Writes $observed
+    $completed.Add("probe protocol validation rejects $mode")
 }
 $case = New-Case 'migrate_online' 'cmcc' 'offline_delayed'
 $observed = Invoke-Login $case

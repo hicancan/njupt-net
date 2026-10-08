@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -20,6 +21,8 @@ import (
 
 	"github.com/hicancan/njupt-net/v3/network"
 )
+
+const portalHost = "p.njupt.edu.cn"
 
 // RuntimeConfig is the current terminal context and supported portal protocol.
 // The authentication nonce remains private to the portal.
@@ -52,7 +55,7 @@ func New(link *network.Link, terminal string) (*Portal, error) {
 	if link == nil {
 		return nil, fmt.Errorf("portal requires a network link")
 	}
-	return newPortal(link.Client(), link.Source(), terminal)
+	return newPortal(link.ClientFor(portalHost, netip.AddrFrom4([4]byte{10, 10, 244, 11})), link.Source(), terminal)
 }
 
 func (p *Portal) runtimeConfig() *RuntimeConfig {
@@ -89,7 +92,7 @@ func newPortal(client *http.Client, source, terminal string) (*Portal, error) {
 	if !ok {
 		return nil, fmt.Errorf("terminal must be pc, mobile, hipad or vipad")
 	}
-	return &Portal{client: client, source: ip.String(), terminal: t, base: "https://p.njupt.edu.cn", api: "https://p.njupt.edu.cn:804/eportal/portal/", stateTimeout: 10 * time.Second}, nil
+	return &Portal{client: client, source: ip.String(), terminal: t, base: "https://" + portalHost, api: "https://" + portalHost + ":804/eportal/portal/", stateTimeout: 10 * time.Second}, nil
 }
 
 // Configure obtains the current page, program, protocol settings and JS version.

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
@@ -16,6 +17,8 @@ import (
 	"github.com/hicancan/njupt-net/v3/network"
 	"golang.org/x/net/html"
 )
+
+const selfHost = "zfw.njupt.edu.cn"
 
 var ErrSessionExpired = errors.New("zfw management session is not authenticated")
 
@@ -41,8 +44,8 @@ type Session struct {
 }
 
 func New(link *network.Link) *Session {
-	base, _ := url.Parse("http://zfw.njupt.edu.cn:8080/Self/")
-	return &Session{client: link.Client(), base: base}
+	base, _ := url.Parse("http://" + selfHost + ":8080/Self/")
+	return &Session{client: link.ClientFor(selfHost, netip.AddrFrom4([4]byte{10, 10, 244, 240})), base: base}
 }
 func (s *Session) request(ctx context.Context, method, path string, values url.Values) ([]byte, *url.URL, http.Header, error) {
 	reference, err := url.Parse(path)
@@ -262,7 +265,7 @@ func ValidateBridgeURL(raw string) error {
 
 func parseBridgeURL(raw string) (*url.URL, error) {
 	target, err := url.Parse(raw)
-	if err != nil || target.Scheme != "http" || (target.Host != "zfw.njupt.edu.cn:8080" && target.Host != "10.10.244.240:8080") || target.User != nil || target.Path != "/Self/login/eportalLogin" || target.Fragment != "" {
+	if err != nil || target.Scheme != "http" || (target.Host != selfHost+":8080" && target.Host != "10.10.244.240:8080") || target.User != nil || target.Path != "/Self/login/eportalLogin" || target.Fragment != "" {
 		return nil, fmt.Errorf("Self bridge URL must use a confirmed campus HTTP 8080 origin and the eportalLogin entry")
 	}
 	query, err := url.ParseQuery(target.RawQuery)

@@ -53,6 +53,14 @@ go test ./integration -run '^(TestLiveReadOnly|TestLiveBills)$' -count=1 -v
 
 凭据文件采用 CLI 的 `accounts` 结构，集成测试遍历配置中的账号。设置 `NJUPT_NET_LIVE=1` 后执行校园请求，其余情况下跳过。只读业务测试会建立、退出管理会话，包含账号刷新与图片资源上下文初始化。`TestLivePortalBridge` 从在线门户取得签名链接，核对管理身份并退出会话。
 
+设置上述源地址与凭据后，可核对校园服务在默认 DNS 查询不可用时的访问：
+
+```powershell
+go test ./integration -run '^TestLiveCampusWithoutDNS$' -count=1 -v
+```
+
+`TestLiveCampusWithoutDNS` 仅在测试进程内拒绝默认解析器的 DNS 查询，读取门户配置与状态，核对配置账号的运营商绑定、在线连接及门户签名管理会话，并退出所建管理会话。机器的 DNS 与 TUN 设置保持原值。该用例验证固定地址访问及会话流程。
+
 `TestLivePortalCycle` 与 `TestLiveSelfOfflinePortalLogin` 会下线并恢复属于配置账号的终端，另需设置 `NJUPT_NET_CYCLE=1`。执行时使用独立网络保持其他应用连接。测试同时报告业务错误与恢复错误；任一步失败均使测试失败。
 
 ## 持续集成

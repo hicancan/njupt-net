@@ -268,7 +268,37 @@ func main() {
 		}
 		finishWrite(map[string]any{"outcome": "accepted", "verified": true, "status": status()})
 	case "probe":
-		emit(map[string]any{"source": source, "internet": s.Scenario != "probe_offline", "probe": "http://www.msftconnecttest.com/connecttest.txt"}, "", 0)
+		result := map[string]any{"source": source, "internet": s.Scenario != "probe_offline", "probe": "http://www.msftconnecttest.com/connecttest.txt"}
+		switch s.Scenario {
+		case "probe_dns_error":
+			emit(nil, "lookup connectivity host: DNS server returned failure", 1)
+		case "probe_http_error":
+			emit(nil, "connectivity HTTP request timed out", 1)
+		case "probe_secret_error":
+			emit(nil, "connectivity error CAMPUS_OLD_PASSWORD_73e6 / CAMPUS_NEW_PASSWORD_82a1 / BROADBAND_PASSWORD_91f4", 1)
+		case "probe_error_data_offline":
+			result["internet"] = false
+			emit(result, "connectivity HTTP response indicated offline", 1)
+		case "probe_wrong_source_success":
+			result["source"] = "10.20.30.99"
+		case "probe_wrong_source_error":
+			result["source"], result["internet"] = "10.20.30.99", false
+			emit(result, "connectivity request failed", 1)
+		case "probe_invalid_data":
+			result["internet"] = "false"
+		case "probe_missing_error":
+			emit(nil, "", 1)
+		case "probe_empty_error":
+			emit(nil, " ", 1)
+		case "probe_usage_error":
+			emit(nil, "invalid probe arguments", 2)
+		case "probe_mixed_streams":
+			fmt.Fprintln(os.Stdout, "unexpected output")
+			emit(nil, "connectivity request failed", 1)
+		case "probe_conflicting_result":
+			emit(result, "connectivity request failed", 1)
+		}
+		emit(result, "", 0)
 	case "zfw online":
 		rows := []any{map[string]any{"session_id": "another-device-" + alias, "ip": "10.20.30.41", "mac": "112233445566"}}
 		if s.Online && cfg.Accounts[alias].Account == baseAccount() || s.Residual[alias] {

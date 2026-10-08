@@ -23,7 +23,7 @@ function New-CampusContext {
         Interface = $Interface; Source = $Source; TimeoutSeconds = $TimeoutSeconds
         Stage = 'configuration'; Steps = [System.Collections.Generic.List[object]]::new()
         Settings = $null; ConfigHash = $null; ConfigFile = $null
-        Mutex = $null; MutexOwned = $false; Online = $null; Internet = $null
+        Mutex = $null; MutexOwned = $false; Online = $null; Internet = $null; InternetError = $null
     }
 }
 
@@ -106,14 +106,15 @@ function Protect-CampusMessage {
 }
 
 function Invoke-CampusCommand {
-    param($Context, [string]$Stage, [string]$AccountAlias, [string[]]$Arguments)
+    param($Context, [string]$Stage, [string]$AccountAlias, [string[]]$Arguments, [switch]$ObserveProbeFailure)
     $Context.Stage = $Stage
     if ((Get-FileHash -LiteralPath $Context.Config -Algorithm SHA256 -ErrorAction Stop).Hash -cne $Context.ConfigHash) {
         throw 'Configuration changed during the workflow.'
     }
     $command = $Arguments[0]
     if ($command -in @('p', 'zfw')) { $command += ' ' + $Arguments[1] }
-    if ($command -in @('p login', 'zfw offline')) { $Context.Online = $null; $Context.Internet = $null }
+    if ($ObserveProbeFailure -and $command -cne 'probe') { throw 'Only the Internet probe can report an observation failure.' }
+    if ($command -in @('p login', 'zfw offline')) { $Context.Online = $null; $Context.Internet = $null; $Context.InternetError = $null }
     $start = [System.Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $Context.Executable
     $start.UseShellExecute = $false
@@ -161,8 +162,14 @@ function Invoke-CampusCommand {
         if ($data.Contains('verified')) { $event.verified = $data.verified }
     }
     if ($event.exit_code -ne 0) {
+        if (-not [string]::IsNullOrWhiteSpace($stdout)) { throw "CLI '$command' returned output alongside failure." }
         if ($envelope.Contains('error') -and $envelope.error -is [System.Collections.IDictionary] -and $envelope.error.Contains('message') -and $envelope.error.message -is [string]) {
-            throw (Protect-CampusMessage $Context $envelope.error.message)
+            $message = Protect-CampusMessage $Context $envelope.error.message
+            if ($ObserveProbeFailure -and $event.exit_code -eq 1 -and -not [string]::IsNullOrWhiteSpace($message)) {
+                $Context.InternetError = $message
+                return ,$data
+            }
+            throw $message
         }
         throw "CLI '$command' failed with exit code $($event.exit_code)."
     }
@@ -246,14 +253,18 @@ function Disconnect-CampusTerminal {
 
 function Confirm-CampusInternet {
     param($Context)
-    $probe = Invoke-CampusCommand $Context 'internet' '' @('probe')
-    if ($probe -isnot [System.Collections.IDictionary] -or $probe.source -cne $Context.Source -or $probe.internet -isnot [bool] -or -not $probe.internet) { throw 'Internet access was not confirmed through the selected source.' }
-    $Context.Internet = $true
+    $probe = Invoke-CampusCommand $Context 'internet' '' @('probe') -ObserveProbeFailure
+    if ($null -eq $probe -and $Context.InternetError) { return }
+    if ($probe -isnot [System.Collections.IDictionary] -or -not $probe.Contains('source') -or $probe.source -cne $Context.Source -or
+        -not $probe.Contains('internet') -or $probe.internet -isnot [bool]) { throw 'Internet probe did not describe the selected source.' }
+    if ($probe.internet -and $Context.InternetError) { throw 'Internet probe returned conflicting success and error results.' }
+    $Context.Internet = $probe.internet
+    if (-not $probe.internet -and -not $Context.InternetError) { $Context.InternetError = 'The external connectivity probe returned offline.' }
 }
 
 function Write-CampusResult {
     param($Context, [System.Collections.IDictionary]$Details, [string]$Message = '')
-    $data = [ordered]@{ stage = $Context.Stage; source = $Context.Source; online = $Context.Online; internet = $Context.Internet }
+    $data = [ordered]@{ stage = $Context.Stage; source = $Context.Source; online = $Context.Online; internet = $Context.Internet; internet_error = $Context.InternetError }
     foreach ($key in $Details.Keys) { $data[$key] = $Details[$key] }
     $data.steps = @($Context.Steps.ToArray())
     $result = [ordered]@{ command = $Context.Command; data = $data }
@@ -329,9 +340,7 @@ try {
         $identity = [regex]::Match($state.terminal.account, '^(?:,[01],)?([^,@]+)(?:@(njxy|cmcc))?$')
         $alreadyOnline = $identity.Groups[2].Value -ceq $operator
     }
-    if ($alreadyOnline) {
-        Confirm-CampusInternet $context
-    } else {
+    if (-not $alreadyOnline) {
         if ($state.online) {
             $connection = Get-CampusConnection $context $currentAlias $state
             $targetBefore = Get-CampusBindings $context 'before-offline-target-binding' $Account
@@ -379,7 +388,6 @@ try {
         $after = Get-CampusStatus $context 'login-status'
         Assert-CampusIdentity $context $after $Account $operator
         if ($state.online -and (ConvertTo-CampusMac $after.terminal.mac) -cne (ConvertTo-CampusMac $state.terminal.mac)) { throw 'Terminal MAC changed during login.' }
-        Confirm-CampusInternet $context
         $targetFinal = Get-CampusBindings $context 'final-target-binding' $Account
         if (-not (Test-CampusBroadband $targetFinal $broadband)) { throw 'Final target broadband binding does not match the configured account.' }
         if ($holder) {
@@ -387,6 +395,7 @@ try {
             if ($oldFinal[$operator].account -cne '' -or $oldFinal[$operator].password_set -ne $false) { throw 'Previous campus account still has a broadband binding.' }
         }
     }
+    Confirm-CampusInternet $context
     $context.Stage = 'complete'
     Write-CampusResult $context $details
     exit 0

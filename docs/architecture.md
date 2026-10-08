@@ -56,15 +56,15 @@ flowchart TB
     Z --> N
 ```
 
-p 与 zfw 各自创建独立 CookieJar，共用指定链路的 transport，分别依赖 network。Portal 从 `Link.Source()` 取得认证和状态核验使用的同一源地址。
+p 与 zfw 分别通过 `Link.ClientFor(host, ip)` 创建定向客户端，各自拥有独立 CookieJar。域名与部署 IP 的映射由协议包提供；底层直拨该 IP，URL、HTTP Host 与 HTTPS 证书验证继续使用域名。Portal 从 `Link.Source()` 取得认证和状态核验使用的同一源地址。Link 持有普通与定向客户端的 transport，并在 `Close` 时统一清理空闲连接。
 
 Windows 示例由独立 `login.ps1` 组成，所需调用函数包含在同一脚本内。脚本通过 CLI JSON 读取当前身份和宽带绑定，以 `-Account` 指定的目标账号为依据组合迁移与登录流程，运营商取自配置。目标绑定已符合配置时保留；完全为空时查询其他配置账号，按唯一持有人迁移或直接绑定。当前终端登录账号与宽带持有账号分别确定，所需的 Self 下线由脚本内部完成。
 
-依赖方向为 `login.ps1` → CLI → 内核；校园 HTTP、协议解析、凭据提交和单项结果确认由内核完成。一次流程固定源 IPv4，同一源地址的流程互斥；执行期间只读打开配置，每次 CLI 调用前核对内容。示例保留执行阶段与步骤结果，失败时停止。再次运行从当前状态决定剩余操作。使用说明见 [Windows 示例](../examples/windows/README.md)。
+依赖方向为 `login.ps1` → CLI → 内核；校园 HTTP、协议解析、凭据提交和单项结果确认由内核完成。一次流程固定源 IPv4，同一源地址的流程互斥；执行期间只读打开配置，每次 CLI 调用前核对内容。门户身份和宽带绑定确定登录结果，公网探测作为独立观测。业务步骤失败时保留执行阶段与步骤结果并停止；再次运行从当前状态决定剩余操作。使用说明见 [Windows 示例](../examples/windows/README.md)。
 
 | 对象 | 拥有的状态 | 使用规则 |
 |---|---|---|
-| `network.Link` | 不可变源 IPv4、transport、请求超时 | 创建的客户端使用同一源地址 |
+| `network.Link` | 不可变源 IPv4、普通与定向 transport、请求超时 | 创建的客户端使用同一源地址；统一管理连接资源 |
 | `p.Portal` | 终端类型、program/page/version、MAC/VLAN/AC 上下文、JSONP 序号 | 门户目标 IP 必须匹配源地址；单对象操作串行 |
 | `zfw.Session` | 独立 Cookie、已确认账号身份、管理会话状态 | 私有业务必须有服务器确认的身份；单对象顺序使用 |
 | CLI | 配置、账户别名、参数、输出路径与退出码 | 将明确的源地址和凭据传给内核 |
@@ -108,12 +108,16 @@ if err != nil {
 state, err := portal.Status(ctx)
 ```
 
+`Link.Client()` 创建使用系统 DNS 的普通客户端。`Link.ClientFor(host string, ip netip.Addr) *http.Client` 为指定主机创建固定 IP 直拨客户端，允许该主机名及其指定 IP 两种连接目标，每个客户端有独立 CookieJar。p 与 zfw 分别维护自身部署映射，`Link.Close()` 统一管理连接资源。
+
 管理调用使用 `zfw.New(link)`，依次执行 `Login(ctx, account, password)`、业务方法、`Logout(ctx)`。已有门户桥时可明确选择 `LoginBridge(ctx, expectedAccount, bridgeURL)` 建立同一种管理会话，并核对最终账号身份。
 
 跨系统动作由调用者显式组合：先由 p 获取自助服务地址，再将签名地址传给 zfw。CLI 的 `--self-url-file` 选择桥登录；密码登录由账户凭据建立会话。两种方法都核对服务器返回的账号身份。
+
+签名桥使用服务器返回的已确认 Self 地址。域名形式使用 zfw 部署映射，IP 形式直接保留原地址与 Cookie 作用域，后续业务和退出管理会话沿用同一客户端。
 
 ## 研究边界
 
 Python 研究从实际页面、脚本与原始请求独立恢复协议事实。研究项目保存实验与必要公开样本，Markdown 文档记录协议结论，Go 测试将确认的契约固定为夹具。Go 内核独立构建、运行，真实研究输出由调用者指定位置。
 
-当前实现使用 HTTPS 804 Portal 与 HTTP 8080 Self。DNS 通过系统解析器查询，TCP4 LocalAddr 绑定源地址，操作系统路由表决定到达目标的路径。
+当前实现将 p 的 HTTPS 443 页面、HTTPS 804 Portal 与 zfw 的 HTTP 8080 Self 直拨到已确认的部署 IP，保留域名 URL。普通客户端与外网探测仍使用系统 DNS；TCP4 LocalAddr 绑定源地址，操作系统路由与 TUN 策略决定到达目标的路径。

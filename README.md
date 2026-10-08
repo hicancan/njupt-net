@@ -14,7 +14,7 @@
 使用 Go 1.26 或更新版本：
 
 ```text
-go install github.com/hicancan/njupt-net/v3/cmd/njupt-net@v3.2.1
+go install github.com/hicancan/njupt-net/v3/cmd/njupt-net@v3.2.2
 ```
 
 也可以从源码构建：
@@ -70,9 +70,11 @@ njupt-net --interface "Ethernet" --account default zfw export --kind monthly --y
 
 ## 网络行为
 
-校园请求绑定选定源 IPv4，直接连接校园服务。DNS 使用系统解析器，HTTPS 验证域名与证书。所有连接设置仅作用于当前进程。
+校园请求绑定选定源 IPv4，p 与 zfw 按[当前部署地址](docs/deployment.md)直连校园服务。URL 保留服务域名，HTTPS 按域名验证证书；校园认证和自助服务访问使用协议包内的地址映射。所有连接设置仅作用于当前进程。
 
-双网环境中，可选择校园接口执行业务，让另一条独立网络承担其他应用流量。源地址绑定仍受操作系统路由和校园网络可达性约束；`p status` 表示门户在线状态，`probe` 独立检验外网响应。
+`probe` 使用系统 DNS 解析外部域名，TCP 连接绑定同一源 IPv4。`p status` 表示门户在线状态，`probe` 单独观测外网响应。Windows 登录脚本以门户身份与宽带绑定确认作为成功条件，公网探测结果另行报告。
+
+双网环境中，可选择校园接口执行业务，让另一条独立网络承担其他应用流量。绑定源地址仍受操作系统路由、TUN 策略和校园网络可达性约束；系统 DNS 的查询路径由操作系统管理。
 
 ## 命令与结果
 
