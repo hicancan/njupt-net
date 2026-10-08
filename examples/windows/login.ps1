@@ -12,8 +12,10 @@ param(
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$Account,
     [ValidateNotNullOrEmpty()][string]$Config = 'config.json',
     [ValidateNotNullOrEmpty()][string]$Executable = 'njupt-net',
-    [ValidateRange(1, 300)][int]$TimeoutSeconds = 15
+    [ValidateRange(1, 300)][int]$TimeoutSeconds = 15,
+    [ValidateRange(0, 120)][int]$BindingWaitSeconds = 30
 )
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 function New-CampusContext {
@@ -299,7 +301,7 @@ function Assert-CampusEmptyBinding {
 }
 
 $context = New-CampusContext 'login' $Executable $Config $Interface $Source $TimeoutSeconds
-$details = @{ account_alias = $Account; operator = $null; previous_account_alias = $null; binding_from = $null; binding_moved = $false }
+$details = @{ account_alias = $Account; operator = $null; previous_account_alias = $null; binding_from = $null; binding_moved = $false; binding_wait_seconds = 0 }
 try {
     Initialize-CampusContext $context @($Account)
     $context.Stage = 'configuration'
@@ -381,6 +383,17 @@ try {
             Assert-CampusOperation $bound
             if ($bound.operator -cne $operator -or $bound.account -cne $broadband.account -or
                 -not (Test-CampusBroadband $bound.bindings $broadband)) { throw 'Target broadband binding does not match the configured account.' }
+            $context.Stage = 'binding-wait'
+            $details.binding_wait_seconds = $BindingWaitSeconds
+            if ($BindingWaitSeconds -gt 0) { Start-Sleep -Seconds $BindingWaitSeconds }
+            $targetAfter = Get-CampusBindings $context 'bound-target-binding' $Account
+            if (-not (Test-CampusBroadband $targetAfter $broadband)) { throw 'Target broadband binding changed before authentication.' }
+            if ($holder) {
+                $holderAfter = Get-CampusBindings $context 'unbound-holder-binding' $holder
+                if ($holderAfter[$operator].account -cne '' -or $holderAfter[$operator].password_set -ne $false) {
+                    throw 'Previous campus account still has a broadband binding before authentication.'
+                }
+            }
             $details.binding_moved = [bool]$holder
         }
         $loggedIn = Invoke-CampusCommand $context 'login' $Account @('p', 'login', '--operator', $operator)

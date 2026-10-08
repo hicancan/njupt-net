@@ -67,6 +67,8 @@ uv run --locked python -m zfw.public --source SOURCE_IPV4
 
 `zfw.operator --bind njxy|cmcc` 和 `--unbind njxy|cmcc` 互斥。绑定通过 `--operator-account` 指定宽带账号，并交互输入密码；解绑只选择运营商。程序 GET `service/operatorId` 获取当前表单和 `csrftoken`，修改电信 `FLDEXTRA1/2` 或移动 `FLDEXTRA3/4`，保留另一组字段，向 `service/bind-operator` POST 一次。解绑提交的选定账号与密码均为空。提交后独立 GET 读取表单，输出响应摘要，以及账号、密码是否符合目标和另一运营商是否保持原值的布尔结果；解绑结果分别使用 `account_cleared`、`password_cleared`、`other_operator_unchanged`。
 
+绑定读回与门户认证的生效时序见 [运营商绑定与认证生效](zfw/binding.md)，其中记录立即认证、独立管理会话、账号刷新及延迟认证的对照结果。
+
 `access_cycle` 必须指定 `--execute` 和 `--operator`，会改变选定终端的上网状态。实验前核对当前账号、源地址和待用配置；如选用 `--restore-on-failure`，恢复属于显式实验清理，并单独报告结果。账单当前页导出先在同一管理会话查询表格；全部导出携带页面提供的筛选条件。
 
 ## 研究流程与结果解释

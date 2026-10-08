@@ -30,6 +30,7 @@ pwsh -NoProfile -File examples/windows/login.ps1 -Source SOURCE_IPV4 -Account AC
 | `-Config FILE` | 校园账号与宽带配置文件 | 当前目录的 `config.json` |
 | `-Executable COMMAND` | `njupt-net` 可执行文件路径或命令名 | PATH 中的 `njupt-net` |
 | `-TimeoutSeconds SECONDS` | 传给 CLI 的单次网络请求超时 | `15` |
+| `-BindingWaitSeconds SECONDS` | 新绑定提交后、认证前等待生效的秒数，范围 `0..120` | `30` |
 
 一次执行固定使用最初选定的源 IPv4。同一源 IPv4 已有流程运行时，新流程报告正在使用并结束。执行期间配置文件保持只读，每次调用 CLI 前再次核对内容；配置发生变化时结束当前流程。
 
@@ -48,6 +49,8 @@ pwsh -NoProfile -File examples/windows/login.ps1 -Source SOURCE_IPV4 -Account AC
 当前终端已经使用目标账号、正确运营商在线，且目标绑定符合配置时，保留当前会话并观测公网通达性。当前终端在线但尚未达到这一状态时，脚本通过 Self 按本机校园网 IPv4 与 MAC 选定唯一会话，下线前再次核对目标与持有人的绑定、原身份与 MAC，再完成必要的宽带迁移或绑定，使用目标账号认证。当前在线身份须能唯一对应配置中的校园账号；未知或歧义身份会返回错误。
 
 门户显示离线时，脚本读取目标账号及已找到的宽带持有人在线连接，确认所选源 IPv4 没有会话后，继续所需的迁移、绑定和登录。修改前重新读取目标及已找到持有人的绑定，完成后核对门户目标身份与绑定结果，再单独观测同一源地址的公网通达性。
+
+提交新绑定后，脚本默认等待 30 秒，再分别建立新的管理会话，确认目标持有配置宽带、旧持有人绑定已清空，然后提交一次门户认证。校园网实测中，新绑定已经能在自助服务读回时，立即认证仍返回“未绑定运营商账号”；保持绑定不变，等待 30 秒后认证成功。等待只发生在本次确实提交了新绑定的路径，已有绑定直接登录、已经正确在线的路径按当前状态继续。
 
 下线操作选定本机会话；宽带绑定属于校园账号级关系，迁移后由目标校园账号持有。
 
@@ -71,6 +74,6 @@ pwsh -NoProfile -File examples/windows/login.ps1 -Source SOURCE_IPV4 -Account AC
 
 以上观测均保留已确认的登录结果，退出码为 `0`。探测通过系统 DNS 解析外部域名，再以选定源 IPv4 建立 TCP 连接。
 
-结果的 `command` 为 `login`。`data.account_alias` 是目标账号，`data.previous_account_alias` 记录原在线账号，`data.binding_from` 记录迁移前的宽带持有人，`data.binding_moved` 表示本次宽带迁移是否已完成。
+结果的 `command` 为 `login`。`data.account_alias` 是目标账号，`data.previous_account_alias` 记录原在线账号，`data.binding_from` 记录迁移前的宽带持有人，`data.binding_moved` 表示本次宽带迁移是否已完成，`data.binding_wait_seconds` 记录本次新绑定后的等待秒数；保留已有绑定时为 `0`。
 
 校园账号和宽带密码由 CLI 从配置文件读取。脚本通过 CLI 的 JSON 结果核对状态，密码保留在配置文件中。

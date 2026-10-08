@@ -21,6 +21,7 @@ type call struct {
 	Command    string   `json:"command"`
 	Account    string   `json:"account"`
 	Executable string   `json:"executable"`
+	At         int64    `json:"at"`
 	Write      string   `json:"write,omitempty"`
 }
 type state struct {
@@ -110,7 +111,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	entry := call{Args: append([]string{}, args...), Command: command, Account: alias, Executable: program}
+	entry := call{Args: append([]string{}, args...), Command: command, Account: alias, Executable: program, At: time.Now().UnixMilli()}
 	switch {
 	case command == "p login":
 		entry.Write = alias + ":login"
@@ -261,8 +262,18 @@ func main() {
 			emit(map[string]any{"outcome": "not_submitted", "verified": false, "status": status()}, "terminal is already online", 1)
 		}
 		s.Writes[entry.Write]++
+		operator := flags["--operator"]
+		if operator == "cmcc" || operator == "njxy" {
+			bound := s.Bindings[alias][operator]
+			if bound.Account != cfg.Broadband.Account || !bound.PasswordSet || s.Scenario == "portal_binding_unsynchronized" {
+				emit(map[string]any{"outcome": "rejected", "verified": false}, "portal rejected login: 未绑定运营商账号,请正确绑定运营商账号再试！", 1)
+			}
+		}
 		s.Online = true
-		s.OnlineAccount = cfg.Accounts[alias].Account + "@" + flags["--operator"]
+		s.OnlineAccount = cfg.Accounts[alias].Account
+		if operator != "" && operator != "campus" {
+			s.OnlineAccount += "@" + operator
+		}
 		if s.Scenario == "login_wrong_identity" {
 			s.OnlineAccount = "unrelated-campus@" + s.Provider
 		}
@@ -333,6 +344,14 @@ func main() {
 	case "zfw operator":
 		if entry.Write == "" {
 			s.Reads[alias+":operator"]++
+			if s.Writes["new:bind"] > 0 {
+				switch {
+				case alias == "new" && s.Scenario == "bind_success_target_empty":
+					s.Bindings[alias][s.Provider] = binding{}
+				case alias == "old" && s.Scenario == "bind_success_holder_retained":
+					s.Bindings[alias][s.Provider] = binding{Account: cfg.Broadband.Account, PasswordSet: true}
+				}
+			}
 			if alias == "new" && s.Reads[alias+":operator"] == 2 && (s.Scenario == "target_changes_before_offline_empty" || s.Scenario == "target_changes_before_offline_ready" || s.Scenario == "target_changes_before_bind") {
 				s.Bindings[alias][s.Provider] = binding{Account: "concurrent-target-binding", PasswordSet: true}
 			}

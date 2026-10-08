@@ -14,7 +14,7 @@
 使用 Go 1.26 或更新版本：
 
 ```text
-go install github.com/hicancan/njupt-net/v3/cmd/njupt-net@v3.2.2
+go install github.com/hicancan/njupt-net/v3/cmd/njupt-net@v3.2.3
 ```
 
 也可以从源码构建：

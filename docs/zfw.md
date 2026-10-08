@@ -57,7 +57,7 @@ URL 文件保存示例中的 `.data.url` 字符串。`--account` 选择期望账
 
 在线连接以 session ID 标识，MAC 绑定以 MAC 标识。下线连接与解除持久绑定分别执行。`devices` 接受页码及 `10/25/50/100` 页大小；`unbind` 使用十二位十六进制 MAC。
 
-账号刷新返回 HTTP 200 空正文，内核随后读取概览。`getMacList` 约定返回 JSON 列表，当前服务器返回 HTTP 200 空正文，命令因此返回协议错误。
+账号刷新返回 HTTP 200 空正文，内核随后读取概览。Self 页面加载时也会调用该接口。运营商绑定的实测显示，执行账号刷新后，门户仍可能继续返回“未绑定运营商账号”；新绑定的认证生效时间由登录流程处理。`getMacList` 约定返回 JSON 列表，当前服务器返回 HTTP 200 空正文，命令因此返回协议错误。
 
 当前资料页呈现只读标签和值，`setting/updateUserSecurity` 表单只有令牌，提交后显示 `Not valid!`。`profile` 读取该页面的资料，结果包含 `read_only:true`。
 

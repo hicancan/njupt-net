@@ -116,7 +116,7 @@ function Invoke-Login([hashtable] $Case, [string[]] $Selection = @('-Interface',
     $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot '../login.ps1'))
     $arguments += $Selection
     if (-not $UseDefaultConfig) { $arguments += @('-Config', ($Case.ConfigArgument ?? $Case.ConfigPath)) }
-    $arguments += @('-Executable', ($Case.Executable ?? $executable), '-TimeoutSeconds', '1', '-Account', ($Case.Account ?? 'new'))
+    $arguments += @('-Executable', ($Case.Executable ?? $executable), '-TimeoutSeconds', '1', '-Account', ($Case.Account ?? 'new'), '-BindingWaitSeconds', [string]($Case.BindingWaitSeconds ?? 0))
     $environment = @{ NJUPT_NET_FAKE_STATE = $Case.StatePath }
     if ($Case.Environment) { foreach ($name in $Case.Environment.Keys) { $environment[$name] = $Case.Environment[$name] } }
     $workingDirectory = $Case.Directory
@@ -176,6 +176,24 @@ function Assert-Writes([hashtable] $Observed, [string[]] $Expected = @()) {
     $actual = @($Observed.State.calls | Where-Object write | ForEach-Object write)
     Assert-True ([string]::Join(',', $actual) -ceq [string]::Join(',', $Expected)) "Mutation sequence differs: expected $([string]::Join(',', $Expected)), got $([string]::Join(',', $actual))."
 }
+
+function Assert-BindingReadbackBeforeLogin([hashtable] $Observed, [hashtable] $Case) {
+    $steps = @($Observed.Result.data.steps)
+    $bindIndex = [Array]::IndexOf([string[]] @($steps | ForEach-Object stage), 'bind')
+    if ($bindIndex -lt 0) { return }
+    $targetIndex = [Array]::IndexOf([string[]] @($steps | ForEach-Object stage), 'bound-target-binding')
+    $loginIndex = [Array]::IndexOf([string[]] @($steps | ForEach-Object stage), 'login')
+    Assert-True ($targetIndex -gt $bindIndex -and $loginIndex -gt $targetIndex) 'Login did not independently read the target binding after submission and before authentication.'
+    $target = $Observed.State.calls[$targetIndex]
+    Assert-True ($target.command -eq 'zfw operator' -and $target.account -eq 'new' -and -not $target.write) 'Target binding confirmation did not use a separate readonly CLI invocation.'
+    if ($Case.Holder) {
+        $holderIndex = [Array]::IndexOf([string[]] @($steps | ForEach-Object stage), 'unbound-holder-binding')
+        Assert-True ($holderIndex -gt $targetIndex -and $loginIndex -gt $holderIndex) 'Login did not independently confirm the previous holder after binding and before authentication.'
+        $holder = $Observed.State.calls[$holderIndex]
+        Assert-True ($holder.command -eq 'zfw operator' -and $holder.account -eq $Case.Holder -and -not $holder.write) 'Previous holder confirmation did not use a separate readonly CLI invocation.'
+    }
+}
+
 function Assert-Success([hashtable] $Observed, [hashtable] $Case, [string] $Name, $ExpectedInternet = $true) {
     Assert-True ($Observed.Process.ExitCode -eq 0) "$Name failed: $($Observed.Process.Stderr)"
     $data = $Observed.Result.data
@@ -184,12 +202,24 @@ function Assert-Success([hashtable] $Observed, [hashtable] $Case, [string] $Name
     if ($ExpectedInternet -eq $true) { Assert-True ($null -eq $data.internet_error) "$Name reported an Internet error alongside confirmed connectivity." }
     else { Assert-True ($data.internet_error -is [string] -and -not [string]::IsNullOrWhiteSpace($data.internet_error)) "$Name lost the Internet observation failure." }
     Assert-True ($data.previous_account_alias -eq $Case.Previous -and $data.binding_from -eq $Case.Holder -and $data.binding_moved -eq [bool]$Case.Holder) "$Name returned an incorrect previous account or binding holder."
+    $bindingSubmitted = @($Observed.State.calls | Where-Object write -eq 'new:bind').Count -gt 0
+    $expectedBindingWait = $(if ($bindingSubmitted) { $Case.BindingWaitSeconds ?? 0 } else { 0 })
+    Assert-True ($data.ContainsKey('binding_wait_seconds') -and $data.binding_wait_seconds -eq $expectedBindingWait) "$Name returned an incorrect binding activation wait."
     $other = $(if ($Case.State.provider -eq 'cmcc') { 'njxy' } else { 'cmcc' })
     foreach ($alias in $Case.State.bindings.Keys) {
         Assert-True ($Observed.State.bindings[$alias][$other].account -eq $Case.State.bindings[$alias][$other].account -and $Observed.State.bindings[$alias][$other].password_set -eq $Case.State.bindings[$alias][$other].password_set) 'Login changed an unselected operator binding.'
     }
+    Assert-BindingReadbackBeforeLogin $Observed $Case
     $script:completed.Add($Name)
 }
+
+$workflowTokens = $null
+$workflowErrors = $null
+$workflowAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../login.ps1'), [ref]$workflowTokens, [ref]$workflowErrors)
+Assert-True ($workflowErrors.Count -eq 0) 'Login script could not be parsed.'
+$waitParameter = @($workflowAst.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'BindingWaitSeconds' })
+Assert-True ($waitParameter.Count -eq 1 -and $waitParameter[0].DefaultValue.SafeGetValue() -eq 30) 'Binding activation wait must default to 30 seconds.'
+$completed.Add('binding activation wait defaults to 30 seconds')
 
 $baselines = @{}
 foreach ($plan in @('ready_online', 'ready_offline', 'ready_other_online', 'target_wrong_operator', 'unowned_offline', 'unowned_online', 'migrate_online', 'migrate_offline', 'migrate_third_online', 'new_empty_online')) {
@@ -217,6 +247,17 @@ $case = New-Case 'migrate_online' 'njxy'
 $observed = Invoke-Login $case @('-Source', '10.20.30.40')
 Assert-Success $observed $case 'configured njxy migration with explicit source'
 Assert-Writes $observed @('old:offline', 'old:unbind', 'new:bind', 'new:login')
+
+$case = New-Case 'unowned_offline'
+$case.BindingWaitSeconds = 1
+$observed = Invoke-Login $case
+Assert-Success $observed $case 'binding activation wait precedes independent readback and single authentication'
+Assert-Writes $observed @('new:bind', 'new:login')
+$steps = @($observed.Result.data.steps)
+$stages = [string[]] @($steps | ForEach-Object stage)
+$bindCall = $observed.State.calls[[Array]::IndexOf($stages, 'bind')]
+$readbackCall = $observed.State.calls[[Array]::IndexOf($stages, 'bound-target-binding')]
+Assert-True (($readbackCall.at - $bindCall.at) -ge 1000) 'Login read the new binding before its configured activation wait elapsed.'
 
 $case = New-Case 'ready_online'
 $case.State.online_account = ',1,new-campus@cmcc'
@@ -311,6 +352,32 @@ $observed = Invoke-Login $case
 Assert-True ($observed.Process.ExitCode -ne 0) 'Login overwrote a target changed before binding.'
 Assert-Writes $observed
 $completed.Add('unowned binding is rechecked before submission')
+
+foreach ($provider in @('cmcc', 'njxy')) {
+    foreach ($scenario in @('bind_success_target_empty', 'bind_success_holder_retained')) {
+        $case = New-Case 'migrate_online' $provider $scenario
+        $observed = Invoke-Login $case
+        Assert-True ($observed.Process.ExitCode -ne 0) "Login accepted $scenario for $provider."
+        Assert-Writes $observed @('old:offline', 'old:unbind', 'new:bind')
+        $stage = $(if ($scenario -eq 'bind_success_target_empty') { 'bound-target-binding' } else { 'unbound-holder-binding' })
+        Assert-True ($observed.Result.data.stage -eq $stage) 'Login did not stop at the independent binding observation that contradicted the bind result.'
+        $bindStep = @($observed.Result.data.steps | Where-Object stage -eq 'bind')
+        Assert-True ($bindStep.Count -eq 1 -and $bindStep[0].outcome -eq 'accepted' -and $bindStep[0].verified -eq $true) 'Independent binding failure lost the accepted bind result.'
+        Assert-True (@($observed.State.calls | Where-Object command -eq 'p login').Count -eq 0) 'Login authenticated before independent binding observations agreed.'
+        $completed.Add("$provider independent binding verification rejects $scenario")
+    }
+
+    $case = New-Case 'migrate_online' $provider 'portal_binding_unsynchronized'
+    $observed = Invoke-Login $case
+    Assert-True ($observed.Process.ExitCode -ne 0 -and $observed.Result.data.stage -eq 'login') 'Login ignored a portal rejection after successful independent binding observations.'
+    Assert-Writes $observed @('old:offline', 'old:unbind', 'new:bind', 'new:login')
+    Assert-BindingReadbackBeforeLogin $observed $case
+    Assert-True ($observed.Result.error.message -ceq 'portal rejected login: 未绑定运营商账号,请正确绑定运营商账号再试！') "Login replaced the authentication server rejection: $($observed.Result.error.message)"
+    $last = @($observed.Result.data.steps)[-1]
+    Assert-True ($last.command -eq 'p login' -and $last.exit_code -eq 1 -and $last.outcome -eq 'rejected' -and $last.verified -eq $false) 'Login lost the rejected authentication result or advanced after it.'
+    Assert-True (-not $observed.State.online -and $observed.State.writes['new:login'] -eq 1) 'Login retried a rejected authentication submission.'
+    $completed.Add("$provider portal binding rejection is preserved without retry")
+}
 
 foreach ($alias in @('new', 'old')) {
     $case = New-Case 'migrate_offline'
