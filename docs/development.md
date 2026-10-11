@@ -48,7 +48,11 @@ uv run --locked python -m unittest discover -p "test_*.py" -v
 pwsh -NoProfile -File examples/windows/tests/test.ps1 -OutputDirectory <OUTPUT_DIRECTORY>
 ```
 
-将 `<OUTPUT_DIRECTORY>` 替换为本次测试输出目录。离线测试使用模拟 CLI 会话，核对目标已在线、保留已有绑定、迁移唯一持有人绑定、直接绑定等状态分支，以及身份与绑定前提、绑定和下线的单次提交、失败后的阶段记录与会话清理。目标身份已在线但宽带需要迁移时，完成关系变更后读取门户确认身份与 MAC，实际离线时再认证；其他身份在线时按精确 Self 连接清退，并确认门户离线。门户原本离线时直接处理绑定和认证。新绑定的认证测试区分立即成功、明确未绑定后立即串行再次认证、其他拒绝和结果未知；登录成功后使用内核返回的已核对状态。示例脚本的参数与使用方法见 [Windows 示例](../examples/windows/README.md)。
+将 `<OUTPUT_DIRECTORY>` 替换为本次测试输出目录。离线测试使用模拟 CLI 会话，核对目标已在线、保留已有绑定、迁移唯一持有人绑定、直接绑定等状态分支，以及身份与绑定前提、绑定和下线的单次提交、失败后的阶段记录与会话清理。目标身份已在线但宽带需要迁移时，完成关系变更后读取门户确认身份与 MAC，实际离线时再认证；其他身份在线时按精确 Self 连接清退，并确认门户离线。门户原本离线时直接处理绑定和认证。
+
+认证测试在新绑定与已有绑定场景中重放原生未绑定、Radius 错误查询失败、繁忙和超时响应，检查首次立即恢复、连续拒绝的有界间隔、恢复窗口耗尽，以及认证阶段只查询门户和提交认证。目标已上线时直接完成；身份、运营商或 MAC 改变时结束。未知结果、凭据和时段拒绝保留原始错误。正常成功使用内核返回的已核对状态。示例脚本的参数与使用方法见 [Windows 示例](../examples/windows/README.md)。
+
+诊断版用同一套模拟 CLI 检查运行日志、步骤与 HTTP 命令标识关联、重复运行的独立目录、配置读取失败、日志写入失败，以及认证拒绝后的只读现场观察。用例核对原始退出码、失败阶段、错误提示和修改次数，并检查密码过滤。历史认证响应重放还比较两个入口的执行顺序，核对恢复原因、原生响应与等待记录。生产版与诊断版共享 `login.ps1`。
 
 ## 校园网集成测试
 
@@ -73,6 +77,16 @@ go test ./integration -run '^TestLiveCampusWithoutDNS$' -count=1 -v
 
 `TestLivePortalCycle` 与 `TestLiveSelfOfflinePortalLogin` 会下线并恢复属于配置账号的终端，另需设置 `NJUPT_NET_CYCLE=1`。执行时使用独立网络保持其他应用连接。测试同时报告业务错误与恢复错误；任一步失败均使测试失败。
 
+Windows 的批量登录验证使用独立 PowerShell 进程运行 `examples/windows/tests/live.ps1`：
+
+```powershell
+pwsh -NoProfile -File examples/windows/tests/live.ps1 -Interface Ethernet -FirstAccount FIRST_ACCOUNT -RestoreAccount RESTORE_ACCOUNT -Config ./config.json -Executable njupt-net -LoginScript ./examples/windows/login-test.ps1 -OutputDirectory <OUTPUT_DIRECTORY>
+```
+
+执行器先固定校园网卡的唯一 IPv4，再连续运行两轮目标账号与恢复账号登录。每个阶段调用共享的诊断版流程，分别保存子运行目录、退出码与原始错误；阶段前后读取门户、宽带关系、Self 在线记录及物理链路公网状态。成功同时要求目标身份、运营商、宽带持有人和实际有线通达性一致。`-Rounds` 选择一至三轮；`-IndependentInterface` 可记录独立网络的公网观测，`-ProxyConfigPath` 指定代理 Core 配置快照。
+
+批量事件即时写入 `events.jsonl`，总结果保存到 `result.json`；执行前后网络快照分别写入 `network-before.json` 与 `network-after.json`。测试失败时进入 `finally`，按当前状态调用恢复账号的诊断版登录，并单独核对恢复结果。执行器独立运行，各阶段进度与结果持续写入日志。
+
 ## 持续集成
 
 GitHub Actions 在 Windows、Linux、macOS 运行 Go 测试、vet 与 Python 离线测试，并在 Windows 运行 PowerShell 示例流程测试。工作流使用固定提交的官方 Actions，常规任务拥有仓库读取权限。校园网实测状态见 [p](p.md) 和 [zfw](zfw.md)。
@@ -87,7 +101,7 @@ GitHub Actions 在 Windows、Linux、macOS 运行 Go 测试、vet 与 Python 离
 | Linux | amd64、arm64 | tar.gz |
 | macOS | amd64、arm64 | tar.gz |
 
-归档包含可执行文件、README、许可证与配置示例，并生成 `SHA256SUMS`。Windows ZIP 另含 `examples/windows/login.ps1` 与使用说明，测试文件保留在源码仓库。每个归档的可执行程序仍为对应平台的一个 `njupt-net`。发布工作流创建草稿 Release，维护者核对版本说明后发布。版本通过 `njupt-net version` 查询；发布构建将标签写入可执行文件。
+归档包含可执行文件、README、许可证与配置示例，并生成 `SHA256SUMS`。Windows ZIP 另含 `examples/windows/` 中的生产登录脚本、诊断入口、诊断采集脚本与使用说明，离线测试文件保留在源码仓库。每个归档的可执行程序仍为对应平台的一个 `njupt-net`。发布工作流创建草稿 Release，维护者核对版本说明后发布。版本通过 `njupt-net version` 查询；发布构建将标签写入可执行文件。
 
 ## 仓库内容
 

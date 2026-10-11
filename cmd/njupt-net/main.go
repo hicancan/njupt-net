@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"time"
 
 	"github.com/hicancan/njupt-net/v4/network"
@@ -32,6 +33,7 @@ Global flags precede the command group:
   --account ALIAS          configured account alias
   --self-url-file PATH     private zfw commands: use this p bridge URL instead of a password
   --timeout 15s            timeout per HTTP request
+  --trace FILE             write HTTP diagnostics as JSON Lines
 Exactly one of --interface or --source is required except for version, interfaces and --help.
 
 p commands:
@@ -81,6 +83,7 @@ Output files must not already exist.
 type options struct {
 	config, account, iface, source string
 	selfURLFile                    string
+	traceFile                      string
 	timeout                        time.Duration
 }
 
@@ -116,6 +119,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&opt.config, "config", "config.json", "credentials file")
 	fs.StringVar(&opt.account, "account", "", "configured account alias")
 	fs.StringVar(&opt.selfURLFile, "self-url-file", "", "private zfw login through a short-lived p bridge URL")
+	fs.StringVar(&opt.traceFile, "trace", "", "HTTP diagnostic JSON Lines file")
 	fs.StringVar(&opt.iface, "interface", "", "campus interface")
 	fs.StringVar(&opt.source, "source", "", "campus source IPv4")
 	fs.DurationVar(&opt.timeout, "timeout", 15*time.Second, "request timeout")
@@ -136,6 +140,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	owner := newCommandContext(opt)
+	if opt.traceFile != "" {
+		file, err := os.OpenFile(opt.traceFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			return finish(stdout, stderr, group, nil, fmt.Errorf("create HTTP trace: %w", err))
+		}
+		defer file.Close()
+		owner.trace = file
+	}
 	if group == "session" {
 		if err := parse(commandFlags(group), remaining[1:]); err != nil {
 			return finish(stdout, stderr, group, nil, err)
@@ -148,10 +160,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	command, data, err := owner.execute(ctx, opt.account, remaining, stderr)
 	err = errors.Join(err, owner.close(ctx))
-	return finish(stdout, stderr, command, data, err)
+	return finish(stdout, stderr, command, data, err, owner.traceError())
 }
 
 func (owner *commandContext) execute(ctx context.Context, alias string, args []string, prompt io.Writer) (string, any, error) {
+	if owner.trace != nil {
+		owner.traceCommand++
+		ctx = network.WithTraceCommand(ctx, strconv.FormatUint(owner.traceCommand, 10), commandName(args))
+	}
 	if len(args) == 0 {
 		return "njupt-net", nil, invalid("a command is required")
 	}

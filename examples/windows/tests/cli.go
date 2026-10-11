@@ -48,6 +48,8 @@ type state struct {
 	SessionArgs   []string                      `json:"session_args"`
 	BoundAt       int64                         `json:"bound_at"`
 	LoginDelayMS  int                           `json:"login_delay_ms"`
+	LoginReplies  []map[string]any              `json:"login_replies"`
+	LoginRepeated map[string]any                `json:"login_repeated"`
 }
 type config struct {
 	Accounts map[string]struct {
@@ -65,6 +67,16 @@ func main() {
 	args := os.Args[1:]
 	if len(args) > 0 && args[len(args)-1] == "session" {
 		os.Exit(runSession(args[:len(args)-1]))
+	}
+	for index := 0; index+1 < len(args) && strings.HasPrefix(args[index], "--"); index += 2 {
+		if args[index] == "--trace" {
+			file, err := os.OpenFile(args[index+1], os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			file.Close()
+		}
 	}
 	os.Exit(runCommand(args, false))
 }
@@ -91,6 +103,16 @@ func sessionState(change func(*state)) state {
 }
 
 func runSession(globalArgs []string) int {
+	for index := 0; index+1 < len(globalArgs); index += 2 {
+		if globalArgs[index] == "--trace" {
+			file, err := os.OpenFile(globalArgs[index+1], os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			file.Close()
+		}
+	}
 	s := sessionState(func(s *state) {
 		s.SessionStarts++
 		s.SessionArgs = append([]string{}, globalArgs...)
@@ -256,6 +278,26 @@ func runCommand(args []string, session bool) int {
 		if message != "" {
 			envelope["error"] = map[string]string{"message": message}
 		}
+		if flags["--trace"] != "" && (strings.HasPrefix(command, "p ") || strings.HasPrefix(command, "zfw ") || command == "probe") {
+			file, err := os.OpenFile(flags["--trace"], os.O_WRONLY|os.O_APPEND, 0600)
+			if err != nil {
+				panic(err)
+			}
+			payload := map[string]any{"result": 1}
+			if data, ok := result.(map[string]any); ok {
+				if data["outcome"] == "rejected" {
+					payload["result"] = 0
+				}
+				if text, ok := data["message"].(string); ok {
+					payload["msg"] = strings.NewReplacer("CAMPUS_NEW_PASSWORD_82a1", "[redacted]", "CAMPUS_OLD_PASSWORD_73e6", "[redacted]", "BROADBAND_PASSWORD_91f4", "[redacted]").Replace(text)
+				}
+			}
+			json.NewEncoder(file).Encode(map[string]any{"command_id": fmt.Sprint(len(s.Calls)), "command": command, "source": source, "interface_index": 12, "started_at": time.Now().Format(time.RFC3339Nano), "payload": payload})
+			file.Close()
+		}
+		if s.Scenario == "diagnostic_trace_error" {
+			envelope["trace_error"] = "write HTTP diagnostic trace: fixture writer failed"
+		}
 		if err := json.NewEncoder(out).Encode(envelope); err != nil {
 			panic(err)
 		}
@@ -324,7 +366,7 @@ func runCommand(args []string, session bool) int {
 			if s.Scenario == "before_offline_identity_changes" && s.Reads["p status"] >= 2 && !wasDisconnected() {
 				account = "unrelated-campus@" + s.Provider
 			}
-			if s.Scenario == "before_offline_mac_changes" && s.Reads["p status"] >= 2 && !wasDisconnected() || s.Scenario == "login_mac_changes" && s.Writes["new:login"] > 0 {
+			if s.Scenario == "before_offline_mac_changes" && s.Reads["p status"] >= 2 && !wasDisconnected() || (s.Scenario == "login_mac_changes" || s.Scenario == "recovery_wrong_mac") && s.Writes["new:login"] > 0 {
 				terminalMAC = "112233445566"
 			}
 			if s.Scenario == "binding_changes_portal_mac" && s.Writes["new:bind"] > 0 {
@@ -351,6 +393,8 @@ func runCommand(args []string, session bool) int {
 		return emit(result, "", 0)
 	}
 	switch command {
+	case "version":
+		return emit(map[string]any{"version": "fixture", "go_version": "fixture", "os": "windows", "arch": "amd64"}, "", 0)
 	case "interfaces":
 		addresses := []string{source}
 		if s.Scenario == "source_changes_after_session_start" {
@@ -365,6 +409,9 @@ func runCommand(args []string, session bool) int {
 		}
 		return emit(rows, "", 0)
 	case "p status":
+		if s.Scenario == "diagnostic_status_error" && s.Writes["new:login"] > 0 {
+			return emit(nil, "diagnostic status failed", 1)
+		}
 		s.Reads["p status"]++
 		if s.Scenario == "pause_status" {
 			save()
@@ -386,6 +433,8 @@ func runCommand(args []string, session bool) int {
 			s.PortalReads++
 		}
 		return emit(status(), "", 0)
+	case "p error":
+		return emit(map[string]any{"outcome": "rejected", "message": "从Radius获取错误代码失败！"}, "portal rejected error information: 从Radius获取错误代码失败！", 1)
 	case "p login":
 		s.Writes[entry.Write]++
 		if s.Online {
@@ -396,9 +445,32 @@ func runCommand(args []string, session bool) int {
 		}
 		const bindingMessage = "未绑定运营商账号,请正确绑定运营商账号再试！"
 		loginFailure := func(outcome, message string, exitCode int) int {
-			return emit(map[string]any{"outcome": outcome, "verified": false, "message": message}, "portal rejected login: "+message, exitCode)
+			return emit(map[string]any{"outcome": outcome, "verified": false, "ret_code": 1, "message": message}, "portal rejected login: "+message, exitCode)
+		}
+		reply := s.LoginRepeated
+		if len(s.LoginReplies) > 0 {
+			reply = s.LoginReplies[0]
+			s.LoginReplies = s.LoginReplies[1:]
+		}
+		if reply != nil {
+			switch s.Scenario {
+			case "recovery_target_online", "recovery_wrong_operator", "recovery_wrong_identity", "recovery_wrong_mac":
+				s.Online = true
+				s.OnlineAccount = cfg.Accounts[alias].Account + "@" + s.Provider
+				if s.Scenario == "recovery_wrong_operator" {
+					s.OnlineAccount = cfg.Accounts[alias].Account + "@njxy"
+				}
+				if s.Scenario == "recovery_wrong_identity" {
+					s.OnlineAccount = "unrelated-campus@" + s.Provider
+				}
+			}
+			return emit(reply, "portal rejected login: "+fmt.Sprint(reply["message"]), 1)
 		}
 		switch s.Scenario {
+		case "login_radius_rejected", "diagnostic_status_error":
+			return loginFailure("rejected", "从Radius获取错误代码失败！", 1)
+		case "diagnostic_secret_message":
+			return loginFailure("rejected", "injected CAMPUS_NEW_PASSWORD_82a1", 1)
 		case "login_password_rejected":
 			return loginFailure("rejected", "账号或密码错误", 1)
 		case "login_binding_message_partial":

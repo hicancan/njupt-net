@@ -31,7 +31,7 @@ pwsh -NoProfile -File examples/windows/login.ps1 -Source SOURCE_IPV4 -Account AC
 | `-Executable COMMAND` | `njupt-net` 可执行文件路径或命令名 | PATH 中的 `njupt-net` |
 | `-TimeoutSeconds SECONDS` | 传给 CLI 的单次网络请求超时 | `15` |
 | `-PortalPort PORT` | 门户端口，可选 `801/802/803/804`；801、803 使用 HTTP，802、804 使用 HTTPS | `801` |
-| `-BindingTimeoutSeconds SECONDS` | 本次新绑定后允许等待认证生效的时间，范围 `0..120` 秒 | `45` |
+| `-LoginTimeoutSeconds SECONDS` | 首次认证起允许恢复登录的时间，范围 `0..120` 秒；`0` 为一次认证 | `45` |
 | `-Probe` | 登录确认后额外探测公网通达性 | 关闭 |
 
 一次执行固定使用最初选定的源 IPv4。脚本先查询网卡并取得该源 IPv4 的互斥锁，再发送校园网络请求；同一源 IPv4 已有流程运行时，新流程报告正在使用并结束。执行期间持有配置文件的只读句柄，Windows 阻止写入、删除和替换，CLI 使用同一份凭据快照。
@@ -54,17 +54,52 @@ pwsh -NoProfile -File examples/windows/login.ps1 -Source SOURCE_IPV4 -Account AC
 
 门户显示离线时，脚本直接继续所需的迁移、绑定和登录。修改前重新读取目标及已找到持有人的绑定，完成后核对门户目标身份与绑定结果。Self 在线列表用于定位需要下线的账号会话；当前终端是否在线由门户状态确定。所有门户操作使用同一个 `PortalPort`。
 
-绑定与解绑由内核提交后重新读取表单，精确核对目标字段。提交新绑定后，脚本立即尝试门户认证；如果门户明确拒绝且完整提示为“未绑定运营商账号,请正确绑定运营商账号再试！”，当前请求完成后便在剩余时间内立即再次认证，首次成功即继续。认证始终串行执行。`BindingTimeoutSeconds` 表示这段生效窗口，限制下一次认证的启动时间；已发出的请求使用 `TimeoutSeconds`。设为 `0` 时只尝试一次。已有绑定直接登录、已经正确在线的路径按当前状态继续。
+绑定与解绑由内核提交后重新读取表单，精确核对目标字段。绑定就绪后立即认证，`LoginTimeoutSeconds` 从首次认证开始计时，限定下一次认证的启动时间；已发出的请求使用 `TimeoutSeconds`。新绑定与已有绑定共用这段恢复流程。
+
+| 原生认证响应 | 恢复动作 |
+|---|---|
+| `ret_code=1`，完整提示“未绑定运营商账号,请正确绑定运营商账号再试！” | 观察门户身份，离线时继续认证 |
+| `ret_code=1`，完整提示“从Radius获取错误代码失败！” | 在恢复窗口内观察并继续认证 |
+| `ret_code=3`，系统繁忙 | 在恢复窗口内观察并继续认证 |
+| `ret_code=8`，服务端认证超时 | 观察认证后的实际身份，离线时继续认证 |
+| `ret_code=2`，终端 IP 已在线 | 查询当前身份，确认目标账号与运营商后直接完成 |
+
+所有恢复动作都要求本次响应明确为 `rejected`、`verified:false`。每次再次认证前读取门户状态；目标身份已经上线便使用该会话，其他身份上线则结束流程。恢复阶段只查询门户与认证目标账号，宽带关系保持已完成的结果。首次恢复立即进行；绑定生效等待保持相邻认证起始时间至少相隔 50 毫秒，连续繁忙或认证服务错误从 100 毫秒逐步增加至最多 1 秒，并扣除请求和状态查询已经花费的时间。成功即结束恢复。
 
 门户登录返回已核验的在线状态，脚本直接用该结果核对源 IP、目标账号、运营商与 MAC。每个账号的 Cookie 与身份单独保存，重复读取仍向服务器查询当前状态。
 
 下线操作选定本机会话；内核在提交前重新读取当前账号在线列表，确认精确 session ID 仍存在，提交后确认该会话消失，脚本再确认门户已离线。宽带绑定属于校园账号级关系，迁移后由目标校园账号持有。
 
-每次内核调用只提交一次修改。外层再次认证仅用于本次新绑定后的上述明确拒绝；网络异常、未知结果、认证接受后核验失败及其他拒绝均结束流程，保留已经完成的步骤。指定 `-Probe` 后，公网探测结果另行报告，已确认的门户登录保持成功。再次手动运行时，脚本重新读取当前状态，决定还需要哪些操作。
+每次内核调用只提交一次修改。外层依据上述原生拒绝决定恢复；凭据或时段拒绝、网络异常、未知结果及认证接受后核验失败结束流程，保留已经完成的步骤和最后错误。指定 `-Probe` 后，公网探测结果另行报告，已确认的门户登录保持成功。再次手动运行时，脚本重新读取当前状态，决定还需要哪些操作。
 
 ## 桌面入口
 
 本机桌面入口调用同一个 `login.ps1`，通过 `-Account` 选择目标账号，并使用绝对路径指定脚本、`-Config` 和 `-Executable`。这样从桌面启动时仍读取指定配置。不同账号的入口只需改变目标账号参数。
+
+## 诊断版
+
+`login-test.ps1` 调用同一份登录流程，并为每次运行建立独立日志目录。诊断版默认启用公网探测，可通过 `-NoProbe` 关闭。
+
+```powershell
+pwsh -NoProfile -File examples/windows/login-test.ps1 -Interface Ethernet -Account ACCOUNT_ALIAS
+```
+
+日志默认保存在当前用户的 `%LOCALAPPDATA%\njupt-net\logs`，启动时显示本次目录。`-LogDirectory DIRECTORY` 指定日志根目录；每次运行使用时间与随机标识命名，保留历次记录。`-ProxyConfigPath FILE` 可指定 v2rayN 生成的 Core 配置，读取其中的 TUN 网卡、自动路由、严格路由和排除地址。
+
+| 文件 | 内容 |
+|---|---|
+| `run.json` | 运行参数、脚本和程序版本与哈希、开始与结束时间、退出码、诊断采集错误 |
+| `events.jsonl` | 按顺序记录 CLI 命令、完整 JSON 响应、步骤耗时和异常位置 |
+| `http.jsonl` | 每个 HTTP 请求的命令标识、实际连接地址、连接复用、DNS、TCP、TLS 与响应耗时，以及门户原生结果字段 |
+| `before.json`、`after.json` | 执行前后的网卡、地址、路由、DNS、系统代理、相关进程与 TUN 设置 |
+| `result.json` | 登录流程最终结果 |
+| `console.stdout.txt`、`console.stderr.txt` | 流程输出与诊断提示 |
+
+`events.jsonl` 中的 `step_id` 与 `http.jsonl` 中的 `command_id` 对应，可以从一次登录步骤追踪到具体请求。`login-recovery` 事件记录认证次数、原生结果码和提示、恢复原因与继续认证或确认上线的决定；继续认证时还记录剩余时间与等待时间。HTTP 日志记录套接字的实际本地和远端地址；网络快照中的路由查询记录当时系统选出的路由。
+
+业务失败后，诊断版在仍持有网卡互斥锁的同一 CLI 会话内读取 `p status` 和 `p error`，记录失败现场。最终结果保留原始失败阶段和错误；认证次数与改绑动作由共享登录流程决定。诊断采集错误单独记入 `run.json` 的 `diagnostic_errors`。
+
+日志保留账号身份、终端地址、原生结果码与错误提示，并过滤密码、Cookie、令牌及 URL 中的会话凭据。生产入口调用 `login.ps1`，默认关闭这些采集。单独调试内核命令时，可以使用 `njupt-net --trace FILE ...` 写入 HTTP JSONL；文件必须为新文件。
 
 ## 结果
 
@@ -80,6 +115,6 @@ pwsh -NoProfile -File examples/windows/login.ps1 -Source SOURCE_IPV4 -Account AC
 
 以上观测均保留已确认的登录结果，退出码为 `0`。探测通过系统 DNS 解析外部域名，再以选定源 IPv4 建立 TCP 连接。
 
-结果的 `command` 为 `login`。`data.account_alias` 是目标账号，`data.portal_port` 是本次门户端口，`data.previous_account_alias` 记录原在线账号，`data.binding_from` 记录迁移前的宽带持有人，`data.binding_moved` 表示本次宽带迁移是否已完成。`data.login_attempts` 记录门户认证次数，保留目标门户会话时为 `0`；`data.binding_activation_seconds` 记录新绑定后的认证阶段用时，保留已有绑定或目标门户会话时为 `0`。`data.steps` 中的 `elapsed_ms` 记录每次 CLI 调用的用时。
+结果的 `command` 为 `login`。`data.account_alias` 是目标账号，`data.portal_port` 是本次门户端口，`data.previous_account_alias` 记录原在线账号，`data.binding_from` 记录迁移前的宽带持有人，`data.binding_moved` 表示本次宽带迁移是否已完成。`data.login_attempts` 记录门户认证次数，`data.login_seconds` 记录认证与恢复阶段的实际用时；直接保留目标门户会话时两项均为 `0`。`data.steps` 中的 `elapsed_ms` 记录每次 CLI 调用的用时。
 
 校园账号和宽带密码由 CLI 从配置文件读取。脚本通过 CLI 的 JSON 结果核对状态，密码保留在配置文件中。

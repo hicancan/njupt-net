@@ -16,10 +16,11 @@ type sessionRequest struct {
 }
 
 type sessionResponse struct {
-	Command  string       `json:"command"`
-	Data     any          `json:"data"`
-	Error    *errorDetail `json:"error,omitempty"`
-	ExitCode int          `json:"exit_code"`
+	Command    string       `json:"command"`
+	Data       any          `json:"data"`
+	Error      *errorDetail `json:"error,omitempty"`
+	ExitCode   int          `json:"exit_code"`
+	TraceError string       `json:"trace_error,omitempty"`
 }
 
 func sessionResult(command string, data any, err error) sessionResponse {
@@ -76,11 +77,16 @@ func runSession(ctx context.Context, owner *commandContext, input io.Reader, out
 	encoder := json.NewEncoder(output)
 	closeSession := func(cause error, respond bool) int {
 		err := errors.Join(cause, owner.close(ctx))
-		if respond || err != nil {
+		traceErr := owner.traceError()
+		if respond || err != nil || traceErr != nil {
 			data := struct {
 				Closed bool `json:"closed"`
 			}{err == nil}
-			if encoder.Encode(sessionResult("close", data, err)) != nil {
+			result := sessionResult("close", data, err)
+			if traceErr != nil {
+				result.TraceError = traceErr.Error()
+			}
+			if encoder.Encode(result) != nil {
 				return 1
 			}
 		}
@@ -119,7 +125,11 @@ func runSession(ctx context.Context, owner *commandContext, input io.Reader, out
 					}
 				}
 			}
-			if encoder.Encode(sessionResult(command, data, err)) != nil {
+			result := sessionResult(command, data, err)
+			if traceErr := owner.traceError(); traceErr != nil {
+				result.TraceError = traceErr.Error()
+			}
+			if encoder.Encode(result) != nil {
 				return 1
 			}
 		}

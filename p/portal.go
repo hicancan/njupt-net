@@ -165,6 +165,11 @@ func (p *Portal) call(ctx context.Context, path string, data url.Values) (map[st
 	p.sequence++
 	callback := "dr" + strconv.FormatUint(p.sequence, 10)
 	data.Set("callback", callback)
+	if network.TraceEnabled(p.client) {
+		if policy := tracePayload(path, callback); policy != nil {
+			ctx = network.WithTracePayload(ctx, policy)
+		}
+	}
 	if path == "logout" || path == "change_pass" {
 		nonce, err := requestNonce()
 		if err != nil {

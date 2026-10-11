@@ -14,21 +14,37 @@ param(
     [ValidateNotNullOrEmpty()][string]$Executable = 'njupt-net',
     [ValidateSet(801, 802, 803, 804)][int]$PortalPort = 801,
     [ValidateRange(1, 300)][int]$TimeoutSeconds = 15,
-    [ValidateRange(0, 120)][int]$BindingTimeoutSeconds = 45,
-    [switch]$Probe
+    [ValidateRange(0, 120)][int]$LoginTimeoutSeconds = 45,
+    [switch]$Probe,
+    [Parameter(DontShow)][object]$Diagnostics = $null
 )
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 function New-CampusContext {
     param([string]$Command, [string]$Executable, [string]$Config, [string]$Interface, [string]$Source, [int]$TimeoutSeconds, [int]$PortalPort)
-    return @{
+    $context = @{
         Command = $Command; Executable = $Executable; Config = $Config
         Interface = $Interface; Source = $Source; TimeoutSeconds = $TimeoutSeconds
         Stage = 'configuration'; Steps = [System.Collections.Generic.List[object]]::new()
         Settings = $null; ConfigFile = $null
         Mutex = $null; MutexOwned = $false; Online = $null; Internet = $null; InternetError = $null
         Session = $null; SessionErrors = $null; PortalPort = $PortalPort
+        Diagnostics = $Diagnostics
+    }
+    if ($Diagnostics) { $context.CommandID = 0 }
+    return $context
+}
+
+function Write-CampusDiagnostic {
+    param($Context, [string]$Kind, $Data)
+    if (-not $Context.Diagnostics) { return }
+    try { $null = $Context.Diagnostics.Emit.Invoke($Kind, $Data) }
+    catch {
+        $message = Protect-CampusMessage $Context $_.Exception.Message
+        $Context.Diagnostics.Errors.Add($message)
+        try { $null = $Context.Diagnostics.Note.Invoke("诊断日志写入失败：$message") }
+        catch { [Console]::Error.WriteLine("诊断日志写入失败：$message") }
     }
 }
 
@@ -44,6 +60,7 @@ function Initialize-CampusContext {
         finally { $reader.Dispose() }
     } catch { throw 'Cannot read the campus account configuration as JSON.' }
     $settings = $Context.Settings
+    if ($Context.Diagnostics) { $null = $Context.Diagnostics.RegisterSecrets.Invoke($settings) }
     if ($settings -isnot [System.Collections.IDictionary] -or -not $settings.Contains('accounts') -or $settings.accounts -isnot [System.Collections.IDictionary]) {
         throw 'Configuration requires an accounts object.'
     }
@@ -82,6 +99,10 @@ function Initialize-CampusContext {
     try { $Context.MutexOwned = $Context.Mutex.WaitOne(0) }
     catch [System.Threading.AbandonedMutexException] { $Context.MutexOwned = $true }
     if (-not $Context.MutexOwned) { throw 'Another campus workflow is using this source IPv4.' }
+    if ($Context.Diagnostics) {
+        try { $null = Invoke-CampusCommand $Context 'diagnostic-version' '' @('version') -Result -Observation }
+        catch { Write-CampusDiagnostic $Context 'observation-error' @{ command = 'version'; message = $_.Exception.Message } }
+    }
 }
 
 function Close-CampusContext {
@@ -111,7 +132,9 @@ function Start-CampusSession {
     $start.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
     $start.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
     $selection = if ($Context.Interface) { @('--interface', $Context.Interface) } else { @('--source', $Context.Source) }
-    foreach ($argument in ($selection + @('--config', $Context.Config, '--timeout', "$($Context.TimeoutSeconds)s", 'session'))) {
+    $arguments = $selection + @('--config', $Context.Config, '--timeout', "$($Context.TimeoutSeconds)s")
+    if ($Context.Diagnostics) { $arguments += @('--trace', $Context.Diagnostics.TraceFile) }
+    foreach ($argument in ($arguments + @('session'))) {
         $start.ArgumentList.Add($argument)
     }
     $process = [System.Diagnostics.Process]::new()
@@ -120,6 +143,7 @@ function Start-CampusSession {
         if (-not $process.Start()) { throw 'Could not start the CLI session.' }
         $Context.Session = $process
         $Context.SessionErrors = $process.StandardError.ReadToEndAsync()
+        if ($Context.Diagnostics) { Write-CampusDiagnostic $Context 'session-start' @{ process_id = $process.Id; executable = $Context.Executable; args = @($start.ArgumentList) } }
     } catch { $process.Dispose(); throw }
 }
 
@@ -127,7 +151,14 @@ function Close-CampusSession {
     param($Context)
     if (-not $Context.Session) { return }
     $process = $Context.Session
+    if ($Context.Diagnostics) {
+        $Context.CommandID++
+        $stepID = [string]$Context.CommandID
+        $startedAt = [System.Diagnostics.Stopwatch]::GetTimestamp()
+        Write-CampusDiagnostic $Context 'session-close-start' @{ step_id = $stepID; process_id = $process.Id }
+    }
     try {
+        if ($Context.Diagnostics) { Write-CampusDiagnostic $Context 'cli-request' @{ step_id = $stepID; process_id = $process.Id; request = @{ args = @('close') } } }
         $process.StandardInput.WriteLine('{"args":["close"]}')
         $process.StandardInput.Flush()
         $line = $process.StandardOutput.ReadLine()
@@ -137,6 +168,7 @@ function Close-CampusSession {
         $process.WaitForExit()
         $extra = $extraTask.GetAwaiter().GetResult()
         $errors = $Context.SessionErrors.GetAwaiter().GetResult()
+        if ($Context.Diagnostics) { Write-CampusDiagnostic $Context 'cli-response' @{ step_id = $stepID; process_id = $process.Id; response = $response; elapsed_ms = [System.Diagnostics.Stopwatch]::GetElapsedTime($startedAt).TotalMilliseconds } }
         if ($response.command -cne 'close' -or $response.exit_code -ne 0 -or $process.ExitCode -ne 0 -or
             $response.Contains('error') -or $response.data.closed -ne $true -or
             -not [string]::IsNullOrWhiteSpace($extra) -or -not [string]::IsNullOrWhiteSpace($errors)) {
@@ -149,6 +181,7 @@ function Close-CampusSession {
         }
     } finally {
         if (-not $process.HasExited) { $process.Kill($true); $process.WaitForExit() }
+        if ($Context.Diagnostics) { Write-CampusDiagnostic $Context 'session-close' @{ step_id = $stepID; process_id = $process.Id; exit_code = $process.ExitCode; elapsed_ms = [System.Diagnostics.Stopwatch]::GetElapsedTime($startedAt).TotalMilliseconds } }
         $process.Dispose()
         $Context.Session = $null
     }
@@ -171,18 +204,24 @@ function Protect-CampusMessage {
 }
 
 function Invoke-CampusCommand {
-    param($Context, [string]$Stage, [string]$AccountAlias, [string[]]$Arguments, [switch]$ObserveProbeFailure, [switch]$Result)
-    $Context.Stage = $Stage
+    param($Context, [string]$Stage, [string]$AccountAlias, [string[]]$Arguments, [switch]$ObserveProbeFailure, [switch]$Result, [switch]$Observation)
+    if (-not $Observation) { $Context.Stage = $Stage }
     if ($Arguments[0] -ceq 'p') { $Arguments += @('--port', [string]$Context.PortalPort) }
     $command = $Arguments[0]
     if ($command -in @('p', 'zfw')) { $command += ' ' + $Arguments[1] }
     if ($ObserveProbeFailure -and $command -cne 'probe') { throw 'Only the Internet probe can report an observation failure.' }
     if ($command -in @('p login', 'zfw offline')) { $Context.Online = $null; $Context.Internet = $null; $Context.InternetError = $null }
     $event = [ordered]@{ stage = $Stage; command = $command; account_alias = $AccountAlias; exit_code = $null; outcome = $null; verified = $null; elapsed_ms = $null }
-    $Context.Steps.Add($event)
+    if (-not $Observation) { $Context.Steps.Add($event) }
     $startedAt = [System.Diagnostics.Stopwatch]::GetTimestamp()
+    if ($Context.Diagnostics) {
+        $Context.CommandID++
+        $stepID = [string]$Context.CommandID
+        Write-CampusDiagnostic $Context 'step-start' @{ step_id = $stepID; stage = $Stage; command = $command; account_alias = $AccountAlias; observation = [bool]$Observation }
+    }
     if (-not $Context.Session) { Start-CampusSession $Context }
     $request = @{ account = $AccountAlias; args = @($Arguments) } | ConvertTo-Json -Compress
+    if ($Context.Diagnostics) { Write-CampusDiagnostic $Context 'cli-request' @{ step_id = $stepID; process_id = $Context.Session.Id; request = @{ account = $AccountAlias; args = @($Arguments) }; observation = [bool]$Observation } }
     try {
         $Context.Session.StandardInput.WriteLine($request)
         $Context.Session.StandardInput.Flush()
@@ -198,6 +237,7 @@ function Invoke-CampusCommand {
         $Context.Session = $null
         $failure = $null
         try { $failure = ConvertFrom-Json -InputObject $errors -AsHashtable -ErrorAction Stop } catch { }
+        if ($Context.Diagnostics) { Write-CampusDiagnostic $Context 'cli-ended' @{ step_id = $stepID; exit_code = $event.exit_code; error_response = $failure; elapsed_ms = $event.elapsed_ms } }
         if ($failure -is [System.Collections.IDictionary] -and $failure.Contains('command') -and $failure.command -ceq 'session' -and
             $failure.Contains('error') -and $failure.error -is [System.Collections.IDictionary] -and
             $failure.error.Contains('message') -and $failure.error.message -is [string] -and -not [string]::IsNullOrWhiteSpace($failure.error.message)) {
@@ -207,7 +247,11 @@ function Invoke-CampusCommand {
     }
     $event.elapsed_ms = [Math]::Round([System.Diagnostics.Stopwatch]::GetElapsedTime($startedAt).TotalMilliseconds, 3)
     try { $envelope = ConvertFrom-Json -InputObject $json -AsHashtable -ErrorAction Stop }
-    catch { throw "CLI '$command' did not return one JSON result." }
+    catch {
+        if ($Context.Diagnostics) { Write-CampusDiagnostic $Context 'cli-invalid-response' @{ step_id = $stepID; command = $command; response_characters = $json.Length; elapsed_ms = $event.elapsed_ms } }
+        throw "CLI '$command' did not return one JSON result."
+    }
+    if ($Context.Diagnostics) { Write-CampusDiagnostic $Context 'cli-response' @{ step_id = $stepID; command = $command; response = $envelope; observation = [bool]$Observation; elapsed_ms = $event.elapsed_ms } }
     if ($envelope -isnot [System.Collections.IDictionary] -or -not $envelope.Contains('command') -or $envelope.command -cne $command -or -not $envelope.Contains('data')) {
         throw "CLI '$command' returned an unexpected result envelope."
     }
@@ -304,18 +348,57 @@ function Assert-CampusOperation {
 }
 
 function Connect-CampusTerminal {
-    param($Context, [string]$AccountAlias, [string]$Operator, $BindingTimer, [int]$BindingTimeoutSeconds, $Details)
-    while ($true) {
-        $Details.login_attempts++
-        $response = Invoke-CampusCommand $Context 'login' $AccountAlias @('p', 'login', '--operator', $Operator) -Result
-        if ($response.exit_code -eq 0) { return ,$response.data }
-        $result = $response.data
-        $bindingPending = $BindingTimer -and $response.exit_code -eq 1 -and $result -is [System.Collections.IDictionary] -and
-            $result.Contains('outcome') -and $result.outcome -ceq 'rejected' -and
-            $result.Contains('verified') -and $result.verified -is [bool] -and -not $result.verified -and
-            $result.Contains('message') -and $result.message -ceq '未绑定运营商账号,请正确绑定运营商账号再试！'
-        if (-not $bindingPending -or $BindingTimer.Elapsed.TotalSeconds -ge $BindingTimeoutSeconds) { throw $response.error.message }
-        $Context.Stage = 'binding-activation'
+    param($Context, [string]$AccountAlias, [string]$Operator, [int]$LoginTimeoutSeconds, $Details)
+    $timer = [System.Diagnostics.Stopwatch]::StartNew()
+    $lastError = ''
+    try {
+        while ($true) {
+            if ($Details.login_attempts -gt 0 -and $timer.Elapsed.TotalSeconds -ge $LoginTimeoutSeconds) {
+                $Context.Stage = 'login'
+                throw $lastError
+            }
+            $attemptStarted = [System.Diagnostics.Stopwatch]::GetTimestamp()
+            $Details.login_attempts++
+            $response = Invoke-CampusCommand $Context 'login' $AccountAlias @('p', 'login', '--operator', $Operator) -Result
+            if ($response.exit_code -eq 0) {
+                Assert-CampusOperation $response.data
+                if (-not $response.data.Contains('status')) { throw 'Verified login did not return the terminal status.' }
+                return Confirm-CampusStatus $Context $response.data.status
+            }
+            $lastError = $response.error.message
+            $result = $response.data
+            if ($response.exit_code -ne 1 -or $result -isnot [System.Collections.IDictionary] -or
+                -not $result.Contains('outcome') -or $result.outcome -cne 'rejected' -or
+                -not $result.Contains('verified') -or $result.verified -isnot [bool] -or $result.verified) { throw $lastError }
+            $code = ''
+            if ($result.Contains('ret_code') -and ($result.ret_code -is [int] -or $result.ret_code -is [long] -or $result.ret_code -is [string])) { $code = [string]$result.ret_code }
+            $message = if ($result.Contains('message') -and $result.message -is [string]) { $result.message } else { '' }
+            $reason = switch ($code) {
+                '2' { 'already-online' }
+                '3' { 'server-busy' }
+                '8' { 'authentication-timeout' }
+                '1' {
+                    if ($message -ceq '未绑定运营商账号,请正确绑定运营商账号再试！') { 'binding-pending' }
+                    elseif ($message -ceq '从Radius获取错误代码失败！') { 'radius-error-unavailable' }
+                }
+            }
+            if (-not $reason -or ($reason -cne 'already-online' -and $timer.Elapsed.TotalSeconds -ge $LoginTimeoutSeconds)) { throw $lastError }
+            $state = Get-CampusStatus $Context 'login-recovery-status'
+            if ($state.online) {
+                Assert-CampusIdentity $Context $state $AccountAlias $Operator
+                if ($Context.Diagnostics) { Write-CampusDiagnostic $Context 'login-recovery' @{ attempt = $Details.login_attempts; reason = $reason; decision = 'online-confirmed'; ret_code = $result.ret_code; message = $message; elapsed_ms = $timer.Elapsed.TotalMilliseconds } }
+                return $state
+            }
+            if ($reason -ceq 'already-online') { $Context.Stage = 'login'; throw $lastError }
+            $interval = if ($Details.login_attempts -eq 1) { 0 } elseif ($reason -ceq 'binding-pending') { 50 } else { [Math]::Min(1000, 100 * [Math]::Pow(2, [Math]::Min(4, $Details.login_attempts - 2))) }
+            $remaining = $LoginTimeoutSeconds * 1000 - $timer.Elapsed.TotalMilliseconds
+            $delay = [Math]::Max(0.0, $interval - [System.Diagnostics.Stopwatch]::GetElapsedTime($attemptStarted).TotalMilliseconds)
+            if ($remaining -le 0 -or $delay -ge $remaining) { $Context.Stage = 'login'; throw $lastError }
+            if ($Context.Diagnostics) { Write-CampusDiagnostic $Context 'login-recovery' @{ attempt = $Details.login_attempts; reason = $reason; decision = 'retry'; ret_code = $result.ret_code; message = $message; elapsed_ms = $timer.Elapsed.TotalMilliseconds; remaining_ms = $remaining; delay_ms = $delay } }
+            if ($delay -gt 0) { Start-Sleep -Milliseconds ([int][Math]::Ceiling($delay)) }
+        }
+    } finally {
+        $Details.login_seconds = [Math]::Round($timer.Elapsed.TotalSeconds, 3)
     }
 }
 
@@ -356,8 +439,28 @@ function Write-CampusResult {
     $result = [ordered]@{ command = $Context.Command; data = $data }
     if ($Message) {
         $result.error = @{ message = Protect-CampusMessage $Context $Message }
-        [Console]::Error.WriteLine(($result | ConvertTo-Json -Depth 12))
-    } else { [Console]::Out.WriteLine(($result | ConvertTo-Json -Depth 12)) }
+        $text = $result | ConvertTo-Json -Depth 12
+        if ($Context.Diagnostics) { Write-CampusDiagnostic $Context 'result' @{ result = $result; stream = 'stderr'; console = $text; exit_code = 1 } }
+        [Console]::Error.WriteLine($text)
+    } else {
+        $text = $result | ConvertTo-Json -Depth 12
+        if ($Context.Diagnostics) { Write-CampusDiagnostic $Context 'result' @{ result = $result; stream = 'stdout'; console = $text; exit_code = 0 } }
+        [Console]::Out.WriteLine($text)
+    }
+}
+
+function Invoke-CampusFailureDiagnostics {
+    param($Context)
+    if (-not $Context.Diagnostics) { return }
+    if (-not $Context.MutexOwned -or -not $Context.Session -or $Context.Session.HasExited) {
+        Write-CampusDiagnostic $Context 'observation-skipped' @{ reason = 'No active locked CLI session.' }
+        return
+    }
+    foreach ($command in @('status', 'error')) {
+        if (-not $Context.Session -or $Context.Session.HasExited) { break }
+        try { $null = Invoke-CampusCommand $Context ('diagnostic-' + $command) '' @('p', $command) -Result -Observation }
+        catch { Write-CampusDiagnostic $Context 'observation-error' @{ command = 'p ' + $command; message = $_.Exception.Message } }
+    }
 }
 
 function Get-CampusPortalAlias {
@@ -385,8 +488,7 @@ function Assert-CampusEmptyBinding {
 }
 
 $context = New-CampusContext 'login' $Executable $Config $Interface $Source $TimeoutSeconds $PortalPort
-$details = @{ account_alias = $Account; portal_port = $PortalPort; operator = $null; previous_account_alias = $null; binding_from = $null; binding_moved = $false; binding_activation_seconds = 0; login_attempts = 0 }
-$bindingTimer = $null
+$details = @{ account_alias = $Account; portal_port = $PortalPort; operator = $null; previous_account_alias = $null; binding_from = $null; binding_moved = $false; login_seconds = 0; login_attempts = 0 }
 try {
     Initialize-CampusContext $context @($Account)
     $context.Stage = 'configuration'
@@ -461,7 +563,6 @@ try {
             Assert-CampusOperation $bound
             if ($bound.operator -cne $operator -or $bound.account -cne $broadband.account -or
                 -not (Test-CampusBroadband $bound.bindings $broadband)) { throw 'Target broadband binding does not match the configured account.' }
-            $bindingTimer = [System.Diagnostics.Stopwatch]::StartNew()
             $details.binding_moved = [bool]$holder
         }
         if ($portalReady) {
@@ -469,11 +570,7 @@ try {
             $portalReady = $after.online
         }
         if (-not $portalReady) {
-            $loggedIn = Connect-CampusTerminal $context $Account $operator $bindingTimer $BindingTimeoutSeconds $details
-            if ($bindingTimer) { $details.binding_activation_seconds = [Math]::Round($bindingTimer.Elapsed.TotalSeconds, 3) }
-            Assert-CampusOperation $loggedIn
-            if (-not $loggedIn.Contains('status')) { throw 'Verified login did not return the terminal status.' }
-            $after = Confirm-CampusStatus $context $loggedIn.status
+            $after = Connect-CampusTerminal $context $Account $operator $LoginTimeoutSeconds $details
         }
         Assert-CampusIdentity $context $after $Account $operator
         if ($state.online -and (ConvertTo-CampusMac $after.terminal.mac) -cne (ConvertTo-CampusMac $state.terminal.mac)) { throw 'Terminal MAC changed during login.' }
@@ -486,7 +583,8 @@ try {
     exit 0
 } catch {
     $message = $_.Exception.Message
-    if ($bindingTimer) { $details.binding_activation_seconds = [Math]::Round($bindingTimer.Elapsed.TotalSeconds, 3) }
+    if ($context.Diagnostics) { Write-CampusDiagnostic $context 'workflow-error' @{ stage = $context.Stage; message = $message; exception_type = $_.Exception.GetType().FullName; stack = $_.ScriptStackTrace } }
+    Invoke-CampusFailureDiagnostics $context
     try { Close-CampusSession $context } catch { $message += " Management session cleanup failed: $($_.Exception.Message)" }
     Write-CampusResult $context $details $message
     exit 1

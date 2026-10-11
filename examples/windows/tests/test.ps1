@@ -116,7 +116,7 @@ function Invoke-Login([hashtable] $Case, [string[]] $Selection = @('-Interface',
     $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot '../login.ps1'))
     $arguments += $Selection
     if (-not $UseDefaultConfig) { $arguments += @('-Config', ($Case.ConfigArgument ?? $Case.ConfigPath)) }
-    $arguments += @('-Executable', ($Case.Executable ?? $executable), '-TimeoutSeconds', '1', '-Account', ($Case.Account ?? 'new'), '-BindingTimeoutSeconds', [string]($Case.BindingTimeoutSeconds ?? 0))
+    $arguments += @('-Executable', ($Case.Executable ?? $executable), '-TimeoutSeconds', '1', '-Account', ($Case.Account ?? 'new'), '-LoginTimeoutSeconds', [string]($Case.LoginTimeoutSeconds ?? 0))
     if ($Case.ContainsKey('PortalPort')) { $arguments += @('-PortalPort', [string]$Case.PortalPort) }
     if ($Case.Probe ?? $true) { $arguments += '-Probe' }
     $environment = @{ NJUPT_NET_FAKE_STATE = $Case.StatePath }
@@ -181,9 +181,8 @@ exit $LASTEXITCODE
         Assert-True (-not ($call.args -contains '--interface')) 'Login selected an interface again after source resolution.'
     }
     foreach ($group in @($observed.calls | Where-Object write | Group-Object write)) {
-        $activationRetry = $group.Name -eq 'new:login' -and $observed.writes['new:bind'] -gt 0 -and
-            $Case.State.scenario -in @('binding_activation_delayed', 'portal_binding_unsynchronized') -and ($Case.BindingTimeoutSeconds ?? 0) -gt 0
-        Assert-True ($group.Count -eq 1 -or $activationRetry) 'Login repeated a mutation outside a newly assigned binding activation window.'
+        $authenticationRetry = $group.Name -eq 'new:login' -and ($Case.LoginTimeoutSeconds ?? 0) -gt 0
+        Assert-True ($group.Count -eq 1 -or $authenticationRetry) 'Login repeated a mutation other than target authentication.'
     }
     $startupFailure = $Case.State.scenario -like 'session_start_*'
     $expectedSessions = $(if ($observed.calls.Count -gt 0 -or $startupFailure) { 1 } else { 0 })
@@ -213,10 +212,8 @@ function Assert-Success([hashtable] $Observed, [hashtable] $Case, [string] $Name
     Assert-True ($data.previous_account_alias -eq $Case.Previous -and $data.binding_from -eq $Case.Holder -and $data.binding_moved -eq [bool]$Case.Holder) "$Name returned an incorrect previous account or binding holder."
     $loginCalls = @($Observed.State.calls | Where-Object command -eq 'p login')
     Assert-True ($data.ContainsKey('login_attempts') -and $data.login_attempts -eq $loginCalls.Count) "$Name returned an incorrect authentication attempt count."
-    Assert-True ($data.ContainsKey('binding_activation_seconds') -and $data.binding_activation_seconds -ge 0) "$Name omitted binding activation duration."
-    if (@($Observed.State.calls | Where-Object write -eq 'new:bind').Count -eq 0) {
-        Assert-True ($data.binding_activation_seconds -eq 0) "$Name activated an existing binding."
-    }
+    Assert-True ($data.ContainsKey('login_seconds') -and $data.login_seconds -ge 0) "$Name omitted authentication duration."
+    if ($loginCalls.Count -eq 0) { Assert-True ($data.login_seconds -eq 0) "$Name reported authentication time without authenticating." }
     Assert-True (@($Observed.Result.data.steps | Where-Object stage -in @('login-status', 'final-target-binding', 'final-old-binding', 'bound-target-binding', 'unbound-holder-binding')).Count -eq 0) 'Login repeated verification already provided by the core operation result.'
     $other = $(if ($Case.State.provider -eq 'cmcc') { 'njxy' } else { 'cmcc' })
     foreach ($alias in $Case.State.bindings.Keys) {
@@ -229,10 +226,10 @@ $workflowTokens = $null
 $workflowErrors = $null
 $workflowAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../login.ps1'), [ref]$workflowTokens, [ref]$workflowErrors)
 Assert-True ($workflowErrors.Count -eq 0) 'Login script could not be parsed.'
-$timeoutParameter = @($workflowAst.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'BindingTimeoutSeconds' })
-Assert-True ($timeoutParameter.Count -eq 1 -and $timeoutParameter[0].DefaultValue.SafeGetValue() -eq 45) 'Binding activation timeout must default to 45 seconds.'
+$timeoutParameter = @($workflowAst.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'LoginTimeoutSeconds' })
+Assert-True ($timeoutParameter.Count -eq 1 -and $timeoutParameter[0].DefaultValue.SafeGetValue() -eq 45) 'Authentication recovery timeout must default to 45 seconds.'
 Assert-True (@($workflowAst.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'BindingWaitSeconds' }).Count -eq 0) 'Login retained its fixed binding wait parameter.'
-$completed.Add('binding activation timeout defaults to 45 seconds without a fixed wait')
+$completed.Add('authentication recovery defaults to 45 seconds without a fixed initial wait')
 $portParameter = @($workflowAst.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'PortalPort' })
 Assert-True ($portParameter.Count -eq 1) 'Login omitted its portal port parameter.'
 $defaultPortalPort = $portParameter[0].DefaultValue.SafeGetValue()
@@ -286,7 +283,7 @@ foreach ($provider in @('cmcc', 'njxy')) {
     Assert-Success $observed $case "$provider target portal session survives a binding transfer"
     Assert-Writes $observed @('old:unbind', 'new:bind')
     Assert-True (@($observed.State.calls | Where-Object command -eq 'zfw online').Count -eq 0) 'Binding transfer queried sessions for an already selected target portal identity.'
-    Assert-True ($observed.Result.data.login_attempts -eq 0 -and $observed.Result.data.binding_activation_seconds -eq 0) 'Binding transfer reauthenticated the existing target portal session.'
+    Assert-True ($observed.Result.data.login_attempts -eq 0 -and $observed.Result.data.login_seconds -eq 0) 'Binding transfer reauthenticated the existing target portal session.'
     Assert-True (@($observed.Result.data.steps | Where-Object stage -eq 'binding-status').Count -eq 1) 'Binding transfer did not confirm the preserved portal session.'
 }
 
@@ -328,7 +325,7 @@ foreach ($port in @(801, 802, 803, 804)) {
 }
 
 $case = New-Case 'unowned_offline' 'cmcc' 'binding_activation_delayed'
-$case.BindingTimeoutSeconds = 45
+$case.LoginTimeoutSeconds = 45
 $case.State.login_delay_ms = 350
 $observed = Invoke-Login $case
 Assert-Success $observed $case 'binding activation authenticates as soon as the assignment is available'
@@ -346,7 +343,7 @@ for ($index = 1; $index -lt $loginCalls.Count; $index++) {
 }
 $firstLoginStep = @($steps | Where-Object command -eq 'p login')[0]
 Assert-True ($firstLoginStep.elapsed_ms -ge 350) 'Authentication timing omitted the server request duration.'
-Assert-True ($observed.Result.data.binding_activation_seconds -lt 10) 'Login waited for the entire activation timeout after authentication was available.'
+Assert-True ($observed.Result.data.login_seconds -lt 10) 'Login waited for the entire activation timeout after authentication was available.'
 
 $case = New-Case 'ready_online'
 $case.State.online_account = ',1,new-campus@cmcc'
@@ -456,7 +453,7 @@ foreach ($provider in @('cmcc', 'njxy')) {
 
 foreach ($deadline in @(0, 1, 2)) {
     $case = New-Case 'unowned_offline' 'cmcc' 'portal_binding_unsynchronized'
-    $case.BindingTimeoutSeconds = $deadline
+    $case.LoginTimeoutSeconds = $deadline
     $observed = Invoke-Login $case
     Assert-True ($observed.Process.ExitCode -eq 1) 'Login accepted an assignment that remained unavailable for authentication.'
     $loginCalls = @($observed.State.calls | Where-Object command -eq 'p login')
@@ -471,27 +468,150 @@ foreach ($deadline in @(0, 1, 2)) {
         Assert-True ($loginCalls[$index].received_ns -ge $loginCalls[$index - 1].returned_ns) 'Login started another authentication before the previous request completed.'
     }
     Assert-True ($observed.Result.error.message -ceq 'portal rejected login: 未绑定运营商账号,请正确绑定运营商账号再试！') 'Activation timeout replaced the server rejection.'
-    Assert-True ($observed.Result.data.binding_activation_seconds -ge $deadline -and $observed.Result.data.binding_activation_seconds -lt ($deadline + 5)) 'Binding activation duration did not describe the elapsed deadline.'
+    Assert-True ($observed.Result.data.login_seconds -ge [Math]::Max(0.0, [double]$deadline - 0.15) -and $observed.Result.data.login_seconds -lt ($deadline + 5)) 'Authentication duration did not describe the recovery deadline.'
     Assert-True (@($observed.State.calls | Where-Object command -eq 'probe').Count -eq 0) 'Login probed after its authentication deadline expired.'
     $completed.Add("new binding authentication respects the $deadline second activation deadline")
 }
 
 foreach ($scenario in @('login_password_rejected', 'login_binding_message_partial', 'login_binding_unknown', 'login_binding_unverified', 'login_binding_exit2', 'login_network_error')) {
     $case = New-Case 'unowned_offline' 'cmcc' $scenario
-    $case.BindingTimeoutSeconds = 2
+    $case.LoginTimeoutSeconds = 2
     $observed = Invoke-Login $case
     Assert-True ($observed.Process.ExitCode -eq 1 -and $observed.Result.data.login_attempts -eq 1) "Login retried $scenario."
     Assert-Writes $observed @('new:bind', 'new:login')
-    Assert-True ($observed.Result.data.binding_activation_seconds -lt 1) 'Login delayed a rejection that did not exactly describe pending binding activation.'
+    Assert-True ($observed.Result.data.login_seconds -lt 1) 'Login delayed a rejection that did not exactly describe pending binding activation.'
     $completed.Add("binding activation does not retry $scenario")
 }
 
 $case = New-Case 'ready_offline' 'cmcc' 'portal_binding_unsynchronized'
-$case.BindingTimeoutSeconds = 2
+$case.LoginTimeoutSeconds = 2
 $observed = Invoke-Login $case
-Assert-True ($observed.Process.ExitCode -eq 1 -and $observed.Result.data.login_attempts -eq 1 -and $observed.Result.data.binding_activation_seconds -eq 0) 'Login retried authentication for an existing binding.'
+Assert-True ($observed.Process.ExitCode -eq 1 -and $observed.Result.data.login_attempts -gt 1) 'Login did not recover a pending existing binding.'
+Assert-Writes $observed (@('new:login') * $observed.Result.data.login_attempts)
+$completed.Add('existing bindings recover authentication without modifying the binding')
+
+function New-LoginRejection($Code, [string]$Message) {
+    return @{ outcome = 'rejected'; verified = $false; ret_code = $Code; message = $Message }
+}
+
+$recoverable = @(
+    (New-LoginRejection 1 '未绑定运营商账号,请正确绑定运营商账号再试！'),
+    (New-LoginRejection 1 '从Radius获取错误代码失败！'),
+    (New-LoginRejection 3 'AC999'),
+    (New-LoginRejection 8 'Portal协议认证超时！')
+)
+foreach ($plan in @('unowned_offline', 'migrate_offline', 'ready_offline')) {
+    foreach ($reply in $recoverable) {
+        $case = New-Case $plan
+        $case.LoginTimeoutSeconds = 4
+        $case.State.login_replies = @($reply, $reply)
+        $observed = Invoke-Login $case
+        Assert-Success $observed $case "$plan recovers $($reply.message)"
+        $logins = @($observed.State.calls | Where-Object command -eq 'p login')
+        Assert-True ($logins.Count -eq 3) 'Recovery did not stop at the first confirmed authentication.'
+        $prefix = @(switch ($plan) { 'unowned_offline' { 'new:bind' }; 'migrate_offline' { 'old:unbind'; 'new:bind' } })
+        Assert-Writes $observed (@($prefix) + @('new:login') * 3)
+        $firstLogin = [Array]::IndexOf([object[]]$observed.State.calls, $logins[0])
+        $tail = @($observed.State.calls | Select-Object -Skip ($firstLogin + 1))
+        Assert-True (@($tail | Where-Object { $_.command -notin @('p status', 'p login', 'probe') }).Count -eq 0) 'Recovery revisited account management after authentication started.'
+        Assert-True (($logins[1].received_ns - $logins[0].returned_ns) / 1000000 -lt 250) 'First authentication recovery added a fixed wait.'
+        for ($index = 1; $index -lt $logins.Count; $index++) { Assert-True ($logins[$index].received_ns -ge $logins[$index - 1].returned_ns) 'Authentication recovery overlapped requests.' }
+    }
+}
+
+$case = New-Case 'migrate_offline'
+$case.LoginTimeoutSeconds = 10
+$case.State.login_replies = @($recoverable[1], $recoverable[1], $recoverable[3], $recoverable[2], $recoverable[2], $recoverable[0])
+$observed = Invoke-Login $case
+Assert-Success $observed $case 'recorded Radius, timeout, busy and binding responses recover in one target workflow'
+Assert-Writes $observed (@('old:unbind', 'new:bind') + @('new:login') * 7)
+Assert-True ($observed.Result.data.login_attempts -eq 7) 'Mixed recovery lost or repeated an authentication result.'
+
+foreach ($code in @('3', '8')) {
+    $case = New-Case 'ready_offline'
+    $case.LoginTimeoutSeconds = 2
+    $case.State.login_replies = @((New-LoginRejection $code 'native string code'))
+    $observed = Invoke-Login $case
+    Assert-Success $observed $case "native string ret_code $code preserves the recovery decision"
+    Assert-Writes $observed @('new:login', 'new:login')
+}
+
+foreach ($deadline in @(0, 1, 2)) {
+    $case = New-Case 'ready_offline'
+    $case.LoginTimeoutSeconds = $deadline
+    $case.State.login_repeated = $recoverable[2]
+    $observed = Invoke-Login $case
+    $logins = @($observed.State.calls | Where-Object command -eq 'p login')
+    Assert-True ($observed.Process.ExitCode -eq 1 -and $observed.Result.data.stage -eq 'login' -and $observed.Result.error.message -ceq 'portal rejected login: AC999') 'Recovery expiry replaced the last native failure.'
+    Assert-Writes $observed (@('new:login') * $logins.Count)
+    if ($deadline -eq 0) { Assert-True ($logins.Count -eq 1) 'Zero recovery timeout issued another authentication.' }
+    else {
+        Assert-True ($logins.Count -gt 1 -and ($logins[-1].received_ns - $logins[0].received_ns) / 1000000 -lt ($deadline * 1000 + 100)) 'Recovery started authentication beyond its deadline.'
+        Assert-True (($logins[-1].received_ns - $logins[-2].received_ns) / 1000000 -ge 90) 'Repeated busy replies caused an unrestricted authentication loop.'
+    }
+    $completed.Add("persistent busy authentication respects the $deadline second recovery window")
+}
+
+$case = New-Case 'ready_offline'
+$case.LoginTimeoutSeconds = 1
+$case.State.login_replies = @($recoverable[2])
+$case.State.login_delay_ms = 1100
+$observed = Invoke-Login $case
+Assert-True ($observed.Process.ExitCode -eq 1 -and $observed.Result.data.login_attempts -eq 1) 'Recovery restarted authentication after the first response exhausted its deadline.'
 Assert-Writes $observed @('new:login')
-$completed.Add('existing bindings do not enter the activation retry window')
+$completed.Add('recovery deadline counts in-flight server time')
+
+foreach ($code in @(2, 3, 8)) {
+    $case = New-Case 'migrate_online' 'cmcc' 'recovery_target_online'
+    $case.LoginTimeoutSeconds = $(if ($code -eq 2) { 0 } else { 2 })
+    $case.State.login_replies = @((New-LoginRejection $code 'native rejection'))
+    $observed = Invoke-Login $case
+    Assert-Success $observed $case "ret_code $code uses an observed target session without another authentication"
+    Assert-Writes $observed @('old:offline', 'old:unbind', 'new:bind', 'new:login')
+    Assert-True ($observed.Result.data.login_attempts -eq 1) 'Recovery reauthenticated a target already observed online.'
+}
+
+foreach ($scenario in @('recovery_wrong_identity', 'recovery_wrong_operator', 'recovery_wrong_mac')) {
+    $case = New-Case 'migrate_online' 'cmcc' $scenario
+    $case.LoginTimeoutSeconds = 2
+    $case.State.login_replies = @($recoverable[2])
+    $observed = Invoke-Login $case
+    Assert-True ($observed.Process.ExitCode -eq 1 -and $observed.Result.data.login_attempts -eq 1) 'Recovery accepted or replaced an unexpected online terminal.'
+    Assert-Writes $observed @('old:offline', 'old:unbind', 'new:bind', 'new:login')
+    $completed.Add("recovery stops on $scenario without further mutation")
+}
+
+$case = New-Case 'ready_offline'
+$case.LoginTimeoutSeconds = 2
+$case.State.login_replies = @($recoverable[2])
+$case.State.fail_at = 5
+$case.State.failure_mode = 'secret_error'
+$observed = Invoke-Login $case
+Assert-True ($observed.Process.ExitCode -eq 1 -and $observed.Result.data.stage -eq 'login-recovery-status') 'Recovery ignored a failed portal observation.'
+Assert-Writes $observed @('new:login')
+$completed.Add('failed recovery state observation prevents another authentication')
+
+$stopReplies = @(
+    (New-LoginRejection 1 '账号或密码错误'), (New-LoginRejection 1 '不允许在当前时段上网'),
+    (New-LoginRejection 7 'Radius认证失败'), (New-LoginRejection 5 'REQ_CHALLENGE失败'),
+    (New-LoginRejection 6 'REQ_CHALLENGE超时'), (New-LoginRejection 11 '其他错误'),
+    (New-LoginRejection 1 '未绑定运营商账号'), (New-LoginRejection '03' 'AC999'),
+    (New-LoginRejection '3junk' 'AC999'), (New-LoginRejection @('3') 'AC999'),
+    (New-LoginRejection $true 'AC999'),
+    @{ outcome = 'unknown'; verified = $false; ret_code = 3; message = 'AC999' },
+    @{ outcome = 'accepted'; verified = $false; ret_code = 3; message = 'AC999' },
+    @{ outcome = 'rejected'; verified = $true; ret_code = 3; message = 'AC999' },
+    @{ outcome = 'rejected'; ret_code = 3; message = 'AC999' }
+)
+foreach ($reply in $stopReplies) {
+    $case = New-Case 'ready_offline'
+    $case.LoginTimeoutSeconds = 2
+    $case.State.login_replies = @($reply)
+    $observed = Invoke-Login $case
+    Assert-True ($observed.Process.ExitCode -eq 1 -and $observed.Result.data.login_attempts -eq 1) 'Recovery repeated an unclassified or unverified authentication result.'
+    Assert-Writes $observed @('new:login')
+    $completed.Add("authentication recovery preserves $($reply.outcome), code $($reply.ret_code), $($reply.message)")
+}
 
 foreach ($scenario in @('close_error', 'close_wrong_envelope', 'close_eof', 'close_extra_output')) {
     $case = New-Case 'ready_online' 'cmcc' $scenario
@@ -716,5 +836,127 @@ if ($IsWindows) {
 $case = New-Case 'ready_offline'
 $observed = Invoke-Login $case
 Assert-Success $observed $case 'completed login releases its source lock'
+
+function Invoke-DiagnosticLogin([hashtable]$Case) {
+    [IO.File]::WriteAllText($Case.ConfigPath, ($Case.RawConfig ?? ($Case.Config | ConvertTo-Json -Depth 20)), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($Case.StatePath, ($Case.State | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+    $logRoot = Join-Path $Case.Directory 'diagnostic logs'
+    $existing = @(Get-ChildItem -LiteralPath $logRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object Name)
+    $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot '../login-test.ps1'), '-Interface', '校园 有线 网络', '-Account', 'new', '-Executable', $executable, '-Config', $Case.ConfigPath, '-LogDirectory', $logRoot, '-TimeoutSeconds', '1', '-LoginTimeoutSeconds', [string]($Case.LoginTimeoutSeconds ?? 0), '-NoProbe')
+    $process = Invoke-Process $pwsh $arguments @{ NJUPT_NET_FAKE_STATE = $Case.StatePath } $Case.Directory
+    $created = @(Get-ChildItem -LiteralPath $logRoot -Directory | Where-Object Name -NotIn $existing)
+    Assert-True ($created.Count -eq 1) 'Diagnostic login did not create exactly one new run directory.'
+    $directory = $created[0].FullName
+    foreach ($name in @('run.json', 'events.jsonl', 'http.jsonl', 'before.json', 'after.json', 'result.json', 'console.stdout.txt', 'console.stderr.txt')) {
+        Assert-True (Test-Path -LiteralPath (Join-Path $directory $name)) "Diagnostic run omitted $name."
+    }
+    $events = @(Get-Content -LiteralPath (Join-Path $directory 'events.jsonl') | ForEach-Object { $_ | ConvertFrom-Json -AsHashtable })
+    $run = Get-Content -LiteralPath (Join-Path $directory 'run.json') -Raw | ConvertFrom-Json -AsHashtable
+    $result = Get-Content -LiteralPath (Join-Path $directory 'result.json') -Raw | ConvertFrom-Json -AsHashtable
+    Assert-True ([IO.File]::ReadAllText((Join-Path $directory 'console.stdout.txt')) -ceq $process.Stdout) 'Diagnostic console log lost or changed standard output.'
+    Assert-True ([IO.File]::ReadAllText((Join-Path $directory 'console.stderr.txt')) -ceq $process.Stderr) 'Diagnostic console log lost or changed standard error.'
+    Assert-True ($events[0].event -eq 'run-start' -and $events[-1].event -eq 'run-exit') 'Diagnostic events did not cover the complete run lifetime.'
+    Assert-True ($run.exit_code -eq $process.ExitCode) 'Diagnostic summary lost the process exit code.'
+    $requests = @($events | Where-Object event -eq 'cli-request')
+    $requestIDs = @($requests | ForEach-Object { $_.data.step_id })
+    Assert-True (@($requestIDs | Select-Object -Unique).Count -eq $requestIDs.Count) 'Diagnostic command identifiers were reused.'
+    $http = @(Get-Content -LiteralPath (Join-Path $directory 'http.jsonl') | ForEach-Object { $_ | ConvertFrom-Json -AsHashtable })
+    foreach ($record in $http) {
+        Assert-True ($record.command_id -cin $requestIDs) 'HTTP request could not be correlated with a CLI operation.'
+    }
+    $logText = $process.Stdout + $process.Stderr + (@(Get-ChildItem -LiteralPath $directory -File | ForEach-Object { [IO.File]::ReadAllText($_.FullName) }) -join '')
+    foreach ($secret in $secrets) { Assert-True (-not $logText.Contains($secret)) 'A password reached diagnostic logs.' }
+    return @{ Process = $process; State = (Get-Content -LiteralPath $Case.StatePath -Raw | ConvertFrom-Json -AsHashtable); Result = $result; Run = $run; Events = $events; Directory = $directory }
+}
+
+$case = New-Case 'ready_offline'
+$diagnostic = Invoke-DiagnosticLogin $case
+Assert-True ($diagnostic.Process.ExitCode -eq 0 -and $diagnostic.Result.data.stage -eq 'complete') 'Diagnostic login did not preserve successful production behavior.'
+Assert-True ($diagnostic.State.session_starts -eq 1 -and $diagnostic.State.session_closes -eq 1) 'Diagnostic login changed CLI session ownership.'
+$previousDirectory = $diagnostic.Directory
+$diagnostic = Invoke-DiagnosticLogin $case
+Assert-True ($diagnostic.Directory -cne $previousDirectory) 'A repeated diagnostic login overwrote earlier logs.'
+$completed.Add('diagnostic login preserves success and creates one unique complete run per invocation')
+
+foreach ($scenario in @('login_radius_rejected', 'diagnostic_status_error', 'diagnostic_secret_message')) {
+    $case = New-Case 'migrate_offline' 'cmcc' $scenario
+    $diagnostic = Invoke-DiagnosticLogin $case
+    Assert-True ($diagnostic.Process.ExitCode -eq 1 -and $diagnostic.Result.data.stage -eq 'login') 'Failure observations replaced the original workflow stage or exit code.'
+    $loginCalls = @($diagnostic.State.calls | Where-Object command -eq 'p login')
+    Assert-True ($loginCalls.Count -eq 1) 'Diagnostic observation repeated authentication.'
+    Assert-True ($diagnostic.State.writes['old:unbind'] -eq 1 -and $diagnostic.State.writes['new:bind'] -eq 1) 'Diagnostic observation repeated a binding mutation.'
+    Assert-True (@($diagnostic.State.calls | Where-Object command -eq 'p error').Count -eq 1) 'Diagnostic login did not read native error details.'
+    Assert-True (@($diagnostic.Events | Where-Object { $_.event -eq 'cli-response' -and $_.data.response.command -eq 'p status' -and $_.data.observation }).Count -eq 1) 'Diagnostic login omitted the immediate failure-state observation.'
+    if ($scenario -ne 'diagnostic_secret_message') {
+        Assert-True ($diagnostic.Result.error.message -ceq 'portal rejected login: 从Radius获取错误代码失败！') 'Diagnostic failure replaced the original Radius response.'
+    }
+    $completed.Add("diagnostic $scenario preserves original failure and performs only read observations")
+}
+
+$case = New-Case 'ready_offline' 'cmcc' 'diagnostic_trace_error'
+$diagnostic = Invoke-DiagnosticLogin $case
+Assert-True ($diagnostic.Process.ExitCode -eq 0 -and $diagnostic.Run.diagnostic_errors.Count -gt 0) 'Trace writer failure changed campus success or was silently discarded.'
+$completed.Add('diagnostic trace write failure is reported separately from campus success')
+
+$case = New-Case 'ready_offline'
+$case.RawConfig = '{invalid-json'
+$diagnostic = Invoke-DiagnosticLogin $case
+Assert-True ($diagnostic.Process.ExitCode -eq 1 -and $diagnostic.State.calls.Count -eq 0) 'Early diagnostic configuration failure made a campus request.'
+Assert-True ((Get-Item -LiteralPath (Join-Path $diagnostic.Directory 'http.jsonl')).Length -eq 0) 'Early failure fabricated HTTP requests.'
+$completed.Add('diagnostic configuration failure retains a complete run without starting the CLI')
+
+$case = New-Case 'migrate_offline'
+$case.LoginTimeoutSeconds = 10
+$case.State.login_replies = @($recoverable[1], $recoverable[3], $recoverable[2], $recoverable[0])
+$production = Invoke-Login $case
+$diagnostic = Invoke-DiagnosticLogin $case
+Assert-True ($production.Process.ExitCode -eq 0 -and $diagnostic.Process.ExitCode -eq 0 -and $diagnostic.Result.data.online) 'Diagnostic recovery changed successful production behavior.'
+$productionWrites = @($production.State.calls | Where-Object write | ForEach-Object write) -join ','
+$diagnosticWrites = @($diagnostic.State.calls | Where-Object write | ForEach-Object write) -join ','
+Assert-True ($productionWrites -ceq $diagnosticWrites -and $diagnostic.State.writes['old:unbind'] -eq 1 -and $diagnostic.State.writes['new:bind'] -eq 1) 'Diagnostic recovery repeated or changed binding mutations.'
+$recoveryEvents = @($diagnostic.Events | Where-Object event -eq 'login-recovery')
+Assert-True ($recoveryEvents.Count -eq 4 -and ($recoveryEvents.data.reason -join ',') -ceq 'radius-error-unavailable,authentication-timeout,server-busy,binding-pending') 'Diagnostic recovery lost native retry reasons or decision order.'
+foreach ($event in $recoveryEvents) { Assert-True ($event.data.decision -ceq 'retry' -and $event.data.remaining_ms -gt 0 -and $event.data.delay_ms -ge 0) 'Diagnostic recovery omitted its deadline or pacing decision.' }
+$completed.Add('production and diagnostic recovery share mutations and persist each native retry decision')
+
+$case = New-Case 'ready_offline' 'cmcc' 'recovery_target_online'
+$case.State.login_replies = @((New-LoginRejection 2 '终端IP已在线！'))
+$diagnostic = Invoke-DiagnosticLogin $case
+Assert-True ($diagnostic.Process.ExitCode -eq 0 -and $diagnostic.Result.data.online -and $diagnostic.Result.data.login_attempts -eq 1) 'Diagnostic already-online recovery repeated authentication or lost the confirmed identity.'
+$recoveryEvents = @($diagnostic.Events | Where-Object event -eq 'login-recovery')
+Assert-True ($recoveryEvents.Count -eq 1 -and $recoveryEvents[0].data.decision -ceq 'online-confirmed' -and $recoveryEvents[0].data.ret_code -eq 2 -and $recoveryEvents[0].data.message -ceq '终端IP已在线！') 'Diagnostic online confirmation lost the native response behind its decision.'
+Assert-True ($diagnostic.State.writes.Count -eq 1 -and $diagnostic.State.writes['new:login'] -eq 1) 'Diagnostic online confirmation changed an existing binding.'
+$completed.Add('diagnostic online confirmation preserves the native response without another authentication or binding mutation')
+
+foreach ($scenario in @('success', 'precheck_failure', 'login_radius_rejected')) {
+    $case = New-Case 'migrate_online' 'cmcc' $(if ($scenario -eq 'login_radius_rejected') { $scenario } else { '' })
+    if ($scenario -eq 'precheck_failure') { $case.State.fail_at = 2 }
+    [IO.File]::WriteAllText($case.ConfigPath, ($case.Config | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($case.StatePath, ($case.State | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+    $batchDirectory = Join-Path $case.Directory 'batch logs'
+    $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'live.ps1'), '-Interface', '校园 有线 网络', '-FirstAccount', 'old', '-RestoreAccount', 'new', '-Config', $case.ConfigPath, '-Executable', $executable, '-LoginScript', (Join-Path $PSScriptRoot '../login-test.ps1'), '-OutputDirectory', $batchDirectory, '-Rounds', '1', '-TimeoutSeconds', '1', '-LoginTimeoutSeconds', '0')
+    $process = Invoke-Process $pwsh $arguments @{ NJUPT_NET_FAKE_STATE = $case.StatePath } $case.Directory
+    $batch = Get-Content -LiteralPath (Join-Path $batchDirectory 'result.json') -Raw | ConvertFrom-Json -AsHashtable
+    $events = @(Get-Content -LiteralPath (Join-Path $batchDirectory 'events.jsonl') | ForEach-Object { $_ | ConvertFrom-Json -AsHashtable })
+    Assert-True ($events[0].event -eq 'batch-start' -and $events[-1].event -eq 'batch-exit') 'Batch events did not cover the complete process lifetime.'
+    Assert-True ($batch.source -ceq '10.20.30.40') 'Batch did not fix the physical campus source.'
+    Assert-True ($batch.restoration.login.account_alias -ceq 'new') 'Batch finally did not attempt the configured recovery account.'
+    Assert-True ([IO.File]::Exists((Join-Path $batchDirectory 'restore/process.stdout.txt'))) 'Batch did not persist the recovery process output.'
+    if ($scenario -eq 'success') {
+        Assert-True ($process.ExitCode -eq 0 -and $batch.completed -and $batch.restoration.verified) 'Successful batch did not complete and verify recovery.'
+        Assert-True ($batch.rounds.Count -eq 2 -and $batch.rounds[0].account_alias -ceq 'old' -and $batch.rounds[1].account_alias -ceq 'new') 'Batch changed the requested serial account sequence.'
+        foreach ($round in $batch.rounds) { Assert-True ($round.verified -and $round.after.probe.response.data.internet) 'Batch omitted a physical Internet verification.' }
+    } elseif ($scenario -eq 'precheck_failure') {
+        Assert-True ($process.ExitCode -eq 1 -and -not $batch.completed -and $batch.rounds.Count -eq 0 -and $batch.restoration.verified) 'Batch did not preserve a precheck failure and recover in finally.'
+        Assert-True ($batch.error.message -ceq 'Campus portal precheck failed.') 'Batch recovery replaced the initial failure.'
+    } else {
+        Assert-True ($process.ExitCode -eq 1 -and -not $batch.completed -and -not $batch.restoration.verified) 'Batch incorrectly reported recovery after a persistent login rejection.'
+        Assert-True ($batch.error.message.Contains('从Radius获取错误代码失败！') -and $batch.restoration.login.result.error.message.Contains('从Radius获取错误代码失败！')) 'Batch lost the original or recovery Radius response.'
+        Assert-True ($batch.restoration.error.chain.Count -gt 0) 'Batch omitted the recovery error chain.'
+    }
+    $logText = $process.Stdout + $process.Stderr + (@(Get-ChildItem -LiteralPath $batchDirectory -File -Recurse | ForEach-Object { [IO.File]::ReadAllText($_.FullName) }) -join '')
+    foreach ($secret in $secrets) { Assert-True (-not $logText.Contains($secret)) 'A password reached batch diagnostics.' }
+    $completed.Add("batch $scenario preserves serial verification, durable diagnostics and final recovery results")
+}
 
 @{ result = 'passed'; cases = $caseNumber; checks = $completed.ToArray() } | ConvertTo-Json -Depth 8

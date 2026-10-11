@@ -23,6 +23,7 @@ type Link struct {
 	mu         sync.Mutex
 	transports []*http.Transport
 	sites      map[siteKey]*linkTransport
+	trace      *traceState
 }
 
 type siteKey struct {
@@ -33,13 +34,15 @@ type siteKey struct {
 type linkTransport struct {
 	single *http.Transport
 	read   *http.Transport
+	trace  *traceState
 }
 
 func (t *linkTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	transport := t.single
 	if read, _ := req.Context().Value(readRequestKey{}).(bool); read && req.Method == http.MethodGet {
-		return t.read.RoundTrip(req)
+		transport = t.read
 	}
-	return t.single.RoundTrip(req)
+	return traceRoundTrip(t.trace, transport, req)
 }
 
 func (t *linkTransport) CloseIdleConnections() {
@@ -81,7 +84,8 @@ func NewLink(source string, timeout time.Duration) (*Link, error) {
 	}, TLSHandshakeTimeout: timeout, ResponseHeaderTimeout: timeout, DisableKeepAlives: true, Protocols: protocols,
 		TLSClientConfig: &tls.Config{ClientSessionCache: tls.NewLRUClientSessionCache(16)}}
 	read := readTransport(transport)
-	return &Link{source: ip.String(), transport: transport, requests: &linkTransport{single: transport, read: read}, timeout: timeout, transports: []*http.Transport{transport, read}, sites: make(map[siteKey]*linkTransport)}, nil
+	trace := &traceState{source: ip.String(), interfaceIndex: index}
+	return &Link{source: ip.String(), transport: transport, requests: &linkTransport{single: transport, read: read, trace: trace}, timeout: timeout, transports: []*http.Transport{transport, read}, sites: make(map[siteKey]*linkTransport), trace: trace}, nil
 }
 
 func readTransport(single *http.Transport) *http.Transport {
@@ -123,7 +127,7 @@ func (n *Link) ClientFor(host string, ip netip.Addr) *http.Client {
 	}
 	read := readTransport(transport)
 	n.transports = append(n.transports, transport, read)
-	requests := &linkTransport{single: transport, read: read}
+	requests := &linkTransport{single: transport, read: read, trace: n.trace}
 	n.sites[key] = requests
 	return n.client(requests)
 }

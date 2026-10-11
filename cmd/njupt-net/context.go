@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"strconv"
 
 	"github.com/hicancan/njupt-net/v4/network"
 	"github.com/hicancan/njupt-net/v4/p"
@@ -13,15 +15,17 @@ import (
 // commandContext owns the link and website sessions for one CLI invocation.
 // Commands select operations; this object only owns their shared lifetimes.
 type commandContext struct {
-	opt      options
-	stream   bool
-	link     *network.Link
-	cfg      *config
-	portals  map[portalKey]*p.Portal
-	sessions map[string]*zfw.Session
-	public   *zfw.Session
-	order    []string
-	closed   bool
+	opt          options
+	stream       bool
+	link         *network.Link
+	cfg          *config
+	portals      map[portalKey]*p.Portal
+	sessions     map[string]*zfw.Session
+	public       *zfw.Session
+	order        []string
+	closed       bool
+	trace        io.Writer
+	traceCommand uint64
 }
 
 type portalKey struct {
@@ -43,6 +47,9 @@ func (c *commandContext) openLink() (*network.Link, error) {
 			return nil, err
 		}
 		c.link = link
+		if c.trace != nil {
+			link.SetTrace(c.trace)
+		}
 	}
 	return c.link, nil
 }
@@ -125,6 +132,10 @@ func (c *commandContext) close(ctx context.Context) error {
 		return nil
 	}
 	c.closed = true
+	if c.trace != nil {
+		c.traceCommand++
+		ctx = network.WithTraceCommand(ctx, strconv.FormatUint(c.traceCommand, 10), "close")
+	}
 	var result error
 	for index := len(c.order) - 1; index >= 0; index-- {
 		alias := c.order[index]
@@ -144,4 +155,11 @@ func (c *commandContext) close(ctx context.Context) error {
 		c.link.Close()
 	}
 	return result
+}
+
+func (c *commandContext) traceError() error {
+	if c.link == nil || c.trace == nil {
+		return nil
+	}
+	return c.link.TraceError()
 }

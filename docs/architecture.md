@@ -13,11 +13,13 @@ network/
   bind.go             源地址所属网卡与套接字绑定入口
   bind_*.go           Windows、Linux、macOS 的原生网卡绑定
   http.go             共用 HTTP 执行规则
+  trace.go            可选 HTTP 连接与请求阶段观测
 p/
   portal.go           门户上下文、动态配置、JSONP
   access.go           当前终端状态、认证、注销、认证错误
   password.go         改密与专用图片交互
   selfservice.go      自助服务入口
+  trace.go            门户诊断响应字段投影
 zfw/
   session.go          管理身份、Cookie、登录退出、会话语言
   html.go             多业务共用的 HTML 与表单原语
@@ -42,6 +44,8 @@ integration/
   live_test.go        显式启用的跨包校园网测试
 examples/windows/
   login.ps1           按目标账号状态迁移宽带、登录与核对结果
+  login-test.ps1      诊断运行入口，调用同一份登录流程
+  diagnostics.ps1     运行日志、网络快照与诊断输出
 research/             独立 Python 协议研究
 docs/                 Markdown 协议说明与开发文档
 ```
@@ -68,6 +72,8 @@ p 与 zfw 分别通过 `Link.ClientFor(host, ip)` 创建定向客户端，各自
 
 Windows 示例由独立 `login.ps1` 组成，所需调用函数包含在同一脚本内。脚本通过一个 CLI `session` 分别读取门户身份与宽带关系，以 `-Account` 指定目标校园账号，运营商取自配置。目标绑定已符合配置时保留；完全为空时查询其他配置账号，按唯一持有人迁移或直接绑定。
 
+`login-test.ps1` 为同一流程安装可选观察器，运行参数、步骤和网络快照由 `diagnostics.ps1` 记录。CLI 的 `--trace FILE` 将命令标识传入通用 HTTP 观测；`network` 记录连接与请求阶段，`p` 定义门户响应中需要保留的原生字段。诊断写入错误通过独立的 `trace_error` 字段返回，业务结果与退出码继续表达校园操作的结果。
+
 门户身份与宽带绑定分别决定所需动作：
 
 | 门户状态 | 目标宽带关系 | 执行动作 |
@@ -77,7 +83,7 @@ Windows 示例由独立 `login.ps1` 组成，所需调用函数包含在同一�
 | 其他账号或运营商在线 | 任意 | 通过精确 Self 连接下线并确认门户离线，按需处理绑定，再认证目标账号 |
 | 离线 | 任意 | 按需处理绑定，再认证目标账号 |
 
-需要认证时，Windows 脚本在新绑定提交并准确读回后立即认证。仅在本次流程刚完成绑定、且门户明确返回“未绑定运营商账号,请正确绑定运营商账号再试！”时，脚本收到完整拒绝后立即串行发起下一次认证，成功即继续。`BindingTimeoutSeconds` 默认 45 秒，限定从绑定完成起的认证生效观察时间；其他拒绝或请求结果未知时，脚本记录当前阶段并结束流程。输出中的 `binding_activation_seconds` 记录这段实际用时，`login_attempts` 记录认证次数。每次 `p login` 调用只提交一次认证。
+需要认证时，Windows 脚本在绑定就绪后立即认证。新绑定与已有绑定共用 `LoginTimeoutSeconds`，默认从首次认证起提供 45 秒恢复窗口。脚本按完整原生提示及结果码区分绑定生效等待、Radius 错误查询失败、系统繁忙与服务端认证超时；再次认证前观察门户身份，目标已上线则完成，其他身份上线则结束。恢复只查询门户和串行认证目标账号，已完成的宽带关系保持原值。首次恢复立即进行，连续服务错误采用有界间隔并计入已耗请求时间；正常成功路径直接使用内核已核验的状态。输出中的 `login_seconds` 记录认证阶段实际用时，`login_attempts` 记录认证次数。每次 `p login` 调用只提交一次认证。详细响应规则见 [Windows 示例](../examples/windows/README.md)。
 
 依赖方向为 `login.ps1` → CLI → 内核；校园 HTTP、协议解析、凭据提交和单项结果确认由内核完成。一次流程固定源 IPv4，同一源地址的流程互斥；执行期间持有配置文件的只读句柄，阻止写入和替换。脚本使用绑定操作的准确读回结果和登录操作返回的在线身份；默认选择门户 801，指定 `-Probe` 时另行观测公网通达性。流程结束时关闭 CLI 会话；业务步骤失败时保留执行阶段与步骤结果，再次运行从当前状态决定剩余操作。使用说明见 [Windows 示例](../examples/windows/README.md)。
 

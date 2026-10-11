@@ -13,9 +13,10 @@ import (
 )
 
 type envelope struct {
-	Command string       `json:"command"`
-	Data    any          `json:"data"`
-	Error   *errorDetail `json:"error,omitempty"`
+	Command    string       `json:"command"`
+	Data       any          `json:"data"`
+	Error      *errorDetail `json:"error,omitempty"`
+	TraceError string       `json:"trace_error,omitempty"`
 }
 
 type errorDetail struct {
@@ -28,19 +29,24 @@ type fileResult struct {
 	Format string `json:"format"`
 }
 
-func finish(stdout, stderr io.Writer, command string, data any, err error) int {
+func finish(stdout, stderr io.Writer, command string, data any, err error, traceErrors ...error) int {
+	result := envelope{Command: command, Data: data}
+	if len(traceErrors) > 0 && traceErrors[0] != nil {
+		result.TraceError = traceErrors[0].Error()
+	}
 	if errors.Is(err, flag.ErrHelp) {
 		fmt.Fprint(stdout, usage)
 		return 0
 	}
 	if err != nil {
 		code := errorCode(err)
-		_ = json.NewEncoder(stderr).Encode(envelope{Command: command, Data: data, Error: &errorDetail{Message: err.Error()}})
+		result.Error = &errorDetail{Message: err.Error()}
+		_ = json.NewEncoder(stderr).Encode(result)
 		return code
 	}
 	encoder := json.NewEncoder(stdout)
 	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(envelope{Command: command, Data: data}); err != nil {
+	if err := encoder.Encode(result); err != nil {
 		_ = json.NewEncoder(stderr).Encode(envelope{Command: command, Error: &errorDetail{Message: err.Error()}})
 		return 1
 	}
