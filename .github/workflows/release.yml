@@ -49,13 +49,14 @@ jobs:
           go build -trimpath -ldflags "-s -w -X main.version=$env:RELEASE_TAG" -o (Join-Path $package $binary) ./cmd/njupt-net
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item -LiteralPath README.md, LICENSE, config.example.json -Destination $package
+          Copy-Item -LiteralPath docs -Destination $package -Recurse
           if ($env:GOOS -eq 'windows') {
             $examples = Join-Path $package 'examples/windows'
             New-Item -ItemType Directory -Path $examples | Out-Null
             Copy-Item -LiteralPath examples/windows/login.ps1, examples/windows/login-test.ps1, examples/windows/diagnostics.ps1, examples/windows/README.md -Destination $examples
             Compress-Archive -Path "$package/*" -DestinationPath "dist/$name.zip"
           } else {
-            tar -czf "dist/$name.tar.gz" -C $package $binary README.md LICENSE config.example.json
+            tar -czf "dist/$name.tar.gz" -C $package $binary README.md LICENSE config.example.json docs
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

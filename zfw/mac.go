@@ -2,6 +2,7 @@ package zfw
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -9,6 +10,9 @@ import (
 	"strconv"
 	"strings"
 )
+
+// ErrMACListUnavailable means Self returned no list data for the authenticated account.
+var ErrMACListUnavailable = errors.New("Self getMacList returned an empty JSON response; MAC binding state is unavailable")
 
 type MACBinding struct {
 	Online        int     `json:"online"`
@@ -57,6 +61,9 @@ func (s *Session) macList(ctx context.Context, page, size int) (*MACPage, error)
 		"pageNumber": {strconv.Itoa(page)}, "pageSize": {strconv.Itoa(size)},
 		"searchText": {""}, "sortName": {"2"}, "sortOrder": {"DESC"},
 	}, &data); err != nil {
+		if errors.Is(err, errEmptyJSON) {
+			return nil, ErrMACListUnavailable
+		}
 		return nil, err
 	}
 	if data.Total == nil || *data.Total < 0 || data.Rows == nil || *data.Total < len(data.Rows) || len(data.Rows) > size {

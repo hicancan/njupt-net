@@ -1,6 +1,6 @@
 # 开发、测试与发布
 
-Go 内核与 Python 研究项目独立。常规贡献使用公开夹具和本地服务完成测试；校园网集成测试另外指定源地址与账号。
+常规贡献使用公开夹具和本地服务完成测试；校园网集成测试另外指定源地址与账号。
 
 ## Go 开发
 
@@ -24,21 +24,7 @@ CLI 的单次命令与 `session` 共用业务分发。会话测试检查单行 J
 
 业务操作所需的动态配置、鉴权、令牌和状态确认由对应包测试。门户登录覆盖直接提交、原生拒绝与 `ret_code` 保留、等待目标账号出现、持续错误身份的核验超时，以及未知结果的立即返回。下线测试覆盖提交前目标 session ID 已不存在、前置查询失败和接受后的状态观察。设备列表覆盖真实字符串在线标记到公开整数的转换及直接查询路径；MAC 解绑覆盖前提失败、明确拒绝、未知结果和接受后的分页确认。
 
-运营商关系与消费保护的测试分别核对 POST 直接返回与 POST 跳转到独立 GET 结果页的流程。独立 GET 已取得当前业务字段时复用该响应，POST 返回的字段通过另一次 GET 核验。每项请求的必要性见 [原子动作与请求边界](../research/requests.md)。
-
-## Python 离线研究
-
-研究环境使用 Python 3.12 与 uv。进入 `research` 后创建独立环境：
-
-```text
-uv venv --python 3.12
-uv sync --locked
-uv run --locked python -m unittest discover -p "test_*.py" -v
-```
-
-研究项目使用 Python 标准库。离线测试使用自有协议样本与本地回环 HTTP 服务。实际页面发现、原始请求实验和样本说明见 [研究项目](../research/README.md)。
-
-新增协议先从页面、脚本和动态配置恢复请求，再以独立请求核对参数、认证前提、响应和状态变化。确认后将必要样本加入测试，再实现 Go 业务方法。前端路径目录、当前功能开关和服务端实测结果分别记录在协议文档中。
+运营商关系与消费保护的测试分别核对 POST 直接返回与 POST 跳转到独立 GET 结果页的流程。独立 GET 已取得当前业务字段时复用该响应，POST 返回的字段通过另一次 GET 核验。
 
 ## Windows 示例离线测试
 
@@ -89,7 +75,7 @@ pwsh -NoProfile -File examples/windows/tests/live.ps1 -Interface Ethernet -First
 
 ## 持续集成
 
-GitHub Actions 在 Windows、Linux、macOS 运行 Go 测试、vet 与 Python 离线测试，并在 Windows 运行 PowerShell 示例流程测试。工作流使用固定提交的官方 Actions，常规任务拥有仓库读取权限。校园网实测状态见 [p](p.md) 和 [zfw](zfw.md)。
+GitHub Actions 在 Windows、Linux、macOS 运行 Go 测试和 vet，并在 Windows 运行 PowerShell 流程测试。工作流使用固定提交的官方 Actions，常规任务拥有仓库读取权限。
 
 ## 发布
 
@@ -101,8 +87,8 @@ GitHub Actions 在 Windows、Linux、macOS 运行 Go 测试、vet 与 Python 离
 | Linux | amd64、arm64 | tar.gz |
 | macOS | amd64、arm64 | tar.gz |
 
-归档包含可执行文件、README、许可证与配置示例，并生成 `SHA256SUMS`。Windows ZIP 另含 `examples/windows/` 中的生产登录脚本、诊断入口、诊断采集脚本与使用说明，离线测试文件保留在源码仓库。每个归档的可执行程序仍为对应平台的一个 `njupt-net`。发布工作流创建草稿 Release，维护者核对版本说明后发布。版本通过 `njupt-net version` 查询；发布构建将标签写入可执行文件。
+归档包含可执行文件、README、公开文档、许可证与配置示例，并生成 `SHA256SUMS`。Windows ZIP 另含 `examples/windows/` 中的生产登录脚本、诊断入口、诊断采集脚本与使用说明，离线测试文件保留在源码仓库。每个归档的可执行程序仍为对应平台的一个 `njupt-net`。发布工作流创建草稿 Release，维护者核对版本说明后发布。版本通过 `njupt-net version` 查询；发布构建将标签写入可执行文件。
 
 ## 仓库内容
 
-`docs/` 保存 Markdown 协议说明。`examples/windows/` 保存可选 PowerShell 流程与离线测试。`research/` 保存可复用实验和必要自有样本；运行输出通过 `--output` 指定位置。公开样本说明来源或构造方式，优先使用表达协议契约的最小内容。账号配置、真实会话、个人账单与临时抓取留在使用者指定的本地位置。
+`docs/` 保存 Markdown 协议说明。`examples/windows/` 保存可选 PowerShell 流程与离线测试。公开测试使用表达协议契约的最小夹具。账号配置、真实会话、个人账单与临时抓取留在使用者指定的本地位置。

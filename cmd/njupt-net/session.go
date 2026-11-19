@@ -45,7 +45,7 @@ func decodeSessionRequest(line []byte) (sessionRequest, error) {
 }
 
 // runSession is a sequential command transport. It adds no business workflow.
-func runSession(ctx context.Context, owner *commandContext, input io.Reader, output io.Writer) int {
+func runSession(ctx context.Context, owner *commandContext, input io.Reader, output io.Writer, configStdin bool) int {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer owner.close(ctx)
@@ -101,6 +101,10 @@ func runSession(ctx context.Context, owner *commandContext, input io.Reader, out
 			return closeSession(ctx.Err(), true)
 		case frame, ok := <-frames:
 			if !ok {
+				if configStdin {
+					_ = encoder.Encode(sessionResult("session", nil, invalid("session config input is missing")))
+					return 2
+				}
 				return closeSession(nil, false)
 			}
 			if frame.err != nil {
@@ -108,6 +112,15 @@ func runSession(ctx context.Context, owner *commandContext, input io.Reader, out
 			}
 			if err := ctx.Err(); err != nil {
 				return closeSession(err, true)
+			}
+			if configStdin {
+				cfg, err := decodeConfig(frame.line)
+				if err != nil {
+					_ = encoder.Encode(sessionResult("session", nil, invalid("invalid session config input")))
+					return 2
+				}
+				owner.cfg, configStdin = &cfg, false
+				continue
 			}
 			request, err := decodeSessionRequest(frame.line)
 			command := "session"

@@ -490,6 +490,26 @@ Assert-True ($observed.Process.ExitCode -eq 1 -and $observed.Result.data.login_a
 Assert-Writes $observed (@('new:login') * $observed.Result.data.login_attempts)
 $completed.Add('existing bindings recover authentication without modifying the binding')
 
+$case = New-Case 'migrate_online' 'cmcc' 'masked_login'
+$observed = Invoke-Login $case
+Assert-Success $observed $case 'masked portal resolves the current Self session and accepts confirmed account ownership'
+Assert-Writes $observed @('old:offline', 'old:unbind', 'new:bind', 'new:login')
+Assert-True ($observed.Result.data.operator_verified -eq $false) 'Masked result claimed direct portal operator verification.'
+$completed.Add('masked portal records Self ownership and leaves operator verification separate')
+
+$case = New-Case 'migrate_online' 'cmcc' 'masked_ambiguous'
+$case.State.residual.new = $true
+$observed = Invoke-Login $case
+Assert-True ($observed.Process.ExitCode -eq 1 -and $observed.Result.error.message -like '*exactly one configured Self*') 'Multiple masked portal owners were accepted.'
+Assert-Writes $observed @()
+$completed.Add('ambiguous masked portal ownership prevents all mutations')
+
+$case = New-Case 'ready_offline' 'cmcc' 'masked_login_unverified'
+$observed = Invoke-Login $case
+Assert-True ($observed.Process.ExitCode -eq 1) 'A masked login without Self ownership was accepted.'
+Assert-Writes $observed @('new:login')
+$completed.Add('masked login requires affirmative Self ownership')
+
 function New-LoginRejection($Code, [string]$Message) {
     return @{ outcome = 'rejected'; verified = $false; ret_code = $Code; message = $Message }
 }
@@ -498,7 +518,8 @@ $recoverable = @(
     (New-LoginRejection 1 '未绑定运营商账号,请正确绑定运营商账号再试！'),
     (New-LoginRejection 1 '从Radius获取错误代码失败！'),
     (New-LoginRejection 3 'AC999'),
-    (New-LoginRejection 8 'Portal协议认证超时！')
+    (New-LoginRejection 8 'Portal协议认证超时！'),
+    (New-LoginRejection 1 '从Radius获取错误代码出现异常！')
 )
 foreach ($plan in @('unowned_offline', 'migrate_offline', 'ready_offline')) {
     foreach ($reply in $recoverable) {
@@ -843,7 +864,18 @@ function Invoke-DiagnosticLogin([hashtable]$Case) {
     $logRoot = Join-Path $Case.Directory 'diagnostic logs'
     $existing = @(Get-ChildItem -LiteralPath $logRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object Name)
     $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot '../login-test.ps1'), '-Interface', '校园 有线 网络', '-Account', 'new', '-Executable', $executable, '-Config', $Case.ConfigPath, '-LogDirectory', $logRoot, '-TimeoutSeconds', '1', '-LoginTimeoutSeconds', [string]($Case.LoginTimeoutSeconds ?? 0), '-NoProbe')
-    $process = Invoke-Process $pwsh $arguments @{ NJUPT_NET_FAKE_STATE = $Case.StatePath } $Case.Directory
+    $environment = @{ NJUPT_NET_FAKE_STATE = $Case.StatePath }
+    if ($Case.SettingsInput) {
+        $wrapper = Join-Path $Case.Directory 'settings launcher.ps1'
+        [IO.File]::WriteAllText($wrapper, @'
+param($Script, $Fixture, $Executable, $LogDirectory)
+$settings = Get-Content -LiteralPath $Fixture -Raw | ConvertFrom-Json -AsHashtable
+& $Script -Interface '校园 有线 网络' -Account new -Executable $Executable -Settings $settings -LogDirectory $LogDirectory -NoProbe
+exit $LASTEXITCODE
+'@, [Text.UTF8Encoding]::new($false))
+        $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $wrapper, '-Script', (Join-Path $PSScriptRoot '../login-test.ps1'), '-Fixture', $Case.ConfigPath, '-Executable', $executable, '-LogDirectory', $logRoot)
+    }
+    $process = Invoke-Process $pwsh $arguments $environment $Case.Directory
     $created = @(Get-ChildItem -LiteralPath $logRoot -Directory | Where-Object Name -NotIn $existing)
     Assert-True ($created.Count -eq 1) 'Diagnostic login did not create exactly one new run directory.'
     $directory = $created[0].FullName
@@ -877,6 +909,13 @@ $previousDirectory = $diagnostic.Directory
 $diagnostic = Invoke-DiagnosticLogin $case
 Assert-True ($diagnostic.Directory -cne $previousDirectory) 'A repeated diagnostic login overwrote earlier logs.'
 $completed.Add('diagnostic login preserves success and creates one unique complete run per invocation')
+
+$case = New-Case 'ready_offline'
+$case.SettingsInput = $true
+$diagnostic = Invoke-DiagnosticLogin $case
+Assert-True ($diagnostic.Process.ExitCode -eq 0 -and $diagnostic.Result.data.stage -eq 'complete') 'Nested diagnostic launcher did not complete with in-memory settings.'
+Assert-True ($diagnostic.Run.parameters.config -ceq 'stdin' -and $diagnostic.State.session_args -cnotcontains '--config') 'In-memory settings were treated as a credentials file.'
+$completed.Add('nested diagnostic launcher streams credentials privately and retains complete logs')
 
 foreach ($scenario in @('login_radius_rejected', 'diagnostic_status_error', 'diagnostic_secret_message')) {
     $case = New-Case 'migrate_offline' 'cmcc' $scenario

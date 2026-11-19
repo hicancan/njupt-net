@@ -6,17 +6,17 @@
 
 登录直接读取 `login/` 表单、隐藏字段与动态 action，初始化页面所需的 `login/randomCode` 图片上下文，然后 POST 到登录校验地址。普通账号登录输入账号与密码，图片上下文由内核初始化。
 
-登录后核对 `/Self/dashboard` 与服务器账号身份。单次私有 CLI 命令登录、执行业务、退出 `login/logout`；[连续命令会话](architecture.md#连续命令会话)按账号别名保留独立 Cookie 与管理身份，在 `close` 或标准输入 EOF 时统一退出。上网终端通过 `p logout` 或 `zfw offline` 下线。
+登录后从 `/Self/dashboard` 的账号面板读取唯一的完整账号，并与目标账号精确比较。单次私有 CLI 命令登录、执行业务、退出 `login/logout`。[连续命令会话](architecture.md#连续命令会话)按账号别名保留独立 Cookie 与管理身份，在 `close` 或标准输入 EOF 时统一退出。上网终端通过 `p logout` 或 `zfw offline` 下线。
 
 门户 `self_type=1` 返回当前终端在线账号的签名地址，可建立同一种管理会话。核心 `LoginBridge` 限定已确认的 zfw 主机、HTTP 8080、`/Self/login/eportalLogin` 及 `params/timestamp/sign` 三个参数，随后核对 dashboard 身份。CLI 用全局 `--self-url-file PATH` 明确选择该方式；文件仅含一行完整 URL，可带一个末尾换行。
 
 ```powershell
-$bridge = njupt-net --interface 'Ethernet' --account default p self --type 1 | ConvertFrom-Json
-$bridge.data.url | Set-Content -LiteralPath bridge-url.txt -NoNewline -Encoding utf8
-njupt-net --interface 'Ethernet' --account default --self-url-file bridge-url.txt zfw account
+njupt-net --interface 'Ethernet' --account default --self-url-file PRIVATE_BRIDGE_URL_FILE zfw account
 ```
 
-URL 文件保存示例中的 `.data.url` 字符串。`--account` 选择期望账号；桥登录成功后 `verify` 返回 `identity_verified:true` 与 `login_method:portal_bridge`，密码登录成功后返回 `credentials_valid:true`。任一方法登录失败时返回错误。
+URL 文件保存 `p self --type 1` 返回的 `.data.url`，应存放在项目仓库外的私有位置。`--account` 选择期望账号。桥登录成功后 `verify` 返回 `identity_verified:true` 与 `login_method:portal_bridge`，密码登录成功后返回 `credentials_valid:true`。
+
+签名桥返回登录表单时报告 `ErrBridgeRejected`。只有到达 dashboard 并核对完整账号才建立管理会话。
 
 | 相对路径 | 方法 | 用途 |
 |---|---|---|
@@ -24,14 +24,14 @@ URL 文件保存示例中的 `.data.url` 字符串。`--account` 选择期望账
 | `login/randomCode` | GET | 初始化图片上下文 |
 | `login/verify` | POST | 提交当前动态表单 |
 | `login/eportalLogin` | GET | 消费门户签名桥并核对身份 |
-| `login/logout` | GET | 退出管理会话 |
-| `login/changeLanguage` | GET | 修改当前会话语言 |
+| `login/logout` | GET | `zfw logout` 退出连续 CLI 会话内已开启的指定账号管理会话 |
+| `login/changeLanguage` | GET | `zfw language --language zh_cn\|English` 设置并核验公开 Cookie 会话语言 |
 
-语言的实际值为 `English`、`zh_cn`，两种语言均已通过服务端请求切换并读回。核心 `Session.Language` 设置并核对当前会话，适合持续使用同一会话的 Go 调用者。公开页面语言按钮出现 `ctx` 未定义的 JavaScript 错误，点击后未发出请求。
+语言命令在同一 CLI 连续会话内与公告、协议和帮助共享公开 Cookie 会话。中英文均已通过服务端请求切换并读回，帮助接口的两种空内容提示都返回 `available:false`。
 
 ## 菜单与路径目录
 
-当前页面、表单、业务脚本与嵌入内容共发现 39 条 Self 路径，包含业务调用、导航和图片资源，按不同路径去重。本文各节列出完整目录，路径均相对 `/Self/`。
+本文路径均相对 `/Self/`。
 
 | 相对路径 | 方法 | 用途 |
 |---|---|---|
@@ -62,6 +62,8 @@ URL 文件保存示例中的 `.data.url` 字符串。`--account` 选择期望账
 `getMacList` 直接返回 `total` 与 `rows`，已实测读回非空设备列表。每行的五列依次表示在线标记、MAC、终端类型、最近登录时间和最近 IP；服务器在线标记为字符串 `"0"` 或 `"1"`，公开模型的 `online` 为对应整数。读取列表直接调用该接口；`service/myMac` 用于 MAC 解绑前读取专用令牌。
 
 当前资料页呈现只读标签和值，`setting/updateUserSecurity` 表单只有令牌，提交后显示 `Not valid!`。`profile` 读取该页面的资料，结果包含 `read_only:true`。
+
+资料页脚本还包含 `POST setting/getUserAddress`，用于校验 `userAddress` 表单输入。当前两个账号的资料页都没有这个可编辑控件，空输入 POST 的 HTTP 200 未返回可据以核验的 `state`。
 
 ## 策略与账号关系
 
@@ -144,16 +146,14 @@ MAC 解绑先从专用页面取得令牌，再分页定位目标。目标已不�
 |---|---|
 | 账号、资料、在线连接、近期记录、策略查询、刷新 | 校园请求成功，按具体业务模型返回 |
 | 三类账单与 XLS 导出 | 查询与导出成功 |
-| 门户签名桥 | 建立管理会话，读回目标账号身份并退出 |
+| 门户签名桥 | Self 返回登录表单时报告签名桥未建立会话 |
 | 指定连接下线 | 读回目标 session ID 消失，再由 p 恢复认证成功 |
-| 无感知策略 | 修改后读回变化，并恢复原策略 |
+| 无感知策略 | 跟随同源 dashboard 重定向，再独立读回策略变化 |
 | 管理会话语言 | `English`、`zh_cn` 切换与读回成功 |
-| 消费保护 | 以原值 `999999` 提交，服务器接受且读回一致；其他限额修改待验证 |
-| MAC 列表 | 分页读取成功，非空设备记录已按实际五列契约解析 |
-| 运营商绑定与解绑 | 通过专用表单提交，独立读回选定运营商字段与另一运营商字段 |
-| MAC 解绑 | 请求和离线测试已实现，真实账号修改待验证 |
+| 消费保护 | 直接读回最终限额，`999999` 表示不限 |
+| MAC 列表 | HTTP 200 零字节正文时报 `ErrMACListUnavailable`，提示无法确认绑定状态 |
+| 运营商绑定与解绑 | 提交后核对目标账号、密码和另一运营商字段 |
+| MAC 解绑 | 找到唯一目标绑定后提交，接受后读回确认目标消失 |
 | 充值 | 入口显示服务菜单，未提供付款表单，返回不可用状态 |
 
-网页相对充值链接会拼接成 `service/service/userRecharge`；CLI 直接读取表中确认的 `service/userRecharge`。部署与账号权限变化时，可通过 [research](../research/README.md) 重新读取页面和复核接口。
-
-全部命令的请求前提、提交与确认见 [原子动作与请求边界](../research/requests.md)。
+网页相对充值链接会拼接成 `service/service/userRecharge`；CLI 直接读取表中确认的 `service/userRecharge`。

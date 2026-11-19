@@ -88,8 +88,14 @@ func newPortalFixture(t *testing.T, terminal string) *portalFixture {
 			response = `{"result":"ok","self_auth_url":"http://10.10.244.240:8080/Self/login/eportalLogin?params=fixture-params&timestamp=fixture-timestamp&sign=fixture-sign"}`
 		case "/eportal/portal/change_pass":
 			response = `{"result":"ok"}`
+		case "/eportal/portal/captcha/check":
+			response = `{"result":0,"msg":"验证码校验失败！"}`
+		case "/eportal/portal/notice/get_notice_content":
+			response = `{"result":0,"msg":"读取通知公告内容为空"}`
 		case "/eportal/portal/err_code":
 			response = `{"result":1,"error_prompt_zh":"test"}`
+		case "/eportal/portal/err_code/loadErrorPrompt":
+			response = `{"result":1,"error_prompt_zh":"test translation"}`
 		default:
 			t.Errorf("unexpected portal path %s", r.URL.Path)
 			http.NotFound(w, r)

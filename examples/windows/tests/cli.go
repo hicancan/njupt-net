@@ -65,8 +65,11 @@ type config struct {
 
 func main() {
 	args := os.Args[1:]
+	if len(args) >= 2 && args[len(args)-2] == "session" && args[len(args)-1] == "--config-stdin" {
+		os.Exit(runSession(args[:len(args)-2], true))
+	}
 	if len(args) > 0 && args[len(args)-1] == "session" {
-		os.Exit(runSession(args[:len(args)-1]))
+		os.Exit(runSession(args[:len(args)-1], false))
 	}
 	for index := 0; index+1 < len(args) && strings.HasPrefix(args[index], "--"); index += 2 {
 		if args[index] == "--trace" {
@@ -78,7 +81,7 @@ func main() {
 			file.Close()
 		}
 	}
-	os.Exit(runCommand(args, false))
+	os.Exit(runCommand(args, false, nil))
 }
 
 func sessionState(change func(*state)) state {
@@ -102,7 +105,7 @@ func sessionState(change func(*state)) state {
 	return s
 }
 
-func runSession(globalArgs []string) int {
+func runSession(globalArgs []string, configStdin bool) int {
 	for index := 0; index+1 < len(globalArgs); index += 2 {
 		if globalArgs[index] == "--trace" {
 			file, err := os.OpenFile(globalArgs[index+1], os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
@@ -139,6 +142,13 @@ func runSession(globalArgs []string) int {
 		}
 	}
 	scanner := bufio.NewScanner(os.Stdin)
+	var streamedConfig *config
+	if configStdin {
+		streamedConfig = new(config)
+		if !scanner.Scan() || json.Unmarshal(scanner.Bytes(), streamedConfig) != nil {
+			return 2
+		}
+	}
 	for scanner.Scan() {
 		var request struct {
 			Account string   `json:"account"`
@@ -172,7 +182,7 @@ func runSession(globalArgs []string) int {
 			args = append(args, "--account", request.Account)
 		}
 		args = append(args, request.Args...)
-		runCommand(args, true)
+		runCommand(args, true, streamedConfig)
 	}
 	if err := scanner.Err(); err != nil {
 		panic(err)
@@ -180,7 +190,7 @@ func runSession(globalArgs []string) int {
 	return 0
 }
 
-func runCommand(args []string, session bool) int {
+func runCommand(args []string, session bool, streamedConfig *config) int {
 	path := os.Getenv("NJUPT_NET_FAKE_STATE")
 	if path == "" {
 		fmt.Fprintln(os.Stderr, "offline fixture requires a state file")
@@ -224,7 +234,7 @@ func runCommand(args []string, session bool) int {
 	for position < len(args) {
 		flag := args[position]
 		position++
-		if flag == "--bind" {
+		if flag == "--bind" || flag == "--verify-with-self" {
 			flags[flag] = "true"
 			continue
 		}
@@ -328,7 +338,9 @@ func runCommand(args []string, session bool) int {
 		return emit(nil, "injected CLI failure", 1)
 	}
 	var cfg config
-	if flags["--config"] != "" {
+	if streamedConfig != nil {
+		cfg = *streamedConfig
+	} else if flags["--config"] != "" {
 		data, err := os.ReadFile(flags["--config"])
 		if err != nil || json.Unmarshal(data, &cfg) != nil {
 			return emit(nil, "fixture could not load configuration", 1)
@@ -362,6 +374,9 @@ func runCommand(args []string, session bool) int {
 		if online {
 			address := source
 			account := s.OnlineAccount
+			if strings.HasPrefix(s.Scenario, "masked_") {
+				account = "****"
+			}
 			terminalMAC := mac
 			if s.Scenario == "before_offline_identity_changes" && s.Reads["p status"] >= 2 && !wasDisconnected() {
 				account = "unrelated-campus@" + s.Provider
@@ -501,6 +516,11 @@ func runCommand(args []string, session bool) int {
 			s.OnlineAccount = "unrelated-campus@" + s.Provider
 		}
 		result := map[string]any{"outcome": "accepted", "verified": true, "status": status()}
+		if strings.HasPrefix(s.Scenario, "masked_") {
+			result["verified"] = false
+			result["account_verified"] = flags["--verify-with-self"] == "true" && s.Scenario != "masked_login_unverified"
+			result["operator_verified"] = false
+		}
 		if s.Scenario == "login_missing_status" {
 			delete(result, "status")
 		}

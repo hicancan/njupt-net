@@ -31,21 +31,32 @@ func (s *Session) ConsumeProtect(ctx context.Context) (*ConsumeLimit, error) {
 	return consumeProtect(doc)
 }
 
+var consumeObjectPattern = regexp.MustCompile(`\}\)\s*\(\s*(\{[^\r\n]+\})\s*\)\s*;`)
+
 func consumeProtect(doc *html.Node) (*ConsumeLimit, error) {
 	if findForm(doc, "/Self/service/changeConsumeProtect") == nil {
 		return nil, fmt.Errorf("Self consume protection form is missing")
 	}
-	user, err := selfUser(doc)
-	if err != nil {
-		return nil, err
+	var limit json.Number
+	for _, match := range consumeObjectPattern.FindAllStringSubmatch(scriptText(doc), -1) {
+		var value struct {
+			Limit json.Number `json:"installmentFlag"`
+		}
+		if json.Unmarshal([]byte(match[1]), &value) != nil || value.Limit == "" {
+			continue
+		}
+		if limit != "" {
+			return nil, fmt.Errorf("Self consume protection returned multiple installmentFlag values")
+		}
+		limit = value.Limit
 	}
-	if user.ConsumeLimit == "" {
+	if limit == "" {
 		return nil, fmt.Errorf("Self consume protection is missing its installmentFlag")
 	}
-	if err := ValidateConsumeLimit(user.ConsumeLimit.String()); err != nil {
+	if err := ValidateConsumeLimit(limit.String()); err != nil {
 		return nil, fmt.Errorf("Self consume protection returned an invalid installmentFlag")
 	}
-	return &ConsumeLimit{Limit: user.ConsumeLimit, Unlimited: decimalAmount(user.ConsumeLimit.String()) == "999999"}, nil
+	return &ConsumeLimit{Limit: limit, Unlimited: decimalAmount(limit.String()) == "999999"}, nil
 }
 
 var consumeLimitPattern = regexp.MustCompile(`^(0|[1-9]\d*)(\.\d{1,3})?$`)

@@ -22,7 +22,7 @@ func TestSelfPublicPageOmitsScripts(t *testing.T) {
 }
 
 func TestHelpFollowsTheDiscoveredContentID(t *testing.T) {
-	for _, content := range []string{"暂无使用帮助信息", "校园网使用步骤"} {
+	for _, content := range []string{"暂无使用帮助信息", "No help is available", "校园网使用步骤"} {
 		calls := []string{}
 		s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 			calls = append(calls, r.URL.Path)
@@ -41,7 +41,7 @@ func TestHelpFollowsTheDiscoveredContentID(t *testing.T) {
 			fmt.Fprint(w, `<html><body><p>`+content+`</p></body></html>`)
 		})
 		page, err := s.PublicPage(context.Background(), "help")
-		if err != nil || page.Text != content || page.Available != (content != "暂无使用帮助信息") || page.HTTPStatus != http.StatusOK || !strings.HasSuffix(page.ContentURL, "/Self/unlogin/helpinfo/0") || len(calls) != 3 || calls[0] != "/Self/login/" {
+		if err != nil || page.Text != content || page.Available != (content == "校园网使用步骤") || page.HTTPStatus != http.StatusOK || !strings.HasSuffix(page.ContentURL, "/Self/unlogin/helpinfo/0") || len(calls) != 3 || calls[0] != "/Self/login/" {
 			t.Fatalf("help=%+v calls=%v error=%v", page, calls, err)
 		}
 	}

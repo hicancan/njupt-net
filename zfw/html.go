@@ -1,7 +1,6 @@
 package zfw
 
 import (
-	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"net/url"
@@ -11,29 +10,6 @@ import (
 
 	"golang.org/x/net/html"
 )
-
-type serverUser struct {
-	Account      string      `json:"userName"`
-	ConsumeLimit json.Number `json:"installmentFlag"`
-}
-
-var userObjectPattern = regexp.MustCompile(`\}\)\s*\(\s*(\{[^\r\n]+\})\s*\)\s*;`)
-
-// The server embeds its user model as an IIFE argument. This model contains a
-// password property; callers must select business fields rather than return it.
-func selfUser(doc *html.Node) (*serverUser, error) {
-	for _, match := range userObjectPattern.FindAllStringSubmatch(scriptText(doc), -1) {
-		decoder := json.NewDecoder(strings.NewReader(match[1]))
-		decoder.UseNumber()
-		var user serverUser
-		if decoder.Decode(&user) == nil {
-			if user.Account != "" {
-				return &user, nil
-			}
-		}
-	}
-	return nil, fmt.Errorf("Self page is missing its server-rendered user model")
-}
 
 func attr(n *html.Node, key string) string {
 	if n == nil {

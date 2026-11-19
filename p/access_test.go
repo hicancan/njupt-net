@@ -79,9 +79,25 @@ func TestPortalErrorInfoIsTyped(t *testing.T) {
 	if result.Outcome != Accepted || result.PromptChinese != "test" {
 		t.Fatalf("error prompt was lost: %+v", result)
 	}
-	want := url.Values{"callback": {"dr1"}, "wlan_user_ip": {"10.9.8.7"}, "wlan_user_ipv6": {""}, "wlan_user_mac": {"000000000000"}}
+	want := url.Values{"callback": {"dr1"}, "ip": {"10.9.8.7"}, "mac": {"000000000000"}}
 	if len(f.requests) != 1 || !reflect.DeepEqual(f.queries["/eportal/portal/err_code"][0], want) {
 		t.Fatalf("error information depends on browser configuration: requests=%v query=%v", f.requests, f.queries["/eportal/portal/err_code"])
+	}
+}
+
+func TestPortalErrorPromptOnlySendsKnownCode(t *testing.T) {
+	f := newPortalFixture(t, "pc")
+	if _, err := f.portal.ErrorPrompt(context.Background(), "   "); err == nil {
+		t.Fatal("accepted an empty error code")
+	}
+	result, err := f.portal.ErrorPrompt(context.Background(), " AC999 ")
+	if err != nil || result.Outcome != Accepted || result.Code != "AC999" || result.PromptChinese != "test translation" {
+		t.Fatalf("error code was not translated: result=%+v error=%v", result, err)
+	}
+	path := "/eportal/portal/err_code/loadErrorPrompt"
+	want := url.Values{"callback": {"dr1"}, "error_code": {"AC999"}}
+	if len(f.requests) != 1 || !reflect.DeepEqual(f.queries[path][0], want) {
+		t.Fatalf("translation sent terminal state or extra requests: %v", f.requests)
 	}
 }
 

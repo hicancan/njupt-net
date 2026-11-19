@@ -11,8 +11,9 @@ param(
     [Parameter(Mandatory, ParameterSetName = 'Source')][ValidateNotNullOrEmpty()][string]$Source,
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$Account,
     [ValidateNotNullOrEmpty()][string]$Config = 'config.json',
+    [System.Collections.IDictionary]$Settings,
     [ValidateNotNullOrEmpty()][string]$Executable = 'njupt-net',
-    [ValidateSet(801, 802, 803, 804)][int]$PortalPort = 801,
+    [ValidateSet(801, 802, 803, 804)][int]$PortalPort = 802,
     [ValidateRange(1, 300)][int]$TimeoutSeconds = 15,
     [ValidateRange(0, 120)][int]$LoginTimeoutSeconds = 45,
     [switch]$Probe,
@@ -27,7 +28,7 @@ function New-CampusContext {
         Command = $Command; Executable = $Executable; Config = $Config
         Interface = $Interface; Source = $Source; TimeoutSeconds = $TimeoutSeconds
         Stage = 'configuration'; Steps = [System.Collections.Generic.List[object]]::new()
-        Settings = $null; ConfigFile = $null
+        Settings = $null; SettingsJson = $null; ConfigFile = $null
         Mutex = $null; MutexOwned = $false; Online = $null; Internet = $null; InternetError = $null
         Session = $null; SessionErrors = $null; PortalPort = $PortalPort
         Diagnostics = $Diagnostics
@@ -39,11 +40,11 @@ function New-CampusContext {
 function Write-CampusDiagnostic {
     param($Context, [string]$Kind, $Data)
     if (-not $Context.Diagnostics) { return }
-    try { $null = $Context.Diagnostics.Emit.Invoke($Kind, $Data) }
+    try { Write-CampusDiagnosticEvent $Context.Diagnostics $Kind $Data }
     catch {
         $message = Protect-CampusMessage $Context $_.Exception.Message
         $Context.Diagnostics.Errors.Add($message)
-        try { $null = $Context.Diagnostics.Note.Invoke("诊断日志写入失败：$message") }
+        try { Write-CampusDiagnosticNote $Context.Diagnostics "诊断日志写入失败：$message" }
         catch { [Console]::Error.WriteLine("诊断日志写入失败：$message") }
     }
 }
@@ -51,16 +52,21 @@ function Write-CampusDiagnostic {
 function Initialize-CampusContext {
     param($Context, [string[]]$Aliases)
     try {
-        $file = Get-Item -LiteralPath $Context.Config -ErrorAction Stop
-        if ($file -isnot [System.IO.FileInfo]) { throw 'Configuration must be a filesystem file.' }
-        $Context.Config = $file.FullName
-        $Context.ConfigFile = [System.IO.File]::Open($Context.Config, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
-        $reader = [System.IO.StreamReader]::new($Context.ConfigFile, [System.Text.Encoding]::UTF8, $true, 1024, $true)
-        try { $Context.Settings = $reader.ReadToEnd() | ConvertFrom-Json -AsHashtable -ErrorAction Stop }
-        finally { $reader.Dispose() }
+        if ($null -ne $Settings) {
+            $Context.SettingsJson = ConvertTo-Json -InputObject $Settings -Depth 10 -Compress
+            $Context.Settings = ConvertFrom-Json -InputObject $Context.SettingsJson -AsHashtable
+        } else {
+            $file = Get-Item -LiteralPath $Context.Config -ErrorAction Stop
+            if ($file -isnot [System.IO.FileInfo]) { throw 'Configuration must be a filesystem file.' }
+            $Context.Config = $file.FullName
+            $Context.ConfigFile = [System.IO.File]::Open($Context.Config, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+            $reader = [System.IO.StreamReader]::new($Context.ConfigFile, [System.Text.Encoding]::UTF8, $true, 1024, $true)
+            try { $Context.Settings = $reader.ReadToEnd() | ConvertFrom-Json -AsHashtable -ErrorAction Stop }
+            finally { $reader.Dispose() }
+        }
     } catch { throw 'Cannot read the campus account configuration as JSON.' }
     $settings = $Context.Settings
-    if ($Context.Diagnostics) { $null = $Context.Diagnostics.RegisterSecrets.Invoke($settings) }
+    if ($Context.Diagnostics) { Register-CampusDiagnosticSecrets $Context.Diagnostics $settings }
     if ($settings -isnot [System.Collections.IDictionary] -or -not $settings.Contains('accounts') -or $settings.accounts -isnot [System.Collections.IDictionary]) {
         throw 'Configuration requires an accounts object.'
     }
@@ -132,9 +138,12 @@ function Start-CampusSession {
     $start.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
     $start.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
     $selection = if ($Context.Interface) { @('--interface', $Context.Interface) } else { @('--source', $Context.Source) }
-    $arguments = $selection + @('--config', $Context.Config, '--timeout', "$($Context.TimeoutSeconds)s")
+    $arguments = $selection + @('--timeout', "$($Context.TimeoutSeconds)s")
+    if (-not $Context.SettingsJson) { $arguments += @('--config', $Context.Config) }
     if ($Context.Diagnostics) { $arguments += @('--trace', $Context.Diagnostics.TraceFile) }
-    foreach ($argument in ($arguments + @('session'))) {
+    $arguments += 'session'
+    if ($Context.SettingsJson) { $arguments += '--config-stdin' }
+    foreach ($argument in $arguments) {
         $start.ArgumentList.Add($argument)
     }
     $process = [System.Diagnostics.Process]::new()
@@ -143,6 +152,10 @@ function Start-CampusSession {
         if (-not $process.Start()) { throw 'Could not start the CLI session.' }
         $Context.Session = $process
         $Context.SessionErrors = $process.StandardError.ReadToEndAsync()
+        if ($Context.SettingsJson) {
+            $process.StandardInput.WriteLine($Context.SettingsJson)
+            $process.StandardInput.Flush()
+        }
         if ($Context.Diagnostics) { Write-CampusDiagnostic $Context 'session-start' @{ process_id = $process.Id; executable = $Context.Executable; args = @($start.ArgumentList) } }
     } catch { $process.Dispose(); throw }
 }
@@ -304,13 +317,33 @@ function Confirm-CampusStatus {
     return $state
 }
 
-function Assert-CampusIdentity {
-    param($Context, $State, [string]$AccountAlias, [string]$Operator = '')
+function Get-CampusTerminalIdentity {
+    param($State)
     if (-not $State.online) { throw 'The selected terminal is offline.' }
-    $identity = [regex]::Match($State.terminal.account, '^(?:,[01],)?([^,@]+)(?:@(njxy|cmcc))?$')
-    if (-not $identity.Success -or $identity.Groups[1].Value -cne $Context.Settings.accounts[$AccountAlias].account) { throw "Portal identity does not match account alias '$AccountAlias'." }
-    $actualOperator = if ($identity.Groups[2].Success) { $identity.Groups[2].Value } else { 'campus' }
-    if ($Operator -and $actualOperator -cne $Operator) { throw 'Portal operator does not match the requested operator.' }
+    $identity = [regex]::Match($State.terminal.account, '^(?:,[01],)?([^\s,@]+)(?:@(njxy|cmcc))?$')
+    if (-not $identity.Success) { throw 'Portal account identity is invalid.' }
+    $account = $identity.Groups[1].Value
+    $masked = $account -match '[*＊]'
+    $operator = if ($identity.Groups[2].Success) { $identity.Groups[2].Value } elseif (-not $masked) { 'campus' } else { '' }
+    return @{ Account = $account; Masked = $masked; Operator = $operator }
+}
+
+function Assert-CampusIdentity {
+    param($Context, $State, [string]$AccountAlias, [string]$Operator = '', [switch]$SelfVerified)
+    $identity = Get-CampusTerminalIdentity $State
+    $matches = if ($identity.Masked) { $SelfVerified -or (Get-CampusPortalAlias $Context $State) -ceq $AccountAlias }
+        else { $identity.Account -ceq $Context.Settings.accounts[$AccountAlias].account }
+    if (-not $matches) { throw "Portal identity does not match account alias '$AccountAlias'." }
+    if ($Operator -and $identity.Operator -cne $Operator -and -not ($SelfVerified -and $identity.Masked -and -not $identity.Operator)) {
+        throw 'Portal operator does not match the requested operator.'
+    }
+}
+
+function Test-SameCampusTerminal {
+    param($Before, $After)
+    return $After.online -and $Before.terminal.account -ceq $After.terminal.account -and
+        $Before.terminal['session'] -ceq $After.terminal['session'] -and
+        (ConvertTo-CampusMac $Before.terminal.mac) -ceq (ConvertTo-CampusMac $After.terminal.mac)
 }
 
 function ConvertTo-CampusMac {
@@ -320,12 +353,17 @@ function ConvertTo-CampusMac {
     return $normalized
 }
 
-function Get-CampusConnection {
+function Find-CampusConnections {
     param($Context, [string]$AccountAlias, $State)
     $rows = Invoke-CampusCommand $Context 'connection' $AccountAlias @('zfw', 'online')
     if ($rows -isnot [array]) { throw 'Self online connections did not return an array.' }
     $mac = ConvertTo-CampusMac $State.terminal.mac
-    $matches = @($rows | Where-Object { $_.ip -ceq $Context.Source -and (ConvertTo-CampusMac $_.mac) -ceq $mac })
+    return ,@($rows | Where-Object { $_.ip -ceq $Context.Source -and (ConvertTo-CampusMac $_.mac) -ceq $mac })
+}
+
+function Get-CampusConnection {
+    param($Context, [string]$AccountAlias, $State)
+    $matches = Find-CampusConnections $Context $AccountAlias $State
     if ($matches.Count -ne 1 -or $matches[0].session_id -isnot [string] -or [string]::IsNullOrEmpty($matches[0].session_id)) { throw 'Expected exactly one Self session matching this terminal IP and MAC.' }
     return $matches[0]
 }
@@ -359,11 +397,17 @@ function Connect-CampusTerminal {
             }
             $attemptStarted = [System.Diagnostics.Stopwatch]::GetTimestamp()
             $Details.login_attempts++
-            $response = Invoke-CampusCommand $Context 'login' $AccountAlias @('p', 'login', '--operator', $Operator) -Result
+            $response = Invoke-CampusCommand $Context 'login' $AccountAlias @('p', 'login', '--operator', $Operator, '--verify-with-self') -Result
             if ($response.exit_code -eq 0) {
-                Assert-CampusOperation $response.data
-                if (-not $response.data.Contains('status')) { throw 'Verified login did not return the terminal status.' }
-                return Confirm-CampusStatus $Context $response.data.status
+                $result = $response.data
+                $selfVerified = $result -is [System.Collections.IDictionary] -and $result['outcome'] -ceq 'accepted' -and
+                    $result['account_verified'] -is [bool] -and $result['account_verified']
+                if (-not $selfVerified) { Assert-CampusOperation $result }
+                if (-not $result.Contains('status')) { throw 'Verified login did not return the terminal status.' }
+                $observed = Confirm-CampusStatus $Context $result.status
+                Assert-CampusIdentity $Context $observed $AccountAlias $Operator -SelfVerified:$selfVerified
+                $Details.operator_verified = (Get-CampusTerminalIdentity $observed).Operator -ceq $Operator
+                return $observed
             }
             $lastError = $response.error.message
             $result = $response.data
@@ -379,13 +423,14 @@ function Connect-CampusTerminal {
                 '8' { 'authentication-timeout' }
                 '1' {
                     if ($message -ceq '未绑定运营商账号,请正确绑定运营商账号再试！') { 'binding-pending' }
-                    elseif ($message -ceq '从Radius获取错误代码失败！') { 'radius-error-unavailable' }
+                    elseif ($message -cin @('从Radius获取错误代码失败！', '从Radius获取错误代码出现异常！')) { 'radius-error-unavailable' }
                 }
             }
             if (-not $reason -or ($reason -cne 'already-online' -and $timer.Elapsed.TotalSeconds -ge $LoginTimeoutSeconds)) { throw $lastError }
             $state = Get-CampusStatus $Context 'login-recovery-status'
             if ($state.online) {
                 Assert-CampusIdentity $Context $state $AccountAlias $Operator
+                $Details.operator_verified = $true
                 if ($Context.Diagnostics) { Write-CampusDiagnostic $Context 'login-recovery' @{ attempt = $Details.login_attempts; reason = $reason; decision = 'online-confirmed'; ret_code = $result.ret_code; message = $message; elapsed_ms = $timer.Elapsed.TotalMilliseconds } }
                 return $state
             }
@@ -412,8 +457,7 @@ function Disconnect-CampusTerminal {
         $observedAt = [System.Diagnostics.Stopwatch]::GetTimestamp()
         $observed = Get-CampusStatus $Context 'offline-status'
         if (-not $observed.online) { return }
-        Assert-CampusIdentity $Context $observed $AccountAlias
-        if ((ConvertTo-CampusMac $observed.terminal.mac) -cne (ConvertTo-CampusMac $State.terminal.mac)) { throw 'Terminal identity changed during disconnection.' }
+        if (-not (Test-SameCampusTerminal $State $observed)) { throw 'Terminal identity changed during disconnection.' }
         if ($deadline.Elapsed.TotalSeconds -ge 10) { throw 'Self session was removed, but the portal still lists the terminal online.' }
         $delay = [Math]::Max(0, 50 - [System.Diagnostics.Stopwatch]::GetElapsedTime($observedAt).TotalMilliseconds)
         if ($delay -gt 0) { Start-Sleep -Milliseconds ([int][Math]::Ceiling($delay)) }
@@ -465,11 +509,20 @@ function Invoke-CampusFailureDiagnostics {
 
 function Get-CampusPortalAlias {
     param($Context, $State)
-    $identity = [regex]::Match($State.terminal.account, '^(?:,[01],)?([^,@]+)(?:@(njxy|cmcc))?$')
-    if (-not $identity.Success) { throw 'Portal account identity is invalid.' }
+    $identity = Get-CampusTerminalIdentity $State
+    if ($identity.Masked) {
+        $owners = @(foreach ($alias in $Context.Settings.accounts.Keys) {
+            foreach ($session in (Find-CampusConnections $Context $alias $State)) {
+                if ($session.session_id -isnot [string] -or -not $session.session_id) { throw 'Self returned a matching connection without a session ID.' }
+                [string]$alias
+            }
+        })
+        if ($owners.Count -ne 1) { throw 'A masked portal terminal must match exactly one configured Self connection.' }
+        return $owners[0]
+    }
     $matches = @($Context.Settings.accounts.Keys | Where-Object {
         $credential = $Context.Settings.accounts[$_]
-        $credential -is [System.Collections.IDictionary] -and $credential.Contains('account') -and $credential.account -ceq $identity.Groups[1].Value
+        $credential -is [System.Collections.IDictionary] -and $credential.Contains('account') -and $credential.account -ceq $identity.Account
     })
     if ($matches.Count -ne 1) { throw 'Current portal account must match exactly one configured campus account.' }
     return [string]$matches[0]
@@ -488,8 +541,9 @@ function Assert-CampusEmptyBinding {
 }
 
 $context = New-CampusContext 'login' $Executable $Config $Interface $Source $TimeoutSeconds $PortalPort
-$details = @{ account_alias = $Account; portal_port = $PortalPort; operator = $null; previous_account_alias = $null; binding_from = $null; binding_moved = $false; login_seconds = 0; login_attempts = 0 }
+$details = @{ account_alias = $Account; portal_port = $PortalPort; operator = $null; operator_verified = $false; previous_account_alias = $null; binding_from = $null; binding_moved = $false; login_seconds = 0; login_attempts = 0 }
 try {
+    if ($null -ne $Settings -and $PSBoundParameters.ContainsKey('Config')) { throw 'Use either -Settings or -Config.' }
     Initialize-CampusContext $context @($Account)
     $context.Stage = 'configuration'
     $settings = $context.Settings
@@ -526,9 +580,9 @@ try {
     }
     $portalReady = $false
     if ($state.online -and $currentAlias -ceq $Account) {
-        $identity = [regex]::Match($state.terminal.account, '^(?:,[01],)?([^,@]+)(?:@(njxy|cmcc))?$')
-        $portalReady = $identity.Groups[2].Value -ceq $operator
+        $portalReady = (Get-CampusTerminalIdentity $state).Operator -ceq $operator
     }
+    $details.operator_verified = $portalReady
     if (-not $portalReady -or -not $targetReady) {
         if ($state.online -and -not $portalReady) {
             $connection = Get-CampusConnection $context $currentAlias $state
@@ -541,9 +595,7 @@ try {
                 if (-not (Test-CampusBroadband $holderBefore $broadband)) { throw 'Broadband holder changed before disconnection.' }
             }
             $before = Get-CampusStatus $context 'before-offline'
-            Assert-CampusIdentity $context $before $currentAlias
-            if ($before.terminal.account -cne $state.terminal.account -or
-                (ConvertTo-CampusMac $before.terminal.mac) -cne (ConvertTo-CampusMac $state.terminal.mac)) { throw 'Terminal identity changed before disconnection.' }
+            if (-not (Test-SameCampusTerminal $state $before)) { throw 'Terminal identity changed before disconnection.' }
             Disconnect-CampusTerminal $context $currentAlias $state $connection
         }
         if (-not $targetReady) {
@@ -568,11 +620,11 @@ try {
         if ($portalReady) {
             $after = Get-CampusStatus $context 'binding-status'
             $portalReady = $after.online
+            if ($portalReady) { Assert-CampusIdentity $context $after $Account $operator }
         }
         if (-not $portalReady) {
             $after = Connect-CampusTerminal $context $Account $operator $LoginTimeoutSeconds $details
         }
-        Assert-CampusIdentity $context $after $Account $operator
         if ($state.online -and (ConvertTo-CampusMac $after.terminal.mac) -cne (ConvertTo-CampusMac $state.terminal.mac)) { throw 'Terminal MAC changed during login.' }
     }
     if ($Probe) { Confirm-CampusInternet $context }

@@ -28,9 +28,10 @@ pwsh -NoProfile -File examples/windows/login.ps1 -Source SOURCE_IPV4 -Account AC
 | `-Interface NAME` | 选择校园网网卡，与 `-Source` 二选一 | 必须选择一种 |
 | `-Source IPv4` | 选择校园网网卡上的源 IPv4，与 `-Interface` 二选一 | 必须选择一种 |
 | `-Config FILE` | 校园账号与宽带配置文件 | 当前目录的 `config.json` |
+| `-Settings HASHTABLE` | 从 PowerShell 调用时提供内存配置，与 `-Config` 二选一 | 无 |
 | `-Executable COMMAND` | `njupt-net` 可执行文件路径或命令名 | PATH 中的 `njupt-net` |
 | `-TimeoutSeconds SECONDS` | 传给 CLI 的单次网络请求超时 | `15` |
-| `-PortalPort PORT` | 门户端口，可选 `801/802/803/804`；801、803 使用 HTTP，802、804 使用 HTTPS | `801` |
+| `-PortalPort PORT` | 门户端口，可选 `801/802/803/804`。801、803 使用 HTTP，802、804 使用 HTTPS | `802` |
 | `-LoginTimeoutSeconds SECONDS` | 首次认证起允许恢复登录的时间，范围 `0..120` 秒；`0` 为一次认证 | `45` |
 | `-Probe` | 登录确认后额外探测公网通达性 | 关闭 |
 
@@ -52,21 +53,21 @@ pwsh -NoProfile -File examples/windows/login.ps1 -Source SOURCE_IPV4 -Account AC
 
 当前终端使用其他账号或运营商在线时，脚本通过 Self 按本机校园网 IPv4 与 MAC 选定唯一会话，下线前再次核对目标与持有人的绑定、原身份与 MAC，再完成必要的宽带迁移或绑定，使用目标账号认证。当前在线身份须能唯一对应配置中的校园账号；未知或歧义身份会返回错误。
 
-门户显示离线时，脚本直接继续所需的迁移、绑定和登录。修改前重新读取目标及已找到持有人的绑定，完成后核对门户目标身份与绑定结果。Self 在线列表用于定位需要下线的账号会话；当前终端是否在线由门户状态确定。所有门户操作使用同一个 `PortalPort`。
+门户显示离线时，脚本继续迁移、绑定和登录。门户脱敏账号时，在已配置账号的 Self 在线记录中用 IP 和 MAC 找到唯一归属。已有在线会话缺少运营商字段时，脚本重新认证请求的运营商。服务器接受认证后，Self 可核实目标账号，门户仍未提供运营商时，结果保留 `operator_verified:false`。所有门户操作使用同一个 `PortalPort`。
 
 绑定与解绑由内核提交后重新读取表单，精确核对目标字段。绑定就绪后立即认证，`LoginTimeoutSeconds` 从首次认证开始计时，限定下一次认证的启动时间；已发出的请求使用 `TimeoutSeconds`。新绑定与已有绑定共用这段恢复流程。
 
 | 原生认证响应 | 恢复动作 |
 |---|---|
 | `ret_code=1`，完整提示“未绑定运营商账号,请正确绑定运营商账号再试！” | 观察门户身份，离线时继续认证 |
-| `ret_code=1`，完整提示“从Radius获取错误代码失败！” | 在恢复窗口内观察并继续认证 |
+| `ret_code=1`，完整提示“从Radius获取错误代码失败！”或“从Radius获取错误代码出现异常！” | 在恢复窗口内观察并继续认证 |
 | `ret_code=3`，系统繁忙 | 在恢复窗口内观察并继续认证 |
 | `ret_code=8`，服务端认证超时 | 观察认证后的实际身份，离线时继续认证 |
 | `ret_code=2`，终端 IP 已在线 | 查询当前身份，确认目标账号与运营商后直接完成 |
 
 所有恢复动作都要求本次响应明确为 `rejected`、`verified:false`。每次再次认证前读取门户状态；目标身份已经上线便使用该会话，其他身份上线则结束流程。恢复阶段只查询门户与认证目标账号，宽带关系保持已完成的结果。首次恢复立即进行；绑定生效等待保持相邻认证起始时间至少相隔 50 毫秒，连续繁忙或认证服务错误从 100 毫秒逐步增加至最多 1 秒，并扣除请求和状态查询已经花费的时间。成功即结束恢复。
 
-门户登录返回已核验的在线状态，脚本直接用该结果核对源 IP、目标账号、运营商与 MAC。每个账号的 Cookie 与身份单独保存，重复读取仍向服务器查询当前状态。
+门户登录返回在线状态，脚本核对源 IP、目标账号和 MAC。每个账号的 Cookie 与身份单独保存，重复读取仍向服务器查询当前状态。
 
 下线操作选定本机会话；内核在提交前重新读取当前账号在线列表，确认精确 session ID 仍存在，提交后确认该会话消失，脚本再确认门户已离线。宽带绑定属于校园账号级关系，迁移后由目标校园账号持有。
 
@@ -117,4 +118,4 @@ pwsh -NoProfile -File examples/windows/login-test.ps1 -Interface Ethernet -Accou
 
 结果的 `command` 为 `login`。`data.account_alias` 是目标账号，`data.portal_port` 是本次门户端口，`data.previous_account_alias` 记录原在线账号，`data.binding_from` 记录迁移前的宽带持有人，`data.binding_moved` 表示本次宽带迁移是否已完成。`data.login_attempts` 记录门户认证次数，`data.login_seconds` 记录认证与恢复阶段的实际用时；直接保留目标门户会话时两项均为 `0`。`data.steps` 中的 `elapsed_ms` 记录每次 CLI 调用的用时。
 
-校园账号和宽带密码由 CLI 从配置文件读取。脚本通过 CLI 的 JSON 结果核对状态，密码保留在配置文件中。
+通过 PowerShell 传入 `-Settings` 时，配置经 CLI 会话的标准输入传递。凭据不会进入命令行参数或诊断日志。使用 `-Config` 时，CLI 打开指定的配置文件。

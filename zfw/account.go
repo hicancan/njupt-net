@@ -41,14 +41,7 @@ func (s *Session) Overview(ctx context.Context) (*Account, error) {
 	if err != nil {
 		return nil, err
 	}
-	cards := find(doc, func(n *html.Node) bool { return hasClass(n, "user-info1") })
-	if cards == nil {
-		return nil, fmt.Errorf("Self dashboard is missing its account cards")
-	}
-	panel := cards.Parent
-	for panel != nil && !hasClass(panel, "panel-body") {
-		panel = panel.Parent
-	}
+	panel, cards := dashboardAccountPanel(doc)
 	if panel == nil {
 		return nil, fmt.Errorf("Self dashboard account panel is missing")
 	}
@@ -84,14 +77,33 @@ func (s *Session) Overview(ctx context.Context) (*Account, error) {
 			return nil, fmt.Errorf("Self dashboard is missing account field %s", label)
 		}
 	}
-	user, err := selfUser(doc)
-	if err != nil {
-		return nil, err
-	}
-	if account.Account != user.Account || account.Account != s.identity {
+	if account.Account != s.identity {
 		return nil, fmt.Errorf("Self dashboard account does not match the management session")
 	}
 	return account, nil
+}
+
+func dashboardAccountPanel(doc *html.Node) (panel, cards *html.Node) {
+	cards = find(doc, func(n *html.Node) bool { return hasClass(n, "user-info1") })
+	if cards != nil {
+		for panel = cards.Parent; panel != nil && !hasClass(panel, "panel-body"); panel = panel.Parent {
+		}
+	}
+	return panel, cards
+}
+
+func dashboardIdentity(doc *html.Node) (string, error) {
+	panel, _ := dashboardAccountPanel(doc)
+	var values []string
+	for _, field := range labelValues(panel) {
+		if field.Label == "账号" {
+			values = append(values, field.Value)
+		}
+	}
+	if len(values) != 1 || values[0] == "" {
+		return "", fmt.Errorf("Self dashboard does not identify exactly one account")
+	}
+	return values[0], nil
 }
 
 func (s *Session) Profile(ctx context.Context) (*Profile, error) {

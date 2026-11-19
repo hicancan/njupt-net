@@ -24,8 +24,10 @@ import (
 
 const portalHost = "p.njupt.edu.cn"
 
+// DefaultPort is the deployed HTTPS portal endpoint.
+const DefaultPort = 802
+
 // RuntimeConfig contains the selected endpoint and its native configuration.
-// The authentication nonce remains private to the portal.
 type RuntimeConfig struct {
 	Source               string `json:"source"`
 	Endpoint             string `json:"endpoint"`
@@ -42,7 +44,7 @@ type RuntimeConfig struct {
 }
 
 func New(link *network.Link, terminal string) (*Portal, error) {
-	return NewAt(link, terminal, 804)
+	return NewAt(link, terminal, DefaultPort)
 }
 
 // NewAt selects one deployed API endpoint without discovery or port fallback.
@@ -50,7 +52,14 @@ func NewAt(link *network.Link, terminal string, port int) (*Portal, error) {
 	if link == nil {
 		return nil, fmt.Errorf("portal requires a network link")
 	}
-	return newPortal(link.ClientFor(portalHost, netip.AddrFrom4([4]byte{10, 10, 244, 11})), link.Source(), terminal, port)
+	portal, err := newPortal(link.ClientFor(portalHost, netip.AddrFrom4([4]byte{10, 10, 244, 11})), link.Source(), terminal, port)
+	if err != nil {
+		return nil, err
+	}
+	if mac, err := normalizeMAC(link.HardwareAddr().String()); err == nil {
+		portal.mac = mac
+	}
+	return portal, nil
 }
 
 func (p *Portal) runtimeConfig() *RuntimeConfig {
@@ -72,6 +81,7 @@ type Portal struct {
 	sequence     uint64
 	stateTimeout time.Duration
 	configured   bool
+	captchaReady bool
 	mac          string
 	settings     map[string]json.RawMessage
 }
@@ -123,7 +133,7 @@ func (p *Portal) configure(ctx context.Context) (*RuntimeConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid portal configuration data: %w", err)
 	}
-	for _, key := range []string{"program_index", "page_index", "login_method", "check_online_method", "account_prefix", "ipad_terminal_identity", "no_filter_accandpwd", "enable_r3", "en_md5", "register_mode", "ac_logout", "rcn"} {
+	for _, key := range []string{"program_index", "page_index", "login_method", "check_online_method", "account_prefix", "enable_r3", "en_md5", "register_mode", "ac_logout"} {
 		if _, ok := settings[key]; !ok {
 			return nil, fmt.Errorf("portal configuration is missing %s", key)
 		}
@@ -134,13 +144,18 @@ func (p *Portal) configure(ctx context.Context) (*RuntimeConfig, error) {
 		}
 	}
 	for _, key := range []string{"account_prefix", "ipad_terminal_identity", "no_filter_accandpwd"} {
+		if _, present := settings[key]; !present {
+			continue
+		}
 		v := scalar(settings[key])
 		if v != "0" && v != "1" {
 			return nil, fmt.Errorf("invalid portal setting %s", key)
 		}
 	}
-	if scalar(settings["program_index"]) == "" || scalar(settings["page_index"]) == "" || scalar(settings["rcn"]) == "" {
-		return nil, fmt.Errorf("portal configuration contains an empty program, page or nonce")
+	for _, key := range []string{"program_index", "page_index", "register_mode", "ac_logout"} {
+		if scalar(settings[key]) == "" {
+			return nil, fmt.Errorf("portal configuration contains an empty %s", key)
+		}
 	}
 	p.settings, p.configured = settings, true
 	return p.runtimeConfig(), nil
@@ -183,7 +198,7 @@ func (p *Portal) call(ctx context.Context, path string, data url.Values) (map[st
 	var response []byte
 	var err error
 	switch path {
-	case "page/loadConfig", "online_list", "err_code":
+	case "page/loadConfig", "online_list", "err_code", "err_code/loadErrorPrompt", "notice/get_notice_content":
 		response, _, _, err = network.Read(ctx, p.client, p.api+path, data)
 	default:
 		response, _, _, err = network.Request(ctx, p.client, http.MethodGet, p.api+path, data)

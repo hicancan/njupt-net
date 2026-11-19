@@ -30,6 +30,11 @@ func selfTestLoginPage() string {
 <button name="submit" type="submit">登录</button></form><script>var md5 = false;</script></body></html>`
 }
 
+func selfTestDashboard(account string) string {
+	return `<div class="panel-body"><div class="row"><div><label>账号：</label></div><div><span>` +
+		account + `</span></div></div><div class="user-info1"></div></div>`
+}
+
 func selfTestClient(t *testing.T, handler http.HandlerFunc) *Session {
 	t.Helper()
 	server := httptest.NewServer(handler)
@@ -76,7 +81,7 @@ func TestSelfLoginUsesDynamicFormAndPrefetch(t *testing.T) {
 			}
 			http.Redirect(w, r, "/Self/dashboard", http.StatusFound)
 		case "/Self/dashboard":
-			fmt.Fprint(w, selfTestPage("", "fixture-account"))
+			fmt.Fprint(w, selfTestDashboard("fixture-account"))
 		default:
 			http.NotFound(w, r)
 		}
@@ -106,7 +111,7 @@ func TestSelfLoginRejectsMismatchedIdentity(t *testing.T) {
 		case "/Self/login/verify":
 			http.Redirect(w, r, "/Self/dashboard", http.StatusFound)
 		case "/Self/dashboard":
-			fmt.Fprint(w, selfTestPage("", "another-account"))
+			fmt.Fprint(w, selfTestDashboard("another-account")+selfTestPage("", "fixture-account"))
 		case "/Self/login/logout":
 			logouts++
 			http.Redirect(w, r, "/Self/login/", http.StatusFound)
@@ -135,7 +140,7 @@ func TestLoginDoesNotUseRefreshTokenAsAuthenticationState(t *testing.T) {
 		case "/Self/login/verify":
 			http.Redirect(w, r, "/Self/dashboard", http.StatusFound)
 		case "/Self/dashboard":
-			fmt.Fprint(w, `<html><body><script>(function(user){})({"userName":"fixture-account"});</script></body></html>`)
+			fmt.Fprint(w, selfTestDashboard("fixture-account"))
 		}
 	})
 	s.identity, s.authenticated = "", false

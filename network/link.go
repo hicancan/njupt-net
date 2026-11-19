@@ -53,6 +53,15 @@ func (t *linkTransport) CloseIdleConnections() {
 // Source is the address used by every client created from this link.
 func (n *Link) Source() string { return n.source }
 
+// HardwareAddr looks up the hardware address of the link's bound interface.
+func (n *Link) HardwareAddr() net.HardwareAddr {
+	device, err := net.InterfaceByIndex(n.trace.interfaceIndex)
+	if err != nil {
+		return nil
+	}
+	return device.HardwareAddr
+}
+
 // Connectivity is the result of the same-source external HTTP probe.
 type Connectivity struct {
 	Source   string `json:"source"`

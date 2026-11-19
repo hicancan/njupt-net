@@ -3,10 +3,10 @@ package zfw
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"testing"
 )
 
@@ -16,8 +16,26 @@ func TestSelfDeviceEmptyBodyIsAProtocolFailure(t *testing.T) {
 			t.Error("device sort differs from the page")
 		}
 	})
-	if _, err := s.Devices(context.Background(), 1, 10); err == nil || !strings.Contains(err.Error(), "empty JSON") {
+	if page, err := s.Devices(context.Background(), 1, 10); page != nil || !errors.Is(err, ErrMACListUnavailable) {
 		t.Fatalf("empty body was treated as a valid list: %v", err)
+	}
+}
+
+func TestSelfUnbindDoesNotSubmitWhenMACListIsUnavailable(t *testing.T) {
+	s := selfTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/Self/service/myMac":
+			fmt.Fprint(w, `<script>var target = "&ajaxCsrfToken=" + 'unbind-token';</script>`)
+		case "/Self/service/getMacList":
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected request after an unavailable list: %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	})
+	result, err := s.Unbind(context.Background(), "112233445566")
+	if result == nil || result.Outcome != NotSubmitted || result.Verified || !errors.Is(err, ErrMACListUnavailable) {
+		t.Fatalf("unavailable list did not prevent unbind: result=%+v error=%v", result, err)
 	}
 }
 

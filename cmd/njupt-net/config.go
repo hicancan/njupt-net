@@ -29,6 +29,10 @@ func loadConfig(path string) (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("read config: %w", err)
 	}
+	return decodeConfig(data)
+}
+
+func decodeConfig(data []byte) (config, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	var cfg *config

@@ -84,7 +84,7 @@ func (s *Session) PublicPage(ctx context.Context, kind string) (*PublicPage, err
 	if err != nil {
 		return result, err
 	}
-	result.Available = result.Text != "暂无使用帮助信息"
+	result.Available = result.Text != "暂无使用帮助信息" && result.Text != "No help is available"
 	return result, nil
 }
 

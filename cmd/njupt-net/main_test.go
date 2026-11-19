@@ -144,7 +144,7 @@ func TestFlagFailureIsOneJSONDocument(t *testing.T) {
 }
 
 func TestRemovedCommandsAreNotAliases(t *testing.T) {
-	for _, args := range [][]string{{"p", "probe"}, {"p", "captcha"}, {"zfw", "login"}, {"zfw", "language"}} {
+	for _, args := range [][]string{{"p", "probe"}, {"zfw", "login"}} {
 		var out, err bytes.Buffer
 		if code := run(context.Background(), args, &out, &err); code != 2 || !strings.Contains(err.String(), "unknown") {
 			t.Fatalf("%v: exit=%d stderr=%s", args, code, err.String())

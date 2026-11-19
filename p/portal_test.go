@@ -20,7 +20,7 @@ func TestPortalSourceAndDefaultEndpointComeFromLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if portal.source != link.Source() || portal.api != "https://p.njupt.edu.cn:804/eportal/portal/" {
+	if portal.source != link.Source() || portal.api != "https://p.njupt.edu.cn:802/eportal/portal/" {
 		t.Fatalf("unexpected default source or endpoint: %+v", portal)
 	}
 	if _, err := New(nil, "pc"); err == nil {
@@ -139,7 +139,7 @@ func TestPortalRejectsIncompleteNativeConfiguration(t *testing.T) {
 	for _, config := range []string{
 		`{"code":0}`,
 		`{"code":1,"data":null}`,
-		strings.Replace(portalTestConfig, `"rcn":"fresh-nonce"`, `"rcn":""`, 1),
+		strings.Replace(portalTestConfig, `"register_mode":"1"`, `"register_mode":""`, 1),
 		strings.Replace(portalTestConfig, `"account_prefix":"1"`, `"account_prefix":"2"`, 1),
 		strings.Replace(portalTestConfig, `"program_index":"fresh-program",`, "", 1),
 	} {
@@ -153,5 +153,24 @@ func TestPortalRejectsIncompleteNativeConfiguration(t *testing.T) {
 				t.Fatal("failed configuration was cached for authentication")
 			}
 		})
+	}
+}
+
+func TestPortalAcceptsCurrentConfigWithoutLegacyFields(t *testing.T) {
+	f := newPortalFixture(t, "pc")
+	for _, legacy := range []string{`"ipad_terminal_identity":"0",`, `"no_filter_accandpwd":"0",`, `,"rcn":"fresh-nonce"`} {
+		f.config = strings.Replace(f.config, legacy, "", 1)
+	}
+	cfg, err := f.portal.Configure(context.Background())
+	if err != nil || cfg.IPadTerminalIdentity || cfg.EncodeCredentials {
+		t.Fatalf("current config was rejected or misinterpreted: config=%+v error=%v", cfg, err)
+	}
+}
+
+func TestPortalNoticeHasKnownEmptyState(t *testing.T) {
+	f := newPortalFixture(t, "pc")
+	notice, err := f.portal.Notice(context.Background())
+	if err != nil || notice == nil || notice.Available || notice.Content != "" || notice.Message != "读取通知公告内容为空" {
+		t.Fatalf("known empty response was misinterpreted: notice=%+v error=%v", notice, err)
 	}
 }

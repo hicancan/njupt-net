@@ -11,7 +11,7 @@ param(
     [string]$IndependentInterface = '',
     [string]$ProxyConfigPath = '',
     [ValidateRange(1, 3)][int]$Rounds = 2,
-    [ValidateSet(801, 802, 803, 804)][int]$PortalPort = 801,
+    [ValidateSet(801, 802, 803, 804)][int]$PortalPort = 802,
     [ValidateRange(1, 300)][int]$TimeoutSeconds = 15,
     [ValidateRange(0, 120)][int]$LoginTimeoutSeconds = 45,
     [ValidateRange(30, 600)][int]$StageTimeoutSeconds = 240
@@ -123,8 +123,22 @@ function Assert-BatchState($State, [string]$Alias) {
     $portal = $State.portal.response
     if ($State.portal.exit_code -ne 0 -or $portal.data.online -ne $true -or $portal.data.source -cne $script:source) { throw "Portal state was not confirmed for $Alias." }
     $identity = [regex]::Match($portal.data.terminal.account, '^(?:,[01],)?([^,@]+)(?:@(njxy|cmcc))?$')
-    if (-not $identity.Success -or $identity.Groups[1].Value -cne $settings.accounts[$Alias].account -or $identity.Groups[2].Value -cne $settings.broadband_account.operator) { throw "Portal identity did not match $Alias." }
     $operator = $settings.broadband_account.operator
+    if (-not $identity.Success) { throw 'Portal returned an invalid terminal identity.' }
+    if ($identity.Groups[1].Value -match '[*＊]') {
+        if ($identity.Groups[2].Success -and $identity.Groups[2].Value -cne $operator) { throw "Portal operator did not match $Alias." }
+        $mac = $portal.data.terminal.mac -replace '[:-]', ''
+        $owners = @(foreach ($key in @($FirstAccount, $RestoreAccount)) {
+            $connections = $State.connections[$key]
+            if ($connections.exit_code -ne 0) { throw "Cannot verify the Self connections of $key." }
+            foreach ($connection in $connections.response.data) {
+                if ($connection.session_id -and $connection.ip -ceq $script:source -and ($connection.mac -replace '[:-]', '') -ieq $mac) { $key }
+            }
+        })
+        if ($owners.Count -ne 1 -or $owners[0] -cne $Alias) { throw "Self could not uniquely verify the masked portal identity of $Alias." }
+    } elseif ($identity.Groups[1].Value -cne $settings.accounts[$Alias].account -or $identity.Groups[2].Value -cne $operator) {
+        throw "Portal identity did not match $Alias."
+    }
     foreach ($key in @($FirstAccount, $RestoreAccount)) {
         $response = $State.bindings[$key].response
         if ($State.bindings[$key].exit_code -ne 0) { throw "Cannot verify the broadband binding of $key." }

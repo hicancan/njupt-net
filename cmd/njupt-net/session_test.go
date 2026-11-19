@@ -30,6 +30,35 @@ func sessionLines(t *testing.T, output string) []sessionResponse {
 	return results
 }
 
+func TestSessionReceivesConfigBeforeCommands(t *testing.T) {
+	owner := newCommandContext(options{config: "missing.json"})
+	var output bytes.Buffer
+	input := strings.NewReader("{\"accounts\":{\"guest\":{\"account\":\"fixture\",\"password\":\"fixture-secret\"}}}\n{\"args\":[\"close\"]}\n")
+	if code := runSession(context.Background(), owner, input, &output, true); code != 0 {
+		t.Fatalf("session exit %d: %s", code, output.String())
+	}
+	results := sessionLines(t, output.String())
+	if len(results) != 1 || results[0].Command != "close" || strings.Contains(output.String(), "fixture-secret") {
+		t.Fatalf("config reached the command stream: %s", output.String())
+	}
+	_, account, err := owner.configured("guest", true)
+	if err != nil || account.Account != "fixture" || account.Password != "fixture-secret" {
+		t.Fatal("session did not retain the supplied config")
+	}
+}
+
+func TestSessionRejectsMissingOrMalformedConfig(t *testing.T) {
+	for _, input := range []string{"", "invalid-credential", "{\"invalid-credential\":42}"} {
+		var output bytes.Buffer
+		owner := newCommandContext(options{})
+		code := runSession(context.Background(), owner, strings.NewReader(input), &output, true)
+		replies := sessionLines(t, output.String())
+		if code != 2 || len(replies) != 1 || replies[0].Command != "session" || strings.Contains(output.String(), "invalid-credential") {
+			t.Fatalf("unsanitized or invalid config rejection: %d %s", code, output.String())
+		}
+	}
+}
+
 func TestSessionFramesErrorsWithoutEndingTheConversation(t *testing.T) {
 	owner := newCommandContext(options{timeout: time.Second})
 	var output bytes.Buffer
@@ -43,7 +72,7 @@ func TestSessionFramesErrorsWithoutEndingTheConversation(t *testing.T) {
 		`{"args":["close"]}`,
 		`{"args":["unknown-after-close"]}`,
 	}, "\n"))
-	if code := runSession(context.Background(), owner, input, &output); code != 0 {
+	if code := runSession(context.Background(), owner, input, &output, false); code != 0 {
 		t.Fatalf("session exit %d: %s", code, output.String())
 	}
 	results := sessionLines(t, output.String())
@@ -79,7 +108,7 @@ func TestSessionRejectsMalformedRequestsAndGlobalOverrides(t *testing.T) {
 			var output bytes.Buffer
 			owner := newCommandContext(options{})
 			input := strings.NewReader(line + "\n" + `{"args":["close"]}`)
-			if code := runSession(context.Background(), owner, input, &output); code != 0 {
+			if code := runSession(context.Background(), owner, input, &output, false); code != 0 {
 				t.Fatalf("session exit %d: %s", code, output.String())
 			}
 			results := sessionLines(t, output.String())
@@ -93,7 +122,7 @@ func TestSessionRejectsMalformedRequestsAndGlobalOverrides(t *testing.T) {
 func TestSessionEOFClosesAndCancellationDoesNotWaitForInput(t *testing.T) {
 	owner := newCommandContext(options{})
 	var output bytes.Buffer
-	if code := runSession(context.Background(), owner, strings.NewReader(""), &output); code != 0 || !owner.closed || output.Len() != 0 {
+	if code := runSession(context.Background(), owner, strings.NewReader(""), &output, false); code != 0 || !owner.closed || output.Len() != 0 {
 		t.Fatalf("EOF: exit=%d closed=%t output=%s", code, owner.closed, output.String())
 	}
 	input, writer := io.Pipe()
@@ -103,7 +132,7 @@ func TestSessionEOFClosesAndCancellationDoesNotWaitForInput(t *testing.T) {
 	defer cancel()
 	owner = newCommandContext(options{})
 	finished := make(chan int, 1)
-	go func() { finished <- runSession(ctx, owner, input, &output) }()
+	go func() { finished <- runSession(ctx, owner, input, &output, false) }()
 	cancel()
 	select {
 	case code := <-finished:
@@ -126,7 +155,7 @@ func TestSessionClosesEveryManagementSessionAndReportsFailures(t *testing.T) {
 	owner.sessions["B"], owner.sessions["W"] = &zfw.Session{}, &zfw.Session{}
 	owner.order = []string{"B", "W"}
 	var output bytes.Buffer
-	if code := runSession(context.Background(), owner, strings.NewReader(`{"args":["close"]}`), &output); code != 1 {
+	if code := runSession(context.Background(), owner, strings.NewReader(`{"args":["close"]}`), &output, false); code != 1 {
 		t.Fatalf("cleanup failure exit=%d output=%s", code, output.String())
 	}
 	results := sessionLines(t, output.String())
@@ -142,7 +171,7 @@ func TestSessionClosesEveryManagementSessionAndReportsFailures(t *testing.T) {
 func TestSessionRejectsOversizedFramesAndCloses(t *testing.T) {
 	owner := newCommandContext(options{})
 	var output bytes.Buffer
-	if code := runSession(context.Background(), owner, strings.NewReader(strings.Repeat("x", 1024*1024+1)), &output); code != 1 || !owner.closed {
+	if code := runSession(context.Background(), owner, strings.NewReader(strings.Repeat("x", 1024*1024+1)), &output, false); code != 1 || !owner.closed {
 		t.Fatalf("oversized frame: exit=%d closed=%t", code, owner.closed)
 	}
 	results := sessionLines(t, output.String())

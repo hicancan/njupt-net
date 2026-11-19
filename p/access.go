@@ -248,7 +248,29 @@ type ErrorInfo struct {
 func (p *Portal) ErrorInfo(ctx context.Context) (*ErrorInfo, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	obj, err := p.call(ctx, "err_code", url.Values{"wlan_user_ip": {p.source}, "wlan_user_ipv6": {""}, "wlan_user_mac": {p.mac}})
+	return p.errorInfo(ctx, "err_code", url.Values{"ip": {p.source}, "mac": {p.mac}})
+}
+
+// ErrorPrompt translates an existing portal error code without querying the terminal's Radius state.
+func (p *Portal) ErrorPrompt(ctx context.Context, code string) (*ErrorInfo, error) {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return nil, fmt.Errorf("portal error code is required")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	result, err := p.errorInfo(ctx, "err_code/loadErrorPrompt", url.Values{"error_code": {code}})
+	if err == nil && result.PromptChinese == "" && result.PromptEnglish == "" {
+		return nil, fmt.Errorf("portal did not return an error prompt")
+	}
+	if err == nil && result.Code == "" {
+		result.Code = code
+	}
+	return result, err
+}
+
+func (p *Portal) errorInfo(ctx context.Context, path string, values url.Values) (*ErrorInfo, error) {
+	obj, err := p.call(ctx, path, values)
 	if err != nil {
 		return nil, err
 	}

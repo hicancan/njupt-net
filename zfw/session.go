@@ -22,6 +22,11 @@ const selfHost = "zfw.njupt.edu.cn"
 
 var ErrSessionExpired = errors.New("zfw management session is not authenticated")
 
+// ErrBridgeRejected means the signed entry led to the same-origin login form.
+var ErrBridgeRejected = errors.New("Self rejected the signed bridge and returned its login form")
+
+var errEmptyJSON = errors.New("empty JSON response")
+
 var plainPasswordPattern = regexp.MustCompile(`\bvar\s+md5\s*=\s*false\s*;`)
 var sessionPathPattern = regexp.MustCompile(`;jsessionid=[^/;?]*`)
 
@@ -163,7 +168,7 @@ func (s *Session) json(ctx context.Context, path string, params url.Values, out 
 	}
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) == 0 {
-		return fmt.Errorf("Session %s returned an empty JSON response", path)
+		return fmt.Errorf("Session %s returned an %w", path, errEmptyJSON)
 	}
 	if trimmed[0] == '<' {
 		doc, parseErr := html.Parse(bytes.NewReader(data))
@@ -310,9 +315,16 @@ func (s *Session) LoginBridge(ctx context.Context, expectedAccount, bridgeURL st
 	s.identity = ""
 	s.base = &url.URL{Scheme: target.Scheme, Host: target.Host, Path: "/Self/"}
 	s.loginSubmitted = true
-	data, final, _, err := s.navigate(ctx, http.MethodGet, target.String(), nil, "/Self/dashboard")
+	data, final, _, err := s.navigate(ctx, http.MethodGet, target.String(), nil, "/Self/dashboard", "/Self/login", "/Self/login/")
 	if err != nil {
 		return err
+	}
+	if selfLoginPath(final) {
+		doc, parseErr := html.Parse(bytes.NewReader(data))
+		if parseErr == nil && loginForm(doc) != nil {
+			s.loginSubmitted = false
+			return ErrBridgeRejected
+		}
 	}
 	return s.confirmLogin(data, final, expectedAccount)
 }
@@ -348,12 +360,12 @@ func (s *Session) confirmLogin(data []byte, final *url.URL, account string) erro
 	if err != nil {
 		return err
 	}
-	user, err := selfUser(doc)
+	identity, err := dashboardIdentity(doc)
 	if err != nil {
 		s.identity = ""
 		return err
 	}
-	if user.Account != account {
+	if identity != account {
 		s.identity = ""
 		return fmt.Errorf("Session authenticated a different account")
 	}

@@ -6,6 +6,28 @@ import (
 	"testing"
 )
 
+func TestCaptchaCheckRequiresFreshImageAndPreservesNativeRejection(t *testing.T) {
+	f := newPortalFixture(t, "pc")
+	ctx := context.Background()
+	if _, err := f.portal.CheckCaptcha(ctx, "wrong"); err == nil {
+		t.Fatal("checked an answer without an issued image")
+	}
+	if _, err := f.portal.Captcha(ctx); err != nil {
+		t.Fatal(err)
+	}
+	result, err := f.portal.CheckCaptcha(ctx, "wrong")
+	if err == nil || result == nil || result.Outcome != Rejected || result.Verified {
+		t.Fatalf("captcha rejection was lost: result=%+v error=%v", result, err)
+	}
+	if _, err := f.portal.CheckCaptcha(ctx, "wrong"); err == nil {
+		t.Fatal("reused a previously checked image")
+	}
+	path := "/eportal/portal/captcha/check"
+	if len(f.queries[path]) != 1 || f.queries[path][0].Get("captcha") != "wrong" {
+		t.Fatalf("unexpected captcha check: %v", f.queries[path])
+	}
+}
+
 func TestPortalPasswordSubmissionAndAcceptance(t *testing.T) {
 	f := newPortalFixture(t, "pc")
 	account, password := "student", "old &secret"

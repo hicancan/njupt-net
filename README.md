@@ -5,16 +5,15 @@
 - `p`：当前终端的配置、在线状态、账号认证、注销、自助服务入口与条件改密。
 - `zfw`：账号资料、在线连接、MAC 绑定、无感知策略、运营商绑定、消费保护与账单。
 - `network`：网卡枚举、源地址选择与外网通达性检测。
-- `research`：独立 Python 协议研究、公开样本与离线实验。
 
-上网认证提供 801–804 四个入口，CLI 默认使用 `https://p.njupt.edu.cn:804/eportal/portal/`，通过 `--port` 选择端口。账号自助服务使用 `http://zfw.njupt.edu.cn:8080/Self/`。每项命令的请求、参数与结果见 [p](docs/p.md) 和 [zfw](docs/zfw.md)。
+上网认证 CLI 默认使用 `https://p.njupt.edu.cn:802/eportal/portal/`，可用 `--port` 选择入口。账号自助服务使用 `http://zfw.njupt.edu.cn:8080/Self/`。每项命令的请求、参数与结果见 [p](docs/p.md) 和 [zfw](docs/zfw.md)。
 
 ## 安装
 
 使用 Go 1.26 或更新版本：
 
 ```text
-go install github.com/hicancan/njupt-net/v4/cmd/njupt-net@v4.0.0
+go install github.com/hicancan/njupt-net/v4/cmd/njupt-net@v4.1.0
 ```
 
 也可以从源码构建：
@@ -64,7 +63,7 @@ njupt-net --interface "Ethernet" --account default zfw export --kind monthly --y
 
 将 `Ethernet` 替换为 `interfaces` 输出中的实际网卡名。所有网络命令必须明确选择 `--interface NAME` 或 `--source IPv4`，二者只能指定一个。网卡有多个 IPv4 时使用 `--source`。`version`、网卡枚举与帮助无需选择源地址；`version` 返回版本、Go 版本、系统与架构。
 
-全局参数放在命令组之前，业务参数放在子命令之后。配置默认从当前目录的 `config.json` 读取，可用 `--config PATH` 指定；私有管理命令和门户认证使用 `--account ALIAS` 选择凭据。
+全局参数放在命令组之前，业务参数放在子命令之后。配置默认从当前目录的 `config.json` 读取，可用 `--config PATH` 指定。调用者也可在 `session --config-stdin` 中通过首行 JSON 提供配置。私有管理命令和门户认证使用 `--account ALIAS` 选择凭据。
 
 脚本和程序可使用 `session` 连续发送命令，复用门户实例与各账号的管理会话。标准输入、输出均为每行一个 JSON，使用方法见 [连续命令会话](docs/architecture.md#连续命令会话)。
 
@@ -76,7 +75,7 @@ njupt-net --interface "Ethernet" --account default zfw export --kind monthly --y
 
 只读页面和查询复用 HTTP 连接；认证及修改请求使用新连接，每次修改调用提交一次业务请求。需要导航到结果页的操作，由业务接口明确声明允许读取的目标。
 
-`probe` 使用系统 DNS 解析外部域名，TCP 连接绑定同一源 IPv4 和网卡。`p status` 表示门户在线状态，`probe` 单独观测外网响应。Windows 登录脚本默认选择 801，以门户身份与宽带绑定确认作为成功条件；指定 `-Probe` 时另行报告公网探测结果。
+`probe` 使用系统 DNS 解析外部域名，TCP 连接绑定同一源 IPv4 和网卡。`p status` 表示门户在线状态，`probe` 单独观测外网响应。Windows 登录脚本默认选择 802，以门户身份与宽带绑定确认作为成功条件。指定 `-Probe` 时另行报告公网探测结果。
 
 双网环境中，校园业务的 TCP 连接固定从所选校园网卡发出，其他应用按各自代理和系统路由连接。校园服务使用固定 IP；普通域名与公网探测的 DNS 查询仍走操作系统的解析路径。
 
@@ -101,7 +100,7 @@ njupt-net zfw --help
 
 门户普通登录使用账号、密码与运营商选择，电脑、手机和平板通过 `--terminal` 选择。登录直接提交一次原生认证，服务器接受后查询选定源 IPv4 的目标在线身份；拒绝和未知结果按本次响应返回。运营商关系通过 zfw 绑定与解绑，Windows 登录脚本组合这些原子操作完成目标账号登录。
 
-MAC 绑定列表已读取到真实设备记录。当前门户注销返回拒绝，充值页面显示服务菜单；命令按实际响应返回处理结果与可用状态。各接口的行为列于协议文档。
+MAC 绑定列表可返回真实设备记录，部分账号的接口返回空正文。门户注销已在 HTTPS 802 上复核离线，充值页面显示服务菜单。命令按原生响应报告处理结果与可用状态，各接口的行为列于协议文档。
 
 ## 文档与开发
 
@@ -111,7 +110,5 @@ MAC 绑定列表已读取到真实设备记录。当前门户注销返回拒绝�
 - [内核架构](docs/architecture.md)
 - [开发、测试与发布](docs/development.md)
 - [Windows 账号登录](examples/windows/README.md)
-- [Python 协议研究](research/README.md)
-- [原子动作与请求边界](research/requests.md)
 
 许可证：[MIT](LICENSE)。

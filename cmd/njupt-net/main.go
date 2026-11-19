@@ -37,19 +37,23 @@ Global flags precede the command group:
 Exactly one of --interface or --source is required except for version, interfaces and --help.
 
 p commands:
-  config, status, error              inspect the selected terminal's portal
-  login       [--operator campus|njxy|cmcc]
+  config, status, error, notice      inspect the selected terminal's portal
+  login       [--operator campus|njxy|cmcc] [--verify-with-self]
   logout                             disconnect the selected terminal
   self        [--type 0|1|2]         obtain the self-service entry URL
   password    --new-password-file PATH --captcha-output PATH
+  captcha     --output PATH         fetch a verification image
+  captcha-check --answer ANSWER    verify the current image in a CLI session
 Every p command accepts --terminal pc|mobile|hipad|vipad (default: pc).
-Every p command accepts --port 801|802|803|804 (default: 804).
+Error prompt lookup: p error-prompt --code CODE
+Every p command accepts --port 801|802|803|804 (default: 802).
 Ports 801/803 use HTTP; ports 802/804 use HTTPS.
 login, self and password require --account. Password reads the image answer
 from stdin; the new password file contains one password with an optional newline.
 
 zfw commands:
   verify                             verify account identity and close the session
+  logout                             close the selected account's management session in session mode
   account, refresh, profile          account overview, refresh and profile
   online, history                    current connections and recent logins
   offline     --session ID            disconnect an account connection
@@ -60,6 +64,7 @@ zfw commands:
   mauth       [--change]              query or execute the current policy action
   recharge                           show recharge availability
   notice, help, agreement             public pages; no --account required
+  language    --language zh_cn|English change the public Self session language
   bills       --kind online|monthly|operations [QUERY FLAGS]
   export      --kind online|monthly|operations --output PATH [--all] [QUERY FLAGS]
 Each private zfw command logs in, executes once, and closes its management session.
@@ -68,6 +73,7 @@ It reuses portal context and per-account management sessions. Responses are one-
 JSON on stdout with command, data, optional error, and exit_code. Send {"args":["close"]}
 to close all management sessions and exit; stdin EOF also closes them. Source, config
 and timeout remain fixed. Interactive p password and --self-url-file are unavailable.
+Use session --config-stdin to send the config object as the first line, before commands.
 With --self-url-file, --account still selects the expected identity; its password
 is unused. The file contains one bridge URL with an optional trailing newline.
 
@@ -149,14 +155,21 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		owner.trace = file
 	}
 	if group == "session" {
-		if err := parse(commandFlags(group), remaining[1:]); err != nil {
+		flags := commandFlags(group)
+		configStdin := flags.Bool("config-stdin", false, "read the session config from the first input line")
+		if err := parse(flags, remaining[1:]); err != nil {
 			return finish(stdout, stderr, group, nil, err)
+		}
+		configFileSet := false
+		fs.Visit(func(f *flag.Flag) { configFileSet = configFileSet || f.Name == "config" })
+		if *configStdin && configFileSet {
+			return finish(stdout, stderr, group, nil, invalid("--config and --config-stdin cannot be combined"))
 		}
 		owner.stream = true
 		if _, err := owner.openLink(); err != nil {
 			return finish(stdout, stderr, group, nil, err)
 		}
-		return runSession(ctx, owner, os.Stdin, stdout)
+		return runSession(ctx, owner, os.Stdin, stdout, *configStdin)
 	}
 	command, data, err := owner.execute(ctx, opt.account, remaining, stderr)
 	err = errors.Join(err, owner.close(ctx))

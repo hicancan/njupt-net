@@ -13,12 +13,14 @@ import (
 func zfwCommand(ctx context.Context, owner *commandContext, alias, command string, args []string) (result any, resultErr error) {
 	opt := owner.opt
 	fs := commandFlags("zfw " + command)
-	var sessionID, mac, limit, output, unbindOperator string
+	var sessionID, mac, limit, output, unbindOperator, language string
 	var bind, change, all bool
 	page, size := 1, 10
 	var query zfw.BillQuery
 	switch command {
-	case "verify", "account", "refresh", "profile", "online", "history", "recharge", "notice", "help", "agreement":
+	case "verify", "logout", "account", "refresh", "profile", "online", "history", "recharge", "notice", "help", "agreement":
+	case "language":
+		fs.StringVar(&language, "language", "", "zh_cn or English")
 	case "offline":
 		fs.StringVar(&sessionID, "session", "", "online session ID")
 	case "devices":
@@ -51,6 +53,26 @@ func zfwCommand(ctx context.Context, owner *commandContext, alias, command strin
 	}
 	if err := parse(fs, args); err != nil {
 		return nil, err
+	}
+	if command == "logout" {
+		if !owner.stream || alias == "" {
+			return nil, invalid("zfw logout requires an authenticated account in the current CLI session")
+		}
+		session := owner.sessions[alias]
+		if session == nil {
+			return nil, invalid("the selected account has no active Self management session")
+		}
+		if err := session.Logout(ctx); err != nil {
+			owner.forgetExpired(alias, err)
+			return nil, err
+		}
+		delete(owner.sessions, alias)
+		return struct {
+			Closed bool `json:"closed"`
+		}{true}, nil
+	}
+	if command == "language" && language != "zh_cn" && language != "English" {
+		return nil, invalid("language requires --language zh_cn or English")
 	}
 	if command == "operator" {
 		unbindSet := false
@@ -94,7 +116,7 @@ func zfwCommand(ctx context.Context, owner *commandContext, alias, command strin
 			return nil, &argumentError{err}
 		}
 	}
-	public := command == "notice" || command == "help" || command == "agreement"
+	public := command == "notice" || command == "help" || command == "agreement" || command == "language"
 	if public && opt.selfURLFile != "" {
 		return nil, invalid("--self-url-file applies only to private zfw commands")
 	}
@@ -138,6 +160,15 @@ func zfwCommand(ctx context.Context, owner *commandContext, alias, command strin
 				return nil, err
 			}
 			owner.public = zfw.New(link)
+		}
+		if command == "language" {
+			if err := owner.public.Language(ctx, language); err != nil {
+				return nil, err
+			}
+			return struct {
+				Language string `json:"language"`
+				Verified bool   `json:"verified"`
+			}{language, true}, nil
 		}
 		return owner.public.PublicPage(ctx, command)
 	}

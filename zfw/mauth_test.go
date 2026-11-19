@@ -18,12 +18,18 @@ func TestSelfMauthReadsJSONStringAndVerifiesChange(t *testing.T) {
 					json.NewEncoder(w).Encode(`<a href="dashboard/oprateMauthAction">` + state + `</a>`)
 					return
 				}
+				if r.URL.Path == "/Self/dashboard" {
+					fmt.Fprint(w, selfTestDashboard("fixture-account"))
+					return
+				}
 				if r.URL.Path != "/Self/dashboard/oprateMauthAction" || r.URL.RawQuery != "" || r.Method != http.MethodGet {
 					t.Error("mauth operation invented parameters or changed the method")
 				}
 				operations++
 				if changes {
 					state = "启用"
+					http.Redirect(w, r, "/Self/dashboard", http.StatusFound)
+					return
 				}
 				fmt.Fprint(w, selfTestPage("", "fixture-account"))
 			})

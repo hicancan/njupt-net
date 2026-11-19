@@ -302,37 +302,33 @@ function New-CampusDiagnostics {
         try { Save-CampusDiagnosticFailureResult $state 'diagnostic-initialization' $state.InitializationError }
         catch { $state.Errors.Add((Protect-CampusDiagnosticValue $state $_.Exception.Message)) }
     }
-    return [pscustomobject]@{
-        Directory = $directory; TraceFile = (Join-Path $directory 'http.jsonl'); Errors = $state.Errors; InitializationError = $state.InitializationError
-        Emit = { param([string]$Kind, $Data) Write-CampusDiagnosticEvent $state $Kind $Data }.GetNewClosure()
-        Note = { param([string]$Message) Write-CampusDiagnosticNote $state $Message }.GetNewClosure()
-        Fail = { param([string]$Stage, [string]$Message) Save-CampusDiagnosticFailureResult $state $Stage $Message }.GetNewClosure()
-        RegisterSecrets = { param($Settings) Register-CampusDiagnosticSecrets $state $Settings }.GetNewClosure()
-        Complete = {
-            param([int]$ExitCode)
-            try {
-                if ($state.WorkflowResult) { Save-CampusDiagnosticWorkflowResult $state }
-                elseif (-not $state.ResultRecorded) { Save-CampusDiagnosticFailureResult $state 'diagnostic-wrapper' 'The diagnostic run ended before the login workflow produced a result.' }
-                $trace = Join-Path $state.Directory 'http.jsonl'
-                if (-not [System.IO.File]::Exists($trace)) { [System.IO.File]::WriteAllText($trace, '', [System.Text.UTF8Encoding]::new($false)) }
-                $startedAt = [System.Diagnostics.Stopwatch]::GetTimestamp()
-                try { $snapshot = Get-CampusDiagnosticSnapshot $state }
-                catch {
-                    $message = Protect-CampusDiagnosticValue $state $_.Exception.Message
-                    $state.Errors.Add($message)
-                    Write-CampusDiagnosticNote $state "诊断结束快照采集失败：$message"
-                    $snapshot = @{ error = $message; observation = 'Local final snapshot failed.' }
-                }
-                Write-CampusDiagnosticFile $state 'after.json' $snapshot
-                Write-CampusDiagnosticEvent $state 'snapshot-after' @{ elapsed_ms = [System.Diagnostics.Stopwatch]::GetElapsedTime($startedAt).TotalMilliseconds }
-                $state.Run['finished_epoch_ms'] = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-                $state.Run['finished_utc'] = [DateTimeOffset]::UtcNow.ToString('O')
-                $state.Run['elapsed_ms'] = [Math]::Round([System.Diagnostics.Stopwatch]::GetElapsedTime($state.StartedAt).TotalMilliseconds, 3)
-                $state.Run['exit_code'] = $ExitCode
-                $state.Run['diagnostic_errors'] = $state.Errors.ToArray()
-                Write-CampusDiagnosticFile $state 'run.json' $state.Run
-                Write-CampusDiagnosticEvent $state 'run-exit' @{ exit_code = $ExitCode; elapsed_ms = $state.Run.elapsed_ms; diagnostic_errors = $state.Errors.ToArray() }
-            } finally { if ($state.Writer) { $state.Writer.Dispose() } }
-        }.GetNewClosure()
-    }
+    $state.TraceFile = Join-Path $directory 'http.jsonl'
+    return $state
+}
+
+function Complete-CampusDiagnostics {
+    param($State, [int]$ExitCode)
+    try {
+        if ($state.WorkflowResult) { Save-CampusDiagnosticWorkflowResult $state }
+        elseif (-not $state.ResultRecorded) { Save-CampusDiagnosticFailureResult $state 'diagnostic-wrapper' 'The diagnostic run ended before the login workflow produced a result.' }
+        $trace = Join-Path $state.Directory 'http.jsonl'
+        if (-not [System.IO.File]::Exists($trace)) { [System.IO.File]::WriteAllText($trace, '', [System.Text.UTF8Encoding]::new($false)) }
+        $startedAt = [System.Diagnostics.Stopwatch]::GetTimestamp()
+        try { $snapshot = Get-CampusDiagnosticSnapshot $state }
+        catch {
+            $message = Protect-CampusDiagnosticValue $state $_.Exception.Message
+            $state.Errors.Add($message)
+            Write-CampusDiagnosticNote $state "诊断结束快照采集失败：$message"
+            $snapshot = @{ error = $message; observation = 'Local final snapshot failed.' }
+        }
+        Write-CampusDiagnosticFile $state 'after.json' $snapshot
+        Write-CampusDiagnosticEvent $state 'snapshot-after' @{ elapsed_ms = [System.Diagnostics.Stopwatch]::GetElapsedTime($startedAt).TotalMilliseconds }
+        $state.Run['finished_epoch_ms'] = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $state.Run['finished_utc'] = [DateTimeOffset]::UtcNow.ToString('O')
+        $state.Run['elapsed_ms'] = [Math]::Round([System.Diagnostics.Stopwatch]::GetElapsedTime($state.StartedAt).TotalMilliseconds, 3)
+        $state.Run['exit_code'] = $ExitCode
+        $state.Run['diagnostic_errors'] = $state.Errors.ToArray()
+        Write-CampusDiagnosticFile $state 'run.json' $state.Run
+        Write-CampusDiagnosticEvent $state 'run-exit' @{ exit_code = $ExitCode; elapsed_ms = $state.Run.elapsed_ms; diagnostic_errors = $state.Errors.ToArray() }
+    } finally { if ($state.Writer) { $state.Writer.Dispose() } }
 }

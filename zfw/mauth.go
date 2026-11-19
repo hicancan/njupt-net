@@ -42,7 +42,7 @@ func (s *Session) ChangeMauth(ctx context.Context) (*MauthChange, error) {
 		return &MauthChange{Outcome: NotSubmitted}, err
 	}
 	result := &MauthChange{PreviousState: before.State, Outcome: Unknown}
-	data, final, _, err := s.request(ctx, http.MethodGet, "dashboard/oprateMauthAction", nil)
+	data, final, _, err := s.navigate(ctx, http.MethodGet, "dashboard/oprateMauthAction", nil, "/Self/dashboard")
 	if err != nil {
 		return result, fmt.Errorf("mauth operation failed; result is unknown: %w", err)
 	}

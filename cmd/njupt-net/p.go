@@ -6,23 +6,33 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/hicancan/njupt-net/v4/p"
 )
 
 func pCommand(ctx context.Context, owner *commandContext, alias, command string, args []string, prompt io.Writer) (any, error) {
 	fs := commandFlags("p " + command)
-	var terminal, operator, newPasswordFile, captchaOutput string
+	var terminal, operator, newPasswordFile, captchaOutput, errorCode, answer string
 	var selfType, port int
+	var verifyWithSelf bool
 	fs.StringVar(&terminal, "terminal", "pc", "terminal type")
-	fs.IntVar(&port, "port", 804, "portal API port: 801, 802, 803 or 804")
+	fs.IntVar(&port, "port", p.DefaultPort, "portal API port: 801, 802, 803 or 804")
 	switch command {
 	case "login":
 		fs.StringVar(&operator, "operator", "campus", "campus, njxy or cmcc")
+		fs.BoolVar(&verifyWithSelf, "verify-with-self", false, "verify masked account ownership via Self")
 	case "self":
 		fs.IntVar(&selfType, "type", 1, "0 login, 1 online bridge, 2 password page")
+	case "error-prompt":
+		fs.StringVar(&errorCode, "code", "", "portal error code to translate")
+	case "captcha":
+		fs.StringVar(&captchaOutput, "output", "", "captcha image output")
+	case "captcha-check":
+		fs.StringVar(&answer, "answer", "", "answer for the current portal session image")
 	case "password":
 		fs.StringVar(&newPasswordFile, "new-password-file", "", "file containing the new password")
 		fs.StringVar(&captchaOutput, "captcha-output", "", "captcha image output")
-	case "config", "status", "logout", "error":
+	case "config", "status", "logout", "error", "notice":
 	default:
 		return nil, invalid("unknown p command")
 	}
@@ -40,6 +50,17 @@ func pCommand(ctx context.Context, owner *commandContext, alias, command string,
 	}
 	if command == "self" && (selfType < 0 || selfType > 2) {
 		return nil, invalid("self type must be 0, 1 or 2")
+	}
+	if command == "error-prompt" && strings.TrimSpace(errorCode) == "" {
+		return nil, invalid("error-prompt requires --code")
+	}
+	if command == "captcha-check" && (!owner.stream || strings.TrimSpace(answer) == "") {
+		return nil, invalid("captcha-check requires --answer and a captcha in the same CLI session")
+	}
+	if command == "captcha" {
+		if err := outputAvailable(captchaOutput); err != nil {
+			return nil, err
+		}
 	}
 	var newPassword string
 	if command == "password" {
@@ -83,9 +104,27 @@ func pCommand(ctx context.Context, owner *commandContext, alias, command string,
 		return portal.Status(ctx)
 	case "error":
 		return portal.ErrorInfo(ctx)
+	case "error-prompt":
+		return portal.ErrorPrompt(ctx, errorCode)
+	case "notice":
+		return portal.Notice(ctx)
+	case "captcha":
+		image, err := portal.Captcha(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if err := writeExclusive(captchaOutput, image); err != nil {
+			return nil, err
+		}
+		return fileResult{Output: captchaOutput, Bytes: len(image), Format: "image"}, nil
+	case "captcha-check":
+		return portal.CheckCaptcha(ctx, answer)
 	case "logout":
 		return portal.Logout(ctx)
 	case "login":
+		if verifyWithSelf {
+			return loginWithSelfReadback(ctx, owner, portal, alias, value, operator)
+		}
 		return portal.Login(ctx, value.Account, value.Password, operator)
 	case "self":
 		return portal.SelfURL(ctx, value.Account, value.Password, selfType)

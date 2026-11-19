@@ -2,6 +2,7 @@ package zfw
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -58,7 +59,7 @@ func TestBridgeOwnsItsActualOriginAndVerifiedIdentity(t *testing.T) {
 			if err != nil || cookie.Value != "bridge-session" {
 				t.Errorf("bridge navigation lost its Cookie: %v", err)
 			}
-			fmt.Fprint(w, selfTestPage("", "fixture-account"))
+			fmt.Fprint(w, selfTestDashboard("fixture-account"))
 		case "/Self/dashboard/getOnlineList":
 			businessCalls++
 			fmt.Fprint(w, "[]")
@@ -97,7 +98,7 @@ func TestBridgeClosesAnUnexpectedAuthenticatedIdentity(t *testing.T) {
 		case "/Self/login/eportalLogin":
 			http.Redirect(w, r, "/Self/dashboard", http.StatusFound)
 		case "/Self/dashboard":
-			fmt.Fprint(w, selfTestPage("", "another-account"))
+			fmt.Fprint(w, selfTestDashboard("another-account"))
 		case "/Self/login/logout":
 			logoutCalls++
 			http.Redirect(w, r, "/Self/login", http.StatusFound)
@@ -124,6 +125,29 @@ func TestBridgeRejectsCrossOriginRedirectWithoutPasswordFallback(t *testing.T) {
 	err := s.LoginBridge(context.Background(), "fixture-account", testBridgeURL)
 	if err == nil || calls != 1 || s.authenticated || strings.Contains(err.Error(), "fixture-sign") || strings.Contains(err.Error(), "fixture-params") {
 		t.Fatalf("bridge redirected or exposed its signed query: calls=%d error=%v", calls, err)
+	}
+}
+
+func TestBridgeReportsRejectedWhenSelfReturnsLoginForm(t *testing.T) {
+	var calls []string
+	s := bridgeTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		path := pathWithoutSession(r.URL.Path)
+		calls = append(calls, path)
+		switch path {
+		case "/Self/login/eportalLogin":
+			http.SetCookie(w, &http.Cookie{Name: "JSESSIONID", Value: "guest", Path: "/Self"})
+			http.Redirect(w, r, "/Self/login/;jsessionid=guest", http.StatusFound)
+		case "/Self/login/":
+			fmt.Fprint(w, selfTestLoginPage())
+		default:
+			t.Errorf("unexpected authentication or cleanup request: %s", path)
+			http.NotFound(w, r)
+		}
+	})
+	err := s.LoginBridge(context.Background(), "fixture-account", testBridgeURL)
+	if !errors.Is(err, ErrBridgeRejected) || s.authenticated || s.loginSubmitted ||
+		len(calls) != 2 || calls[0] != "/Self/login/eportalLogin" || calls[1] != "/Self/login/" {
+		t.Fatalf("incorrect bridge rejection: calls=%v error=%v", calls, err)
 	}
 }
 
